@@ -38,6 +38,11 @@ export function formatLength(meters: number, system: UnitSystem, digits = 3): st
   return `${formatNumber(mToLength(meters, system), digits)} ${lengthUnit(system)}`;
 }
 
+export function formatArea(squareMeters: number, system: UnitSystem): string {
+  if (system === 'IP') return `${formatNumber(squareMeters * 10.7639104167, 0)} ft²`;
+  return `${formatNumber(squareMeters, 1)} m²`;
+}
+
 export function formatFlow(m3s: number, system: UnitSystem): string {
   if (system === 'IP') return `${formatNumber(m3s / M3S_PER_CFM, 0)} CFM`;
   return `${formatNumber(m3s * 1000, 1)} L/s`;

@@ -45,6 +45,7 @@ export interface ViewportProps {
   onSelect: (selection: Selection) => void;
   onDrawRoom: (rect: { xM: number; yM: number; lengthM: number; widthM: number }) => void;
   onPlace: (point: { xM: number; yM: number }) => void;
+  onContextMenu: (selection: Selection, x: number, y: number) => void;
 }
 
 function snap(value: number): number {
@@ -313,10 +314,10 @@ function openingFrame(room: Room, opening: Room['openings'][number]): { position
   return { position: new THREE.Vector3(x, y, z), size: new THREE.Vector3(opening.widthM, thickness, opening.heightM) };
 }
 
-export default function Viewport({ rooms, equipment, selection, tool, fitToken, hideRoof, onSelect, onDrawRoom, onPlace }: ViewportProps) {
+export default function Viewport({ rooms, equipment, selection, tool, fitToken, hideRoof, onSelect, onDrawRoom, onPlace, onContextMenu }: ViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool);
-  const handlersRef = useRef({ onSelect, onDrawRoom, onPlace });
+  const handlersRef = useRef({ onSelect, onDrawRoom, onPlace, onContextMenu });
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
@@ -328,7 +329,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
   const lastFit = useRef(-1);
   selectionRef.current = selection;
   toolRef.current = tool;
-  handlersRef.current = { onSelect, onDrawRoom, onPlace };
+  handlersRef.current = { onSelect, onDrawRoom, onPlace, onContextMenu };
 
   useEffect(() => {
     const host = hostRef.current;
@@ -423,7 +424,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       return null;
     };
 
-    const pickSelection = (event: PointerEvent): Selection => {
+    const pickSelection = (event: { clientX: number; clientY: number }): Selection => {
       if (!setPointer(event.clientX, event.clientY)) return { kind: 'project' };
       raycaster.setFromCamera(pointer, camera);
       const center = closestHit();
@@ -460,7 +461,16 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       preview.position.set(x + length / 2, y + width / 2, DEFAULT_HEIGHT_M / 2);
     };
 
+    let rightX = 0;
+    let rightY = 0;
+    let sawRight = false;
     const onPointerDown = (event: PointerEvent) => {
+      if (event.button === 2) {
+        sawRight = true;
+        rightX = event.clientX;
+        rightY = event.clientY;
+        return;
+      }
       if (event.button !== 0) return;
       downX = event.clientX;
       downY = event.clientY;
@@ -506,9 +516,20 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       }
     };
 
+    const onContextMenuEvent = (event: MouseEvent) => {
+      event.preventDefault();
+      const dragged = sawRight && Math.hypot(event.clientX - rightX, event.clientY - rightY) > CLICK_PX;
+      sawRight = false;
+      if (dragged) return;
+      const picked = pickSelection(event);
+      if (picked.kind === 'project') return;
+      handlersRef.current.onContextMenu(picked, event.clientX, event.clientY);
+    };
+
     renderer.domElement.addEventListener('pointerdown', onPointerDown, true);
     renderer.domElement.addEventListener('pointermove', onPointerMove);
     renderer.domElement.addEventListener('pointerup', onPointerUp);
+    renderer.domElement.addEventListener('contextmenu', onContextMenuEvent);
 
     let frame = 0;
     const loop = () => {
@@ -524,6 +545,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       renderer.domElement.removeEventListener('pointerdown', onPointerDown, true);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
+      renderer.domElement.removeEventListener('contextmenu', onContextMenuEvent);
       controls.dispose();
       preview.geometry.dispose();
       (preview.material as THREE.Material).dispose();
@@ -722,7 +744,17 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
           polygonOffsetUnits: 1,
         })
       );
-      mesh.position.set(item.xM, item.yM, item.zM + size.heightM / 2);
+      const room = rooms.find(entry => entry.id === item.roomId);
+      let centerZ = item.zM + size.heightM / 2;
+      if (product?.mount === 'ceiling') {
+        const underside = (room ? room.zM + room.heightM : item.zM + size.heightM) - SLAB_M - 0.02;
+        const top = item.zM + size.heightM;
+        if (top > underside) centerZ -= top - underside;
+      } else if (product?.mount === 'roof') {
+        const roof = (room ? room.zM + room.heightM : item.zM) + 0.03;
+        if (item.zM < roof) centerZ += roof - item.zM;
+      }
+      mesh.position.set(item.xM, item.yM, centerZ);
       mesh.rotation.z = (item.yawDeg * Math.PI) / 180;
       mesh.userData = { ...equipmentData };
       attachHighlight(mesh, dims);
@@ -739,7 +771,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
         const label = makeLabel(`×${item.quantity}`, '#b86e00');
         if (label) {
           label.scale.set(1.2, 0.32, 1);
-          label.position.set(item.xM, item.yM, item.zM + size.heightM + 0.35);
+          label.position.set(item.xM, item.yM, centerZ + size.heightM / 2 + 0.35);
           wrap.add(label);
         }
       }

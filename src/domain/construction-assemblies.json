@@ -130,6 +130,19 @@
       "notes": "Swap this onto a walk-in when the box is a freezer. Metal skins are not a separate row."
     },
     {
+      "id": "asm-wall-glass",
+      "name": "Storefront glass",
+      "category": "wall",
+      "typicalUse": "Dining or bar glazed wall",
+      "orderLabel": "Outside → inside",
+      "series": true,
+      "layers": [
+        { "materialId": "window-double-lowe", "thicknessMm": null, "place": "Glazed wall" }
+      ],
+      "source": "Engineering Toolbox sealed double glazing with a low-E coating, U-0.32.",
+      "notes": "A glazed wall uses the published whole-window U-0.32. It is not a tested curtain wall, and SHGC was not stated."
+    },
+    {
       "id": "asm-ceiling-dining",
       "name": "Dining ceiling and roof",
       "category": "ceiling",

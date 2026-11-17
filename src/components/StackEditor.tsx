@@ -1,5 +1,6 @@
 'use client';
 
+import { useRef, useState, type DragEvent } from 'react';
 import {
   CONSTRUCTION_CATEGORIES,
   constructionCategoryLabel,
@@ -15,7 +16,6 @@ import type { StackLayer, UnitSystem } from '@/domain/types';
 export function StackEditor({
   layers,
   materials,
-  orderLabel,
   series,
   units,
   readOnly = false,
@@ -23,49 +23,108 @@ export function StackEditor({
 }: {
   layers: StackLayer[];
   materials: ConstructionMaterial[];
-  orderLabel: string;
   series: boolean;
   units: UnitSystem;
   readOnly?: boolean;
   onChange?: (layers: StackLayer[]) => void;
 }) {
+  const dragFrom = useRef<number | null>(null);
+  const dragToken = useRef(0);
+  const consumedToken = useRef(0);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
   const total = stackResistance(layers, materials, series);
   const update = (next: StackLayer[]) => onChange?.(next);
-  const move = (index: number, direction: -1 | 1) => {
-    const target = index + direction;
-    if (target < 0 || target >= layers.length) return;
+  const moveTo = (from: number, to: number) => {
+    if (from === to || to < 0 || to >= layers.length) return;
     const next = layers.slice();
-    const [item] = next.splice(index, 1);
+    const [item] = next.splice(from, 1);
     if (!item) return;
-    next.splice(target, 0, item);
+    next.splice(to, 0, item);
     update(next);
+  };
+  const clearDrag = () => {
+    dragFrom.current = null;
+    setDragIndex(null);
+    setOverIndex(null);
+  };
+  const onDragStart = (index: number, event: DragEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest('button') && !target.closest('.drag-handle')) {
+      event.preventDefault();
+      return;
+    }
+    dragToken.current += 1;
+    dragFrom.current = index;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(index));
+    setDragIndex(index);
+  };
+  const onDragOver = (index: number, event: DragEvent<HTMLElement>) => {
+    const types = Array.from(event.dataTransfer.types);
+    if (dragFrom.current == null && !types.includes('text/plain')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setOverIndex(current => (current === index ? current : index));
+  };
+  const onDrop = (index: number, event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    if (consumedToken.current === dragToken.current) return;
+    consumedToken.current = dragToken.current;
+    const raw = event.dataTransfer.getData('text/plain');
+    const from = dragFrom.current ?? (raw === '' ? null : Number(raw));
+    clearDrag();
+    if (from != null && Number.isInteger(from)) moveTo(from, index);
   };
 
   return (
     <div className="stack">
-      <p className="muted">{orderLabel}. {series ? 'Layers in contact. The total is the sum of layer R-values, without air films or framing.' : 'These layers are not one continuous path, so their R-values are not added.'}</p>
       <ol className="stack-list">
         {layers.map((layer, index) => {
           const material = findConstruction(materials, layer.materialId);
           const resistance = layerResistance(layer, materials);
+          const dragging = dragIndex === index;
+          const dropTarget = overIndex === index && dragIndex !== index;
           return (
-            <li key={`${layer.materialId}-${index}`} className="stack-layer">
-              <header>
+            <li
+              key={`${layer.materialId}-${index}`}
+              className={`stack-layer${dragging ? ' is-dragging' : ''}${dropTarget ? ' is-over' : ''}`}
+              data-layer-index={index}
+              onDragOver={event => onDragOver(index, event)}
+              onDrop={event => onDrop(index, event)}
+            >
+              <header
+                className={readOnly ? undefined : 'can-drag'}
+                draggable={!readOnly}
+                onDragStart={event => onDragStart(index, event)}
+                onDragEnd={clearDrag}
+                onDragOver={event => onDragOver(index, event)}
+                onDrop={event => onDrop(index, event)}
+              >
                 <strong>
+                  {!readOnly && (
+                    <span
+                      className="drag-handle"
+                      draggable
+                      role="button"
+                      aria-label={`Drag ${layer.place || 'layer'} to reorder`}
+                      onDragStart={event => {
+                        event.stopPropagation();
+                        onDragStart(index, event);
+                      }}
+                      onDragEnd={clearDrag}
+                      onDragOver={event => onDragOver(index, event)}
+                      onDrop={event => onDrop(index, event)}
+                    >
+                      ⋮⋮
+                    </span>
+                  )}
                   {index + 1}. {layer.place || 'Layer'}
                 </strong>
                 {!readOnly && (
-                  <span className="button-row">
-                    <button type="button" className="btn" disabled={index === 0} onClick={() => move(index, -1)}>
-                      Up
-                    </button>
-                    <button type="button" className="btn" disabled={index === layers.length - 1} onClick={() => move(index, 1)}>
-                      Down
-                    </button>
-                    <button type="button" className="btn danger" onClick={() => update(layers.filter((_, layerIndex) => layerIndex !== index))}>
-                      Remove
-                    </button>
-                  </span>
+                  <button type="button" className="btn danger" onClick={() => update(layers.filter((_, layerIndex) => layerIndex !== index))}>
+                    Remove
+                  </button>
                 )}
               </header>
               {readOnly ? (

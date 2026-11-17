@@ -9,6 +9,7 @@ import {
   removeEquipment,
   removeRoom,
   removeSystem,
+  setWallAssembly,
   UNASSIGNED_SURFACE,
   updateEquipment,
   updateRoom,
@@ -27,18 +28,21 @@ import {
   type SurfaceFace,
   type WallFace,
 } from '@/domain/types';
-import { lengthToM, lengthUnit, mToLength } from '@/domain/units';
+import { formatArea, formatLength, lengthToM, lengthUnit, mToLength } from '@/domain/units';
 import {
   assemblyCategoriesForFace,
   assemblyCategoriesForOpening,
   constructionCategoryLabel,
   findAssembly,
   findConstruction,
+  formatThickness,
   resolveStack,
   type ConstructionAssembly,
   type ConstructionCategory,
   type ConstructionMaterial,
 } from '@/domain/constructionLibrary';
+import { planningIssues } from '@/domain/issues';
+import { PLAN_SIDES, WALL_TYPES, wallFullyShared, wallPlaceLabel, touchingRooms } from '@/domain/walls';
 import { StackEditor } from './StackEditor';
 import { materialByKey } from '@/thermonode/materials';
 import type { ModelIssueV1 } from '@/thermonode/contract';
@@ -53,6 +57,7 @@ export function Inspector({
   onChange,
   onSelect,
   onDeleteProject,
+  nameFocus = 0,
 }: {
   project: Project;
   selection: Selection;
@@ -62,12 +67,27 @@ export function Inspector({
   onChange: (project: Project) => void;
   onSelect: (selection: Selection) => void;
   onDeleteProject: () => void;
+  nameFocus?: number;
 }) {
   const subjectId = selection.kind === 'surface' ? selection.roomId : 'id' in selection ? selection.id : undefined;
   const relevant = issues.filter(issue => issue.severity !== 'info' && (!subjectId || issue.subjectId === subjectId));
+  const planning = planningIssues(project);
   return (
     <aside className="inspector">
-      <p className="kicker">Properties</p>
+      {planning.length > 0 && (
+        <section className="planning-issues">
+          <h2>Issues · {planning.length}</h2>
+          <ul>
+            {planning.map(issue => (
+              <li key={issue.id}>
+                <button type="button" onClick={() => onSelect(issue.selection)}>
+                  {issue.message}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {relevant.length > 0 && (
         <ul className="issue-list">
           {relevant.map(issue => (
@@ -78,17 +98,10 @@ export function Inspector({
         </ul>
       )}
       {selection.kind === 'project' && (
-        <ProjectFields project={project} onChange={onChange} onDeleteProject={onDeleteProject} />
+        <ProjectFields project={project} onChange={onChange} onDeleteProject={onDeleteProject} nameFocus={nameFocus} />
       )}
       {selection.kind === 'room' && (
-        <RoomFields
-          project={project}
-          roomId={selection.id}
-          materials={materials}
-          assemblies={assemblies}
-          onChange={onChange}
-          onSelect={onSelect}
-        />
+        <RoomFields project={project} roomId={selection.id} assemblies={assemblies} onChange={onChange} onSelect={onSelect} nameFocus={nameFocus} />
       )}
       {selection.kind === 'surface' && (
         <SurfaceFields
@@ -113,7 +126,7 @@ export function Inspector({
           onSelect={onSelect}
         />
       )}
-      {selection.kind === 'system' && <SystemFields project={project} systemId={selection.id} onChange={onChange} onSelect={onSelect} />}
+      {selection.kind === 'system' && <SystemFields project={project} systemId={selection.id} onChange={onChange} onSelect={onSelect} nameFocus={nameFocus} />}
       {selection.kind === 'equipment' && (
         <EquipmentFields project={project} equipmentId={selection.id} onChange={onChange} onSelect={onSelect} />
       )}
@@ -125,16 +138,18 @@ function ProjectFields({
   project,
   onChange,
   onDeleteProject,
+  nameFocus,
 }: {
   project: Project;
   onChange: (project: Project) => void;
   onDeleteProject: () => void;
+  nameFocus: number;
 }) {
   return (
     <div className="stack">
       <h2>Project</h2>
       <p className="muted">Started from {project.createdFrom.label}. Stored lengths are meters. The display unit is {project.units === 'IP' ? 'feet' : 'meters'}.</p>
-      <TextField label="Name" value={project.name} onCommit={name => onChange({ ...project, name })} />
+      <TextField label="Name" value={project.name} focusToken={nameFocus} onCommit={name => onChange({ ...project, name })} />
       <TextField label="Location" value={project.location} onCommit={location => onChange({ ...project, location })} />
       <label className="field">
         <span>Building type</span>
@@ -212,7 +227,7 @@ function ComponentSelect({
   );
 }
 
-function assignSurface(project: Project, room: Room, face: SurfaceFace, constructionId: string | null, assemblies: ConstructionAssembly[]): Project {
+function assignSurface(project: Project, room: Room, face: 'floor' | 'ceiling', constructionId: string | null, assemblies: ConstructionAssembly[]): Project {
   const assembly = findAssembly(assemblies, constructionId);
   const note = assembly ? `${assembly.name}. ${assembly.notes}` : UNASSIGNED_SURFACE;
   return updateRoom(project, room.id, {
@@ -222,6 +237,144 @@ function assignSurface(project: Project, room: Room, face: SurfaceFace, construc
       [face]: { materialKey: null, constructionId, layers: assembly ? assembly.layers.map(layer => ({ ...layer })) : [], note },
     },
   });
+}
+
+function stackThicknessMm(layers: { materialId: string; thicknessMm: number | null }[], materials: ConstructionMaterial[]): number | null {
+  if (layers.length === 0) return null;
+  let sum = 0;
+  for (const layer of layers) {
+    const thickness = layer.thicknessMm ?? findConstruction(materials, layer.materialId)?.thicknessMm ?? null;
+    if (thickness == null) return null;
+    sum += thickness;
+  }
+  return sum;
+}
+
+function WallFaceFields({
+  project,
+  room,
+  face,
+  assignment,
+  materials,
+  assemblies,
+  onChange,
+  onSelect,
+}: {
+  project: Project;
+  room: Room;
+  face: WallFace;
+  assignment: Room['surfaces']['walls'][WallFace];
+  materials: ConstructionMaterial[];
+  assemblies: ConstructionAssembly[];
+  onChange: (project: Project) => void;
+  onSelect: (selection: Selection) => void;
+}) {
+  const unit = lengthUnit(project.units);
+  const alongY = face === 'px' || face === 'nx';
+  const lengthM = alongY ? room.widthM : room.lengthM;
+  const layers = resolveStack(assignment, assemblies, materials);
+  const thickness = stackThicknessMm(layers, materials);
+  const kind = WALL_TYPES.find(type => type.assemblyId === assignment.constructionId)?.id ?? '';
+  const openings = room.openings.filter(opening => opening.face === face);
+  const partial = touchingRooms(room, face, project.rooms).length > 0 && !wallFullyShared(room, face, project.rooms);
+  const setRoomLength = (display: number) => {
+    onChange(updateRoom(project, room.id, { [alongY ? 'widthM' : 'lengthM']: lengthToM(display, project.units), assumption: false }));
+  };
+  return (
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">Wall</p>
+        <h2>{PLAN_SIDES[face].title} wall</h2>
+      </header>
+      {partial && <p className="muted">Only part of this wall touches another room. The whole face uses one stack.</p>}
+      <section className="prop-block">
+        <p className="prop-section">Size</p>
+        <UnitField label="Length" unit={unit} value={mToLength(lengthM, project.units)} onCommit={setRoomLength} />
+        <label className="field">
+          <span>Thickness</span>
+          <span className="prop-value" title="Sum of the layer thicknesses">
+            {thickness == null ? 'Not stated' : formatThickness(thickness, project.units)}
+          </span>
+        </label>
+        <UnitField label="Height" unit={unit} value={mToLength(room.heightM, project.units)} onCommit={value => onChange(updateRoom(project, room.id, { heightM: lengthToM(value, project.units), assumption: false }))} />
+        <label className="field">
+          <span>Kind</span>
+          <select
+            value={kind || 'custom'}
+            onChange={event => {
+              const type = WALL_TYPES.find(item => item.id === event.target.value);
+              if (type) onChange(setWallAssembly(project, room.id, face, type.assemblyId, assemblies));
+            }}
+          >
+            {!kind && <option value="custom">Custom</option>}
+            {WALL_TYPES.map(type => (
+              <option key={type.id} value={type.id}>
+                {type.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <ComponentSelect
+          label="Component"
+          assemblies={assemblies}
+          categories={assemblyCategoriesForFace('walls')}
+          value={assignment.constructionId ?? null}
+          onChange={constructionId => onChange(setWallAssembly(project, room.id, face, constructionId, assemblies))}
+        />
+      </section>
+      <section className="prop-block">
+      <p className="prop-section">Layers</p>
+      <StackEditor
+        layers={layers}
+        materials={materials}
+        series={findAssembly(assemblies, assignment.constructionId)?.series ?? true}
+        units={project.units}
+        onChange={next =>
+          onChange(
+            updateRoom(project, room.id, {
+              assumption: false,
+              surfaces: { ...room.surfaces, walls: { ...room.surfaces.walls, [face]: { ...assignment, materialKey: null, layers: next } } },
+            })
+          )
+        }
+      />
+      <ThermoNodeNote materialKey={assignment.materialKey} />
+      <TextField
+        label="Note"
+        value={assignment.note}
+        onCommit={note =>
+          onChange(
+            updateRoom(project, room.id, {
+              surfaces: { ...room.surfaces, walls: { ...room.surfaces.walls, [face]: { ...assignment, note } } },
+            })
+          )
+        }
+      />
+      </section>
+      <section className="prop-block">
+      <p className="prop-section">Openings{openings.length > 0 ? ` · ${openings.length}` : ''}</p>
+      {openings.length > 0 && (
+        <ul className="plain-list">
+          {openings.map(opening => (
+            <li key={opening.id}>
+              <button type="button" className="linkish" onClick={() => onSelect({ kind: 'opening', roomId: room.id, id: opening.id })}>
+                {opening.kind} · {formatLength(opening.widthM, project.units, 2)}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="button-row">
+        <button type="button" className="btn" onClick={() => onChange(updateRoom(project, room.id, addOpening(room, 'door', face)))}>
+          Add door
+        </button>
+        <button type="button" className="btn" onClick={() => onChange(updateRoom(project, room.id, addOpening(room, 'window', face)))}>
+          Add window
+        </button>
+      </div>
+      </section>
+    </div>
+  );
 }
 
 function SurfaceFields({
@@ -245,71 +398,75 @@ function SurfaceFields({
 }) {
   const room = project.rooms.find(item => item.id === roomId);
   if (!room) return <p>Surface not found.</p>;
-  const assignment = room.surfaces[face];
+  const assignment = face === 'walls' ? (wallFace ? room.surfaces.walls[wallFace] : null) : room.surfaces[face];
   const faceLabel = SURFACE_FACES.find(item => item.id === face)?.label ?? face;
-  const wallLabel = wallFace ? WALL_FACES.find(item => item.id === wallFace)?.label : undefined;
+  const writeSurface = (next: typeof assignment) => {
+    if (!next) return project;
+    if (face === 'walls') {
+      if (!wallFace) return project;
+      return updateRoom(project, room.id, {
+        assumption: false,
+        surfaces: { ...room.surfaces, walls: { ...room.surfaces.walls, [wallFace]: next } },
+      });
+    }
+    return updateRoom(project, room.id, {
+      assumption: false,
+      surfaces: { ...room.surfaces, [face]: next },
+    });
+  };
+  if (face === 'walls' && wallFace && assignment) {
+    return (
+      <WallFaceFields
+        project={project}
+        room={room}
+        face={wallFace}
+        assignment={assignment}
+        materials={materials}
+        assemblies={assemblies}
+        onChange={onChange}
+        onSelect={onSelect}
+      />
+    );
+  }
   return (
-    <div className="stack">
-      <h2>{wallLabel ?? faceLabel}</h2>
-      <p className="muted">
-        {room.name}. {face === 'walls' ? 'All four walls share this stack. ' : ''}
-        A component is a stack of layers. Swap a layer here without changing the library preset.
-      </p>
-      <button type="button" className="btn" onClick={() => onSelect({ kind: 'room', id: room.id })}>
-        Room properties
-      </button>
-      {face === 'walls' && (
-        <div className="button-row">
-          <button
-            type="button"
-            className={wallFace ? 'btn' : 'btn active'}
-            onClick={() => onSelect({ kind: 'surface', roomId: room.id, face: 'walls' })}
-          >
-            All walls
-          </button>
-          {WALL_FACES.map(item => (
-            <button
-              key={item.id}
-              type="button"
-              className={wallFace === item.id ? 'btn active' : 'btn'}
-              onClick={() => onSelect({ kind: 'surface', roomId: room.id, face: 'walls', wallFace: item.id })}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      )}
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">{room.name}</p>
+        <h2>{faceLabel}</h2>
+      </header>
+      {assignment && (
       <ComponentSelect
-        label="Component"
+        label={face === 'walls' ? 'Library component' : 'Component'}
         assemblies={assemblies}
         categories={assemblyCategoriesForFace(face)}
         value={assignment.constructionId ?? null}
-        onChange={constructionId => onChange(assignSurface(project, room, face, constructionId, assemblies))}
-      />
-      <StackEditor
-        layers={resolveStack(assignment, assemblies, materials)}
-        materials={materials}
-        orderLabel={findAssembly(assemblies, assignment.constructionId)?.orderLabel ?? 'Layer order'}
-        series={findAssembly(assemblies, assignment.constructionId)?.series ?? true}
-        units={project.units}
-        onChange={layers =>
+        onChange={constructionId =>
           onChange(
-            updateRoom(project, room.id, {
-              assumption: false,
-              surfaces: { ...room.surfaces, [face]: { ...assignment, materialKey: null, layers } },
-            })
+            face === 'walls' && wallFace
+              ? setWallAssembly(project, room.id, wallFace, constructionId, assemblies)
+              : assignSurface(project, room, face === 'ceiling' ? 'ceiling' : 'floor', constructionId, assemblies)
           )
         }
       />
-      {findAssembly(assemblies, assignment.constructionId)?.notes && <p className="muted">{findAssembly(assemblies, assignment.constructionId)?.notes}</p>}
-      <ThermoNodeNote materialKey={assignment.materialKey} />
+      )}
+      {assignment && (
+      <StackEditor
+        layers={resolveStack(assignment, assemblies, materials)}
+        materials={materials}
+        series={findAssembly(assemblies, assignment.constructionId)?.series ?? true}
+        units={project.units}
+        onChange={layers => onChange(writeSurface({ ...assignment, materialKey: null, layers }))}
+      />
+      )}
+      {assignment && <ThermoNodeNote materialKey={assignment.materialKey} />}
+      {assignment && (
       <TextField
         label="Note"
         value={assignment.note}
-        onCommit={note =>
-          onChange(updateRoom(project, room.id, { surfaces: { ...room.surfaces, [face]: { ...assignment, note } } }))
-        }
+        onCommit={note => onChange(writeSurface({ ...assignment, note }))}
       />
+      )}
+      {face === 'walls' && !wallFace && <p className="muted">Choose one face. Each wall keeps its own stack.</p>}
     </div>
   );
 }
@@ -317,17 +474,17 @@ function SurfaceFields({
 function RoomFields({
   project,
   roomId,
-  materials,
   assemblies,
   onChange,
   onSelect,
+  nameFocus,
 }: {
   project: Project;
   roomId: string;
-  materials: ConstructionMaterial[];
   assemblies: ConstructionAssembly[];
   onChange: (project: Project) => void;
   onSelect: (selection: Selection) => void;
+  nameFocus: number;
 }) {
   const room = project.rooms.find(item => item.id === roomId);
   if (!room) return <p>Room not found.</p>;
@@ -335,14 +492,26 @@ function RoomFields({
   const setLength = (key: 'xM' | 'yM' | 'zM' | 'lengthM' | 'widthM' | 'heightM', display: number) => {
     onChange(updateRoom(project, room.id, { [key]: lengthToM(display, project.units), assumption: false }));
   };
-  const setSurface = (face: SurfaceFace, constructionId: string | null) => {
+  const setSurface = (face: 'floor' | 'ceiling', constructionId: string | null) => {
     onChange(assignSurface(project, room, face, constructionId, assemblies));
   };
   return (
-    <div className="stack">
-      <h2>{room.name}</h2>
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">Room</p>
+        <h2>{room.name}</h2>
+      </header>
+      <div className="stat-row">
+        <span>{formatArea(room.lengthM * room.widthM, project.units)}</span>
+        <span>
+          {formatLength(room.lengthM, project.units, 2)} × {formatLength(room.widthM, project.units, 2)}
+        </span>
+        <span>
+          {room.openings.length} opening{room.openings.length === 1 ? '' : 's'}
+        </span>
+      </div>
       {room.assumption && <p className="flag amber">Template assumption. Edit to make it your value.</p>}
-      <TextField label="Name" value={room.name} onCommit={name => onChange(updateRoom(project, room.id, { name, assumption: false }))} />
+      <TextField label="Name" value={room.name} focusToken={nameFocus} onCommit={name => onChange(updateRoom(project, room.id, { name, assumption: false }))} />
       <label className="field">
         <span>Use</span>
         <select value={room.use} onChange={event => onChange(updateRoom(project, room.id, { use: event.target.value, assumption: false }))}>
@@ -352,65 +521,34 @@ function RoomFields({
           {!ROOM_USES.includes(room.use as (typeof ROOM_USES)[number]) && <option>{room.use}</option>}
         </select>
       </label>
+      <section className="prop-block">
+      <p className="prop-section">Size</p>
       <div className="field-grid">
+        <UnitField label="Length" unit={unit} value={mToLength(room.lengthM, project.units)} onCommit={value => setLength('lengthM', value)} />
+        <UnitField label="Width" unit={unit} value={mToLength(room.widthM, project.units)} onCommit={value => setLength('widthM', value)} />
+        <UnitField label="Height" unit={unit} value={mToLength(room.heightM, project.units)} onCommit={value => setLength('heightM', value)} />
         <UnitField label="Origin X" unit={unit} value={mToLength(room.xM, project.units)} onCommit={value => setLength('xM', value)} />
         <UnitField label="Origin Y" unit={unit} value={mToLength(room.yM, project.units)} onCommit={value => setLength('yM', value)} />
         <UnitField label="Floor Z" unit={unit} value={mToLength(room.zM, project.units)} onCommit={value => setLength('zM', value)} />
-        <UnitField label="Length X" unit={unit} value={mToLength(room.lengthM, project.units)} onCommit={value => setLength('lengthM', value)} />
-        <UnitField label="Width Y" unit={unit} value={mToLength(room.widthM, project.units)} onCommit={value => setLength('widthM', value)} />
-        <UnitField label="Height Z" unit={unit} value={mToLength(room.heightM, project.units)} onCommit={value => setLength('heightM', value)} />
       </div>
-      <h3>Surfaces</h3>
-      <p className="muted">Each surface uses a restaurant component. Open the surface to add or swap layers.</p>
-      {SURFACE_FACES.map(face => {
-        const assignment = room.surfaces[face.id];
-        const layers = resolveStack(assignment, assemblies, materials);
+      </section>
+      <section className="prop-block">
+      <p className="prop-section">Finishes</p>
+      {(['floor', 'ceiling'] as const).map(face => {
+        const assignment = room.surfaces[face];
+        const label = face === 'floor' ? 'Floor' : 'Ceiling';
         return (
-          <div key={face.id} className="surface-block">
-            <ComponentSelect
-              label={face.label}
-              assemblies={assemblies}
-              categories={assemblyCategoriesForFace(face.id)}
-              value={assignment.constructionId ?? null}
-              onChange={constructionId => setSurface(face.id, constructionId)}
-            />
-            <ol className="plain-list">
-              {layers.map((layer, index) => (
-                <li key={`${layer.materialId}-${index}`}>
-                  {index + 1}. {layer.place || 'Layer'} — {findConstruction(materials, layer.materialId)?.name ?? layer.materialId}
-                </li>
-              ))}
-              {layers.length === 0 && <li className="muted">No layers.</li>}
-            </ol>
-            <ThermoNodeNote materialKey={assignment.materialKey} />
-            <TextField
-              label={`${face.label} note`}
-              value={assignment.note}
-              onCommit={note =>
-                onChange(updateRoom(project, room.id, { surfaces: { ...room.surfaces, [face.id]: { ...assignment, note } } }))
-              }
-            />
-          </div>
+          <ComponentSelect
+            key={face}
+            label={label}
+            assemblies={assemblies}
+            categories={assemblyCategoriesForFace(face)}
+            value={assignment.constructionId ?? null}
+            onChange={constructionId => setSurface(face, constructionId)}
+          />
         );
       })}
-      <h3>Openings</h3>
-      <div className="button-row">
-        {(['door', 'window', 'opening'] as OpeningKind[]).map(kind => (
-          <button key={kind} type="button" className="btn" onClick={() => onChange(updateRoom(project, room.id, addOpening(room, kind)))}>
-            Add {kind}
-          </button>
-        ))}
-      </div>
-      <ul className="plain-list">
-        {room.openings.map(opening => (
-          <li key={opening.id}>
-            <button type="button" className="linkish" onClick={() => onSelect({ kind: 'opening', roomId: room.id, id: opening.id })}>
-              {opening.kind} · {opening.face} · {mToLength(opening.widthM, project.units).toFixed(2)} {unit}
-            </button>
-          </li>
-        ))}
-        {room.openings.length === 0 && <li className="muted">No doors, windows, or openings.</li>}
-      </ul>
+      </section>
       <div className="button-row">
         <button type="button" className="btn" onClick={() => onChange(duplicateRoom(project, room.id))}>
           Duplicate
@@ -460,9 +598,11 @@ function OpeningFields({
   };
   const asLength = (meters: number) => mToLength(meters, project.units);
   return (
-    <div className="stack">
-      <h2>{opening.kind}</h2>
-      <p className="muted">Offset runs along the wall from the minimum corner. These openings are project data. GeometryDocument v1 has no door or window entity.</p>
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">{room.name} · {PLAN_SIDES[opening.face].title}</p>
+        <h2>{opening.kind}</h2>
+      </header>
       {opening.kind === 'opening' ? (
         <p className="muted">A plain opening has no door or window assembly.</p>
       ) : (
@@ -480,12 +620,10 @@ function OpeningFields({
           <StackEditor
             layers={resolveStack(opening, assemblies, materials)}
             materials={materials}
-            orderLabel={findAssembly(assemblies, opening.constructionId)?.orderLabel ?? 'Layer order'}
             series={findAssembly(assemblies, opening.constructionId)?.series ?? true}
             units={project.units}
             onChange={layers => patch({ layers })}
           />
-          {findAssembly(assemblies, opening.constructionId)?.notes && <p className="muted">{findAssembly(assemblies, opening.constructionId)?.notes}</p>}
         </>
       )}
       <button
@@ -508,7 +646,7 @@ function OpeningFields({
         <select value={opening.face} onChange={event => patch({ face: event.target.value as typeof opening.face })}>
           {WALL_FACES.map(face => (
             <option key={face.id} value={face.id}>
-              {face.label}
+              {wallPlaceLabel(room, face.id, project.rooms)}
             </option>
           ))}
         </select>
@@ -536,20 +674,24 @@ function SystemFields({
   systemId,
   onChange,
   onSelect,
+  nameFocus,
 }: {
   project: Project;
   systemId: string;
   onChange: (project: Project) => void;
   onSelect: (selection: Selection) => void;
+  nameFocus: number;
 }) {
   const system = project.systems.find(item => item.id === systemId);
   if (!system) return <p>System not found.</p>;
   const members = project.equipment.filter(item => item.systemId === system.id);
   return (
-    <div className="stack">
-      <h2>{system.name}</h2>
-      <p className="muted">A system groups equipment for the schedule. It does not size ducts or airflow.</p>
-      <TextField label="Name" value={system.name} onCommit={name => onChange(updateSystem(project, system.id, { name }))} />
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">System</p>
+        <h2>{system.name}</h2>
+      </header>
+      <TextField label="Name" value={system.name} focusToken={nameFocus} onCommit={name => onChange(updateSystem(project, system.id, { name }))} />
       <label className="field">
         <span>Kind</span>
         <select
@@ -610,8 +752,11 @@ function EquipmentFields({
     onChange(updateEquipment(project, item.id, { [key]: lengthToM(display, project.units) }));
   };
   return (
-    <div className="stack">
-      <h2>{product ? product.name : 'Missing product'}</h2>
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">Equipment</p>
+        <h2>{product ? product.name : 'Missing product'}</h2>
+      </header>
       <p className="flag amber">Planning placement. Not sized or validated by a solver.</p>
       {product && (
         <dl className="spec-list">

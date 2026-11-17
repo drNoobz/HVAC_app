@@ -6,7 +6,7 @@ export type SurfaceFace = 'floor' | 'ceiling' | 'walls';
 
 export type OpeningKind = 'door' | 'window' | 'opening';
 
-/** Wall faces of a room box. +X/−X/+Y/−Y. Floor and ceiling are not opening hosts. */
+/** Wall faces of a room box. On the plan, px is right, nx is left, py is top, ny is bottom. */
 export type WallFace = 'px' | 'nx' | 'py' | 'ny';
 
 export type SystemKind =
@@ -63,7 +63,12 @@ export interface Room {
   widthM: number;
   /** Size along +Z, meters. */
   heightM: number;
-  surfaces: Record<SurfaceFace, SurfaceAssignment>;
+  surfaces: {
+    floor: SurfaceAssignment;
+    ceiling: SurfaceAssignment;
+    /** One stack per face. Older projects stored a single shared wall and are copied onto all four faces when opened. */
+    walls: Record<WallFace, SurfaceAssignment>;
+  };
   openings: Opening[];
   /** True when the room came from a template or sample and has not been confirmed. */
   assumption: boolean;
@@ -177,10 +182,10 @@ export const SURFACE_FACES: { id: SurfaceFace; label: string }[] = [
 ];
 
 export const WALL_FACES: { id: WallFace; label: string }[] = [
-  { id: 'px', label: '+X wall' },
-  { id: 'nx', label: '−X wall' },
-  { id: 'py', label: '+Y wall' },
-  { id: 'ny', label: '−Y wall' },
+  { id: 'px', label: 'Right wall' },
+  { id: 'nx', label: 'Left wall' },
+  { id: 'py', label: 'Top wall' },
+  { id: 'ny', label: 'Bottom wall' },
 ];
 
 export const DISCLAIMER =

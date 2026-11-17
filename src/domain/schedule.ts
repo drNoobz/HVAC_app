@@ -265,16 +265,31 @@ export function projectSummary(project: Project, lines: ScheduleLine[], bom: Bom
         sizeM: { length: room.lengthM, width: room.widthM, height: room.heightM },
         materials: {
           floor: room.surfaces.floor.materialKey,
-          walls: room.surfaces.walls.materialKey,
+          walls: {
+            px: room.surfaces.walls.px.materialKey,
+            nx: room.surfaces.walls.nx.materialKey,
+            py: room.surfaces.walls.py.materialKey,
+            ny: room.surfaces.walls.ny.materialKey,
+          },
           ceiling: room.surfaces.ceiling.materialKey,
         },
         construction: {
           floor: room.surfaces.floor.constructionId ?? null,
-          walls: room.surfaces.walls.constructionId ?? null,
+          walls: {
+            px: room.surfaces.walls.px.constructionId ?? null,
+            nx: room.surfaces.walls.nx.constructionId ?? null,
+            py: room.surfaces.walls.py.constructionId ?? null,
+            ny: room.surfaces.walls.ny.constructionId ?? null,
+          },
           ceiling: room.surfaces.ceiling.constructionId ?? null,
           layers: {
             floor: (room.surfaces.floor.layers ?? []).map(layer => layer.materialId),
-            walls: (room.surfaces.walls.layers ?? []).map(layer => layer.materialId),
+            walls: {
+              px: (room.surfaces.walls.px.layers ?? []).map(layer => layer.materialId),
+              nx: (room.surfaces.walls.nx.layers ?? []).map(layer => layer.materialId),
+              py: (room.surfaces.walls.py.layers ?? []).map(layer => layer.materialId),
+              ny: (room.surfaces.walls.ny.layers ?? []).map(layer => layer.materialId),
+            },
             ceiling: (room.surfaces.ceiling.layers ?? []).map(layer => layer.materialId),
           },
         },

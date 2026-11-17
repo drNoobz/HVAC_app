@@ -1,4 +1,4 @@
-import type { Project } from '@/domain/types';
+import type { Project, SurfaceAssignment, WallFace } from '@/domain/types';
 import type { GeometryDocument } from './geometry';
 import { MATERIAL_SNAPSHOT, MATERIAL_SNAPSHOT_NOTE, materialByKey } from './materials';
 import {
@@ -12,6 +12,13 @@ import {
   type SurfaceMaterialV1,
   type ValidateModelResponseV1,
 } from './contract';
+
+const WALL_FACES: WallFace[] = ['px', 'nx', 'py', 'ny'];
+
+function sharedWallKey(walls: Record<WallFace, SurfaceAssignment>): string | null {
+  const keys = WALL_FACES.map(face => walls[face].materialKey);
+  return keys.every(key => key === keys[0]) ? (keys[0] ?? null) : null;
+}
 
 const UNAVAILABLE =
   'Solver execution is not connected in stage 1. ThermoNode Lab solves thermal networks in-browser through WASM; this app does not call that solver. No job was queued.';
@@ -49,7 +56,7 @@ export function projectToBuildingModel(project: Project): BuildingModelV1 {
       surfaces: {
         floor: room.surfaces.floor.materialKey,
         ceiling: room.surfaces.ceiling.materialKey,
-        walls: room.surfaces.walls.materialKey,
+        walls: sharedWallKey(room.surfaces.walls),
       },
       openings: room.openings.map(opening => ({
         id: opening.id,

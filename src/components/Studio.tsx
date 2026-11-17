@@ -1,22 +1,28 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { planningIssues } from '@/domain/issues';
 import { CATEGORY_LABEL, CATEGORY_ORDER, CATALOG, getProduct, type EquipmentCategory } from '@/domain/catalog';
 import { downloadText, fileSlug } from '@/domain/download';
 import {
+  addOpening,
   addSystem,
   buildDimensionedRoom,
   buildDrawnRoom,
   buildPlacement,
   removeEquipment,
   removeRoom,
+  removeSystem,
   roomAtPoint,
+  setWallAssembly,
   updateRoom,
 } from '@/domain/projectOps';
 import { buildBom, buildSchedule, projectSummary, scheduleCsv } from '@/domain/schedule';
-import { DISCLAIMER, SURFACE_FACES, SYSTEM_KINDS, type EditorTool, type Project, type Selection, type StoredTemplate } from '@/domain/types';
-import { formatLength } from '@/domain/units';
+import { DISCLAIMER, SURFACE_FACES, SYSTEM_KINDS, WALL_FACES, type EditorTool, type Project, type Selection, type StoredTemplate, type WallFace } from '@/domain/types';
+import { PLAN_SIDES, WALL_TYPES, roomFill, wallPlaceLabel, wallRoleLabel } from '@/domain/walls';
+import { PlanView } from './PlanView';
+import { formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
 import { projectToBuildingModel, validateModel } from '@/thermonode/localAdapter';
 import { mergeAssemblies, mergeLibrary, type ConstructionAssembly, type ConstructionMaterial } from '@/domain/constructionLibrary';
 import { BoundaryPanel } from './BoundaryPanel';
@@ -76,11 +82,39 @@ export function Studio({
   const [exportOpen, setExportOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [templateName, setTemplateName] = useState(`${project.name} template`);
-  const actions = useRef({ selection, onChange, setSelection, setTool });
-  actions.current = { selection, onChange, setSelection, setTool };
+  const [wallTypeId, setWallTypeId] = useState<string | null>(null);
+  const [scene, setScene] = useState<'plan' | '3d'>('plan');
+  const [menu, setMenu] = useState<{ x: number; y: number; selection: Selection } | null>(null);
+  const [nameFocus, setNameFocus] = useState(0);
+  const past = useRef<Project[]>([]);
+  const future = useRef<Project[]>([]);
+  const [historyTick, setHistoryTick] = useState({ undo: false, redo: false });
+  const edit = (next: Project) => {
+    past.current = [...past.current, project].slice(-40);
+    future.current = [];
+    setHistoryTick({ undo: true, redo: false });
+    onChange(next);
+  };
+  const undo = () => {
+    const prev = past.current.pop();
+    if (!prev) return;
+    future.current.push(project);
+    setHistoryTick({ undo: past.current.length > 0, redo: true });
+    onChange(prev);
+  };
+  const redo = () => {
+    const next = future.current.pop();
+    if (!next) return;
+    past.current.push(project);
+    setHistoryTick({ undo: true, redo: future.current.length > 0 });
+    onChange(next);
+  };
+  const actions = useRef({ selection, onChange: edit, setSelection, setTool, undo, redo });
+  actions.current = { selection, onChange: edit, setSelection, setTool, undo, redo };
 
   const materials = useMemo(() => mergeLibrary(addedMaterials), [addedMaterials]);
   const assemblies = useMemo(() => mergeAssemblies(addedAssemblies), [addedAssemblies]);
+  const planning = useMemo(() => planningIssues(project), [project]);
   const validation = useMemo(() => validateModel(projectToBuildingModel(project)), [project]);
   const errors = validation.issues.filter(issue => issue.severity === 'error').length;
   const warnings = validation.issues.filter(issue => issue.severity === 'warning').length;
@@ -91,6 +125,9 @@ export function Studio({
     setView('model');
     setFitToken(token => token + 1);
     setTemplateName(`${project.name} template`);
+    past.current = [];
+    future.current = [];
+    setHistoryTick({ undo: false, redo: false });
   }, [project.id]);
 
   useEffect(() => {
@@ -108,10 +145,24 @@ export function Studio({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      const current = actions.current;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) current.redo();
+        else current.undo();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') {
+        event.preventDefault();
+        current.redo();
+        return;
+      }
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) return;
-      const current = actions.current;
-      if (event.key === 'Escape') current.setTool({ kind: 'select' });
+      if (event.key === 'Escape') {
+        current.setTool({ kind: 'select' });
+        setWallTypeId(null);
+      }
       if (event.key !== 'Delete') return;
       if (current.selection.kind === 'room') {
         current.onChange(removeRoom(project, current.selection.id));
@@ -152,6 +203,71 @@ export function Studio({
     );
     setExportOpen(false);
   };
+  const placeOpening = (roomId: string, kind: 'door' | 'window', face?: WallFace) => {
+    const room = project.rooms.find(item => item.id === roomId);
+    if (!room) return;
+    const next = addOpening(room, kind, face);
+    const created = next.openings[next.openings.length - 1];
+    edit(updateRoom(project, room.id, { openings: next.openings }));
+    setSelection({ kind: 'opening', roomId: room.id, id: created.id });
+  };
+  const renameSelection = (next: Selection) => {
+    setSelection(next);
+    setNameFocus(token => token + 1);
+  };
+  const menuItems = (next: Selection) => {
+    if (next.kind === 'project') {
+      return [
+        { id: 'rename', label: 'Rename', run: () => renameSelection(next) },
+        { id: 'delete', label: 'Delete project', danger: true, run: onDeleteProject },
+      ];
+    }
+    if (next.kind === 'room') {
+      return [
+        { id: 'door', label: 'Add door', run: () => placeOpening(next.id, 'door') },
+        { id: 'window', label: 'Add window', run: () => placeOpening(next.id, 'window') },
+        { id: 'rename', label: 'Rename', run: () => renameSelection(next) },
+        { id: 'delete', label: 'Delete', danger: true, run: () => { edit(removeRoom(project, next.id)); setSelection({ kind: 'project' }); } },
+      ];
+    }
+    if (next.kind === 'surface' && next.face === 'walls' && next.wallFace) {
+      const face = next.wallFace;
+      return [
+        { id: 'door', label: 'Add door', run: () => placeOpening(next.roomId, 'door', face) },
+        { id: 'window', label: 'Add window', run: () => placeOpening(next.roomId, 'window', face) },
+      ];
+    }
+    if (next.kind === 'opening') {
+      const opening = next;
+      return [{
+        id: 'delete',
+        label: 'Delete',
+        danger: true,
+        run: () => {
+          const room = project.rooms.find(item => item.id === opening.roomId);
+          if (!room) return;
+          edit(updateRoom(project, room.id, { openings: room.openings.filter(item => item.id !== opening.id) }));
+          setSelection({ kind: 'room', id: room.id });
+        },
+      }];
+    }
+    if (next.kind === 'equipment') {
+      return [{ id: 'delete', label: 'Delete', danger: true, run: () => { edit(removeEquipment(project, next.id)); setSelection({ kind: 'project' }); } }];
+    }
+    if (next.kind === 'system') {
+      return [
+        { id: 'rename', label: 'Rename', run: () => renameSelection(next) },
+        { id: 'delete', label: 'Delete', danger: true, run: () => { edit(removeSystem(project, next.id)); setSelection({ kind: 'project' }); } },
+      ];
+    }
+    return [];
+  };
+  const openMenu = (selection: Selection, x: number, y: number) => {
+    const subject: Selection = selection.kind === 'surface' && selection.face !== 'walls' ? { kind: 'room', id: selection.roomId } : selection;
+    if (menuItems(subject).length === 0) return;
+    setSelection(subject);
+    setMenu({ x, y, selection: subject });
+  };
 
   return (
     <div className="studio">
@@ -165,7 +281,7 @@ export function Studio({
             className="name-input"
             aria-label="Project name"
             value={project.name}
-            onChange={event => onChange({ ...project, name: event.target.value })}
+            onChange={event => edit({ ...project, name: event.target.value })}
           />
         </div>
         <div className="view-tabs" role="tablist">
@@ -201,6 +317,12 @@ export function Studio({
               </div>
             )}
           </div>
+          <button type="button" className="btn" onClick={undo} disabled={!historyTick.undo}>
+            Undo
+          </button>
+          <button type="button" className="btn" onClick={redo} disabled={!historyTick.redo}>
+            Redo
+          </button>
           <button
             type="button"
             className="btn"
@@ -230,44 +352,43 @@ export function Studio({
             </button>
           </div>
           {side === 'project' ? (
-            <ProjectTree project={project} selection={selection} onSelect={setSelection} onChange={onChange} />
+            <ProjectTree project={project} selection={selection} onSelect={setSelection} onChange={edit} onContextMenu={openMenu} />
           ) : (
             <div className="catalog">
-              <input placeholder="Search products" value={query} onChange={event => setQuery(event.target.value)} aria-label="Search catalog" />
-              <div className="chips">
-                <button type="button" className={category === 'all' ? 'active' : ''} onClick={() => setCategory('all')}>
-                  All
-                </button>
-                {CATEGORY_ORDER.map(item => (
-                  <button key={item} type="button" className={category === item ? 'active' : ''} onClick={() => setCategory(item)}>
-                    {CATEGORY_LABEL[item]}
-                  </button>
-                ))}
+              <div className="catalog-tools">
+                <input placeholder="Search" value={query} onChange={event => setQuery(event.target.value)} aria-label="Search catalog" />
+                <select aria-label="Catalog category" value={category} onChange={event => setCategory(event.target.value as EquipmentCategory | 'all')}>
+                  <option value="all">All</option>
+                  {CATEGORY_ORDER.map(item => (
+                    <option key={item} value={item}>
+                      {CATEGORY_LABEL[item]}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <p className="muted">Demo catalog. Manufacturers and models are fictional. Specs are assumptions or explicitly not stated.</p>
-              {filtered.map(product => (
-                <article key={product.id} className={tool.kind === 'place' && tool.catalogId === product.id ? 'catalog-card armed' : 'catalog-card'}>
-                  <header>
-                    <strong>{product.name}</strong>
-                    <span className="flag amber">Needs confirmation</span>
-                  </header>
-                  <p>
-                    {product.manufacturer} · {product.model}
-                  </p>
-                  <p className="sub">{CATEGORY_LABEL[product.category]} · {product.supplier}</p>
-                  <p className="sub">{product.dimensions?.stated ?? 'Dimensions not stated'} · {product.airflow?.stated ?? 'Airflow not stated'}</p>
-                  <button
-                    type="button"
-                    className="btn primary"
-                    onClick={() => {
-                      setTool({ kind: 'place', catalogId: product.id });
-                      setView('model');
-                    }}
-                  >
-                    Place in model
-                  </button>
-                </article>
-              ))}
+              <p className="catalog-note">Fictional products. Confirm specs before use.</p>
+              {filtered.map(product => {
+                const spec = [product.dimensions?.stated, product.airflow?.stated ?? product.cooling?.stated ?? product.heating?.stated].filter(Boolean).join(' · ');
+                return (
+                  <article key={product.id} className={tool.kind === 'place' && tool.catalogId === product.id ? 'catalog-card armed' : 'catalog-card'}>
+                    <header>
+                      <strong>{product.name}</strong>
+                      <span>{product.model}</span>
+                    </header>
+                    <p>{spec || CATEGORY_LABEL[product.category]}</p>
+                    <button
+                      type="button"
+                      className="btn primary"
+                      onClick={() => {
+                        setTool({ kind: 'place', catalogId: product.id });
+                        setView('model');
+                      }}
+                    >
+                      Place
+                    </button>
+                  </article>
+                );
+              })}
               {filtered.length === 0 && <p className="empty">No products match.</p>}
             </div>
           )}
@@ -276,6 +397,12 @@ export function Studio({
           {view === 'model' && (
             <>
               <div className="stage-bar">
+                <button type="button" className={scene === 'plan' ? 'active' : ''} onClick={() => setScene('plan')}>
+                  Plan
+                </button>
+                <button type="button" className={scene === '3d' ? 'active' : ''} onClick={() => setScene('3d')}>
+                  3D
+                </button>
                 <button type="button" className={tool.kind === 'select' ? 'active' : ''} onClick={() => setTool({ kind: 'select' })}>
                   Select
                 </button>
@@ -285,13 +412,33 @@ export function Studio({
                 <button type="button" className={showDimensions ? 'active' : ''} onClick={() => setShowDimensions(value => !value)}>
                   Enter dimensions
                 </button>
-                <button type="button" className={hideRoof ? 'active' : ''} aria-pressed={hideRoof} onClick={() => setHideRoof(value => !value)}>
-                  Hide roof
-                </button>
+                {scene === '3d' && (
+                  <button type="button" className={hideRoof ? 'active' : ''} aria-pressed={hideRoof} onClick={() => setHideRoof(value => !value)}>
+                    Hide roof
+                  </button>
+                )}
                 <button type="button" onClick={() => setFitToken(token => token + 1)}>
                   Fit
                 </button>
-                <span className="stage-hint">Hide roof to see inside · Click a wall, door, or window · Left-drag orbits</span>
+                <label className="paint-wall">
+                  <span>Paint wall</span>
+                  <select
+                    aria-label="Paint wall"
+                    value={wallTypeId ?? ''}
+                    onChange={event => {
+                      setTool({ kind: 'select' });
+                      setWallTypeId(event.target.value || null);
+                    }}
+                  >
+                    <option value="">Off</option>
+                    {WALL_TYPES.map(type => (
+                      <option key={type.id} value={type.id}>
+                        {type.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span className="stage-hint">{scene === 'plan' ? 'Click a wall edge to edit that face' : 'Hide roof to see inside · Click a wall, door, or window'}</span>
               </div>
               {showDimensions && (
                 <DimensionForm
@@ -299,7 +446,7 @@ export function Studio({
                   onCreate={(lengthM, widthM, heightM) => {
                     const originX = project.rooms.reduce((max, room) => Math.max(max, room.xM + room.lengthM), 0);
                     const room = buildDimensionedRoom(project.rooms.length);
-                    onChange({
+                    edit({
                       ...project,
                       rooms: [...project.rooms, { ...room, xM: project.rooms.length ? originX + 0.3 : 0, lengthM, widthM, heightM }],
                     });
@@ -309,20 +456,25 @@ export function Studio({
                   }}
                 />
               )}
-              {placeProduct && <p className="place-banner">Click the floor to place {placeProduct.manufacturer} {placeProduct.model}. Esc cancels. This does not size the unit.</p>}
-              {tool.kind === 'draw' && <p className="place-banner">Drag on the floor to draw a space. Default height is 3.05 m until you edit it.</p>}
-              <div className="viewport">
-                <Viewport
-                  rooms={project.rooms}
-                  equipment={project.equipment}
+              {placeProduct && <p className="place-banner">Click the {scene === 'plan' ? 'plan' : 'floor'} to place {placeProduct.manufacturer} {placeProduct.model}. Esc cancels. This does not size the unit.</p>}
+              {tool.kind === 'draw' && <p className="place-banner">Drag to draw a space. Default height is 3.05 m until you edit it.</p>}
+              {wallTypeId && <p className="place-banner">Click one wall. {WALL_TYPES.find(type => type.id === wallTypeId)?.label} is copied onto that face only. Set Paint wall to Off when you are done.</p>}
+              {scene === 'plan' ? (
+                <PlanView
+                  project={project}
                   selection={selection}
                   tool={tool}
                   fitToken={fitToken}
-                  hideRoof={hideRoof}
-                  onSelect={setSelection}
+                  onSelect={next => {
+                    if (wallTypeId && next.kind === 'surface' && next.face === 'walls' && next.wallFace) {
+                      const type = WALL_TYPES.find(item => item.id === wallTypeId);
+                      if (type) edit(setWallAssembly(project, next.roomId, next.wallFace, type.assemblyId, assemblies));
+                    }
+                    setSelection(next);
+                  }}
                   onDrawRoom={rect => {
                     const room = buildDrawnRoom(rect, project.rooms.length);
-                    onChange({ ...project, rooms: [...project.rooms, room] });
+                    edit({ ...project, rooms: [...project.rooms, room] });
                     setSelection({ kind: 'room', id: room.id });
                   }}
                   onPlace={point => {
@@ -331,13 +483,48 @@ export function Studio({
                     if (!product) return;
                     const room = roomAtPoint(project.rooms, point.xM, point.yM);
                     const item = buildPlacement(product, room, point);
-                    onChange({ ...project, equipment: [...project.equipment, item] });
+                    edit({ ...project, equipment: [...project.equipment, item] });
                     setSelection({ kind: 'equipment', id: item.id });
                     setTool({ kind: 'select' });
                   }}
+                  onContextMenu={openMenu}
                 />
-                {project.rooms.length === 0 && <div className="hud">Draw a space or enter dimensions. The grid is 1 m.</div>}
-              </div>
+              ) : (
+                <div className="viewport">
+                  <Viewport
+                    rooms={project.rooms}
+                    equipment={project.equipment}
+                    selection={selection}
+                    tool={tool}
+                    fitToken={fitToken}
+                    hideRoof={hideRoof}
+                    onSelect={next => {
+                      if (wallTypeId && next.kind === 'surface' && next.face === 'walls' && next.wallFace) {
+                        const type = WALL_TYPES.find(item => item.id === wallTypeId);
+                        if (type) edit(setWallAssembly(project, next.roomId, next.wallFace, type.assemblyId, assemblies));
+                      }
+                      setSelection(next);
+                    }}
+                    onDrawRoom={rect => {
+                      const room = buildDrawnRoom(rect, project.rooms.length);
+                      edit({ ...project, rooms: [...project.rooms, room] });
+                      setSelection({ kind: 'room', id: room.id });
+                    }}
+                    onPlace={point => {
+                      if (tool.kind !== 'place') return;
+                      const product = getProduct(tool.catalogId);
+                      if (!product) return;
+                      const room = roomAtPoint(project.rooms, point.xM, point.yM);
+                      const item = buildPlacement(product, room, point);
+                      edit({ ...project, equipment: [...project.equipment, item] });
+                      setSelection({ kind: 'equipment', id: item.id });
+                    setTool({ kind: 'select' });
+                  }}
+                  onContextMenu={openMenu}
+                />
+                  {project.rooms.length === 0 && <div className="hud">Draw a space or enter dimensions. The grid is 1 m.</div>}
+                </div>
+              )}
             </>
           )}
           {view === 'schedule' && <SchedulePanel project={project} />}
@@ -352,9 +539,10 @@ export function Studio({
           issues={validation.issues}
           materials={materials}
           assemblies={assemblies}
-          onChange={onChange}
+          onChange={edit}
           onSelect={setSelection}
           onDeleteProject={onDeleteProject}
+          nameFocus={nameFocus}
         />
       </div>
       <footer className="statusbar">
@@ -363,6 +551,7 @@ export function Studio({
         <span>
           {project.rooms.length} rooms · {project.equipment.length} items · {project.systems.length} systems
         </span>
+        <span className={planning.length ? 'amber-text' : ''}>{planning.length} planning issues</span>
         <span className={errors || warnings ? 'amber-text' : ''}>
           {errors} geometry errors · {warnings} warnings · solver not connected
         </span>
@@ -392,6 +581,7 @@ export function Studio({
           </div>
         </form>
       )}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.selection)} onClose={() => setMenu(null)} />}
     </div>
   );
 }
@@ -401,65 +591,171 @@ function ProjectTree({
   selection,
   onSelect,
   onChange,
+  onContextMenu,
 }: {
   project: Project;
   selection: Selection;
   onSelect: (selection: Selection) => void;
   onChange: (project: Project) => void;
+  onContextMenu: (selection: Selection, x: number, y: number) => void;
 }) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const closed = (key: string) => collapsed.has(key);
+  const toggle = (key: string) =>
+    setCollapsed(current => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  useEffect(() => {
+    setCollapsed(current => {
+      const next = new Set(current);
+      let changed = false;
+      const open = (key: string) => {
+        if (next.delete(key)) changed = true;
+      };
+      if (selection.kind === 'room' || selection.kind === 'surface' || selection.kind === 'opening') {
+        open('rooms');
+        const roomId = selection.kind === 'room' ? selection.id : selection.roomId;
+        open(`room:${roomId}`);
+        if (selection.kind === 'surface' && selection.face === 'walls' && selection.wallFace) open(`wall:${roomId}:${selection.wallFace}`);
+        if (selection.kind === 'opening') {
+          const opening = project.rooms.find(room => room.id === roomId)?.openings.find(item => item.id === selection.id);
+          if (opening) open(`wall:${roomId}:${opening.face}`);
+        }
+      }
+      if (selection.kind === 'system') {
+        open('systems');
+        open(`system:${selection.id}`);
+      }
+      if (selection.kind === 'equipment') {
+        const item = project.equipment.find(entry => entry.id === selection.id);
+        if (item?.systemId) {
+          open('systems');
+          open(`system:${item.systemId}`);
+        } else open('unassigned');
+      }
+      return changed ? next : current;
+    });
+  }, [selection, project.rooms, project.equipment]);
   const selected = (kind: Selection['kind'], id?: string) => selection.kind === kind && ('id' in selection ? selection.id === id : true);
+  const roomsClosed = closed('rooms');
+  const systemsClosed = closed('systems');
+  const unit = lengthUnit(project.units);
   return (
     <div className="tree">
-      <button type="button" className={selected('project') ? 'tree-item active' : 'tree-item'} onClick={() => onSelect({ kind: 'project' })}>
+      <button
+        type="button"
+        className={selected('project') ? 'tree-project active' : 'tree-project'}
+        onClick={() => onSelect({ kind: 'project' })}
+        onContextMenu={event => {
+          event.preventDefault();
+          onContextMenu({ kind: 'project' }, event.clientX, event.clientY);
+        }}
+      >
         <strong>{project.name || 'Untitled project'}</strong>
-        <span>{project.location || 'Location not stated'}</span>
+        {project.location ? <span>{project.location}</span> : null}
       </button>
       <div className="tree-head">
+        {project.rooms.length > 0 ? (
+          <button type="button" className="twist" aria-expanded={!roomsClosed} aria-label={roomsClosed ? 'Expand rooms' : 'Collapse rooms'} onClick={() => toggle('rooms')}>
+            <Chevron open={!roomsClosed} />
+          </button>
+        ) : (
+          <span className="twist spacer" aria-hidden="true" />
+        )}
         <span>Rooms</span>
       </div>
-      {project.rooms.map(room => (
-        <div key={room.id}>
-          <button
-            type="button"
-            className={selected('room', room.id) ? 'tree-item active' : 'tree-item'}
-            onClick={() => onSelect({ kind: 'room', id: room.id })}
-          >
-            <strong>
-              {room.name}
-              {room.assumption && <i className="dot" title="Assumption" />}
-            </strong>
-            <span>
-              {formatLength(room.lengthM, project.units, 2)} × {formatLength(room.widthM, project.units, 2)} × {formatLength(room.heightM, project.units, 2)}
-            </span>
-          </button>
-          {SURFACE_FACES.map(face => (
-            <button
-              key={face.id}
-              type="button"
-              className={
-                selection.kind === 'surface' && selection.roomId === room.id && selection.face === face.id
-                  ? 'tree-item child active'
-                  : 'tree-item child'
-              }
-              onClick={() => onSelect({ kind: 'surface', roomId: room.id, face: face.id })}
-            >
-              {face.label}
-            </button>
-          ))}
-          {room.openings.map(opening => (
-            <button
-              key={opening.id}
-              type="button"
-              className={selection.kind === 'opening' && selection.id === opening.id ? 'tree-item child active' : 'tree-item child'}
-              onClick={() => onSelect({ kind: 'opening', roomId: room.id, id: opening.id })}
-            >
-              {opening.kind} · {opening.face}
-            </button>
-          ))}
-        </div>
-      ))}
-      {project.rooms.length === 0 && <p className="muted pad">No rooms yet.</p>}
+      {!roomsClosed &&
+        project.rooms.map(room => {
+          const roomKey = `room:${room.id}`;
+          const roomClosed = closed(roomKey);
+          return (
+            <div key={room.id}>
+              <TreeRow
+                depth="child"
+                active={selected('room', room.id)}
+                collapsed={roomClosed}
+                toggleLabel={`${roomClosed ? 'Expand' : 'Collapse'} ${room.name}`}
+                onToggle={() => toggle(roomKey)}
+                onSelect={() => onSelect({ kind: 'room', id: room.id })}
+                onMenu={event => onContextMenu({ kind: 'room', id: room.id }, event.clientX, event.clientY)}
+              >
+                <strong>
+                  <i className="room-dot" style={{ background: roomFill(room.use) }} />
+                  <span>{room.name}</span>
+                  {room.assumption && <i className="dot" title="Assumption" />}
+                </strong>
+                <span className="tree-meta">
+                  {formatNumber(mToLength(room.lengthM, project.units), 1)} × {formatNumber(mToLength(room.widthM, project.units), 1)} {unit}
+                </span>
+              </TreeRow>
+              {!roomClosed && (
+                <>
+                  {SURFACE_FACES.filter(face => face.id !== 'walls').map(face => (
+                    <TreeRow
+                      key={face.id}
+                      depth="deep"
+                      active={selection.kind === 'surface' && selection.roomId === room.id && selection.face === face.id}
+                      onSelect={() => onSelect({ kind: 'surface', roomId: room.id, face: face.id })}
+                      onMenu={event => onContextMenu({ kind: 'surface', roomId: room.id, face: face.id }, event.clientX, event.clientY)}
+                    >
+                      {face.label}
+                    </TreeRow>
+                  ))}
+                  {WALL_FACES.map(face => {
+                    const wallKey = `wall:${room.id}:${face.id}`;
+                    const wallClosed = closed(wallKey);
+                    const openings = room.openings.filter(opening => opening.face === face.id);
+                    const wallActive = selection.kind === 'surface' && selection.roomId === room.id && selection.face === 'walls' && selection.wallFace === face.id;
+                    const role = wallRoleLabel(room.surfaces.walls[face.id].constructionId);
+                    return (
+                      <div key={face.id}>
+                        <TreeRow
+                          depth="deep"
+                          active={wallActive}
+                          title={`${wallPlaceLabel(room, face.id, project.rooms)} · ${role}`}
+                          collapsed={openings.length > 0 ? wallClosed : undefined}
+                          toggleLabel={openings.length > 0 ? `${wallClosed ? 'Expand' : 'Collapse'} ${face.label}` : undefined}
+                          onToggle={openings.length > 0 ? () => toggle(wallKey) : undefined}
+                          onSelect={() => onSelect({ kind: 'surface', roomId: room.id, face: 'walls', wallFace: face.id })}
+                          onMenu={event => onContextMenu({ kind: 'surface', roomId: room.id, face: 'walls', wallFace: face.id }, event.clientX, event.clientY)}
+                        >
+                          <span className="tree-label">{PLAN_SIDES[face.id].title} wall</span>
+                          {role !== 'Unassigned' && <span className="tree-meta">{role}</span>}
+                        </TreeRow>
+                        {openings.length > 0 &&
+                          !wallClosed &&
+                          openings.map(opening => (
+                            <TreeRow
+                              key={opening.id}
+                              depth="nested"
+                              active={selection.kind === 'opening' && selection.id === opening.id}
+                              onSelect={() => onSelect({ kind: 'opening', roomId: room.id, id: opening.id })}
+                              onMenu={event => onContextMenu({ kind: 'opening', roomId: room.id, id: opening.id }, event.clientX, event.clientY)}
+                            >
+                              <span className="tree-label">{opening.kind === 'door' ? 'Door' : opening.kind === 'window' ? 'Window' : 'Opening'}</span>
+                              <span className="tree-meta">{formatLength(opening.widthM, project.units, 2)}</span>
+                            </TreeRow>
+                          ))}
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </div>
+          );
+        })}
+      {!roomsClosed && project.rooms.length === 0 && <p className="muted pad">No rooms yet.</p>}
       <div className="tree-head">
+        {project.systems.length > 0 ? (
+          <button type="button" className="twist" aria-expanded={!systemsClosed} aria-label={systemsClosed ? 'Expand systems' : 'Collapse systems'} onClick={() => toggle('systems')}>
+            <Chevron open={!systemsClosed} />
+          </button>
+        ) : (
+          <span className="twist spacer" aria-hidden="true" />
+        )}
         <span>Systems</span>
         <select
           aria-label="Add system"
@@ -481,56 +777,120 @@ function ProjectTree({
           ))}
         </select>
       </div>
-      {project.systems.map(system => (
-        <div key={system.id}>
-          <button
-            type="button"
-            className={selected('system', system.id) ? 'tree-item active' : 'tree-item'}
-            onClick={() => onSelect({ kind: 'system', id: system.id })}
-          >
-            <strong>{system.name}</strong>
-            <span>{project.equipment.filter(item => item.systemId === system.id).length} items</span>
-          </button>
-          {project.equipment
-            .filter(item => item.systemId === system.id)
-            .map(item => {
-              const product = getProduct(item.catalogId);
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={selected('equipment', item.id) ? 'tree-item child active' : 'tree-item child'}
-                  onClick={() => onSelect({ kind: 'equipment', id: item.id })}
-                >
-                  {product ? product.model : item.catalogId} × {item.quantity}
-                </button>
-              );
-            })}
-        </div>
-      ))}
+      {!systemsClosed &&
+        project.systems.map(system => {
+          const systemKey = `system:${system.id}`;
+          const systemClosed = closed(systemKey);
+          const members = project.equipment.filter(item => item.systemId === system.id);
+          return (
+            <div key={system.id}>
+              <TreeRow
+                depth="child"
+                active={selected('system', system.id)}
+                collapsed={members.length > 0 ? systemClosed : undefined}
+                toggleLabel={members.length > 0 ? `${systemClosed ? 'Expand' : 'Collapse'} ${system.name}` : undefined}
+                onToggle={members.length > 0 ? () => toggle(systemKey) : undefined}
+                onSelect={() => onSelect({ kind: 'system', id: system.id })}
+                onMenu={event => onContextMenu({ kind: 'system', id: system.id }, event.clientX, event.clientY)}
+              >
+                <strong>
+                  <span>{system.name}</span>
+                </strong>
+                <span className="tree-meta">{members.length === 1 ? '1 item' : `${members.length} items`}</span>
+              </TreeRow>
+              {members.length > 0 &&
+                !systemClosed &&
+                members.map(item => {
+                  const product = getProduct(item.catalogId);
+                  return (
+                    <TreeRow key={item.id} depth="deep" active={selected('equipment', item.id)} onSelect={() => onSelect({ kind: 'equipment', id: item.id })} onMenu={event => onContextMenu({ kind: 'equipment', id: item.id }, event.clientX, event.clientY)}>
+                      <span className="tree-label">{product ? product.model : item.catalogId}</span>
+                      {item.quantity > 1 && <span className="tree-meta">× {item.quantity}</span>}
+                    </TreeRow>
+                  );
+                })}
+            </div>
+          );
+        })}
       {project.equipment.some(item => !item.systemId) && (
         <>
           <div className="tree-head">
+            <button type="button" className="twist" aria-expanded={!closed('unassigned')} aria-label={closed('unassigned') ? 'Expand unassigned equipment' : 'Collapse unassigned equipment'} onClick={() => toggle('unassigned')}>
+              <Chevron open={!closed('unassigned')} />
+            </button>
             <span>Unassigned equipment</span>
           </div>
-          {project.equipment
-            .filter(item => !item.systemId)
-            .map(item => {
-              const product = getProduct(item.catalogId);
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={selected('equipment', item.id) ? 'tree-item active' : 'tree-item'}
-                  onClick={() => onSelect({ kind: 'equipment', id: item.id })}
-                >
-                  {product ? `${product.model}` : item.catalogId}
-                </button>
-              );
-            })}
+          {!closed('unassigned') &&
+            project.equipment
+              .filter(item => !item.systemId)
+              .map(item => {
+                const product = getProduct(item.catalogId);
+                return (
+                  <TreeRow key={item.id} depth="child" active={selected('equipment', item.id)} onSelect={() => onSelect({ kind: 'equipment', id: item.id })} onMenu={event => onContextMenu({ kind: 'equipment', id: item.id }, event.clientX, event.clientY)}>
+                    <span className="tree-label">{product ? product.model : item.catalogId}</span>
+                    {item.quantity > 1 && <span className="tree-meta">× {item.quantity}</span>}
+                  </TreeRow>
+                );
+              })}
         </>
       )}
     </div>
+  );
+}
+
+function TreeRow({
+  active,
+  depth,
+  collapsed,
+  title,
+  toggleLabel,
+  onToggle,
+  onSelect,
+  onMenu,
+  children,
+}: {
+  active: boolean;
+  depth?: 'child' | 'deep' | 'nested';
+  collapsed?: boolean;
+  title?: string;
+  toggleLabel?: string;
+  onToggle?: () => void;
+  onSelect: () => void;
+  onMenu?: (event: ReactMouseEvent) => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`tree-row${depth ? ` ${depth}` : ''}${active ? ' active' : ''}`}>
+      {onToggle ? (
+        <button type="button" className="twist" aria-expanded={!collapsed} aria-label={toggleLabel} onClick={onToggle}>
+          <Chevron open={!collapsed} />
+        </button>
+      ) : (
+        <span className="twist spacer" aria-hidden="true" />
+      )}
+      <button
+        type="button"
+        className="tree-item"
+        title={title}
+        onClick={onSelect}
+        onContextMenu={event => {
+          if (!onMenu) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onMenu(event);
+        }}
+      >
+        {children}
+      </button>
+    </div>
+  );
+}
+
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path d={open ? 'M3 6 L8 11 L13 6' : 'M6 3 L11 8 L6 13'} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 
@@ -575,5 +935,61 @@ function DimensionForm({
         Add space
       </button>
     </form>
+  );
+}
+
+function ContextMenu({
+  x,
+  y,
+  items,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  items: { id: string; label: string; danger?: boolean; run: () => void }[];
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [shift, setShift] = useState({ x: 0, y: 0 });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const dx = Math.min(0, window.innerWidth - 8 - rect.right);
+    const dy = Math.min(0, window.innerHeight - 8 - rect.bottom);
+    if (dx || dy) setShift({ x: dx, y: dy });
+  }, [x, y, items]);
+  useEffect(() => {
+    const onPointer = (event: PointerEvent) => {
+      if (ref.current?.contains(event.target as Node)) return;
+      onClose();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('pointerdown', onPointer, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onPointer, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+  return (
+    <div ref={ref} className="context-menu" style={{ left: x + shift.x, top: y + shift.y }} role="menu" onContextMenu={event => event.preventDefault()}>
+      {items.map(item => (
+        <button
+          key={item.id}
+          type="button"
+          role="menuitem"
+          className={item.danger ? 'danger' : undefined}
+          onClick={() => {
+            item.run();
+            onClose();
+          }}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
   );
 }

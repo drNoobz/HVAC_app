@@ -1,4 +1,7 @@
 import type { Project, StoredTemplate } from './types';
+import { normalizeProject } from './walls';
+
+const EMPTY_WALL_NOTE = 'No construction material assigned. Choose one from the material library, or add a row there.';
 
 const KEY = 'hvac-planner-state-v1';
 
@@ -22,7 +25,11 @@ export function loadState(): PlannerState {
     if (!parsed || parsed.schemaVersion !== 1 || !Array.isArray(parsed.projects) || !Array.isArray(parsed.templates)) {
       return emptyState();
     }
-    return parsed;
+    return {
+      schemaVersion: 1,
+      projects: parsed.projects.map(project => normalizeProject(project, EMPTY_WALL_NOTE)),
+      templates: parsed.templates.map(template => ({ ...template, project: normalizeProject(template.project, EMPTY_WALL_NOTE) })),
+    };
   } catch {
     return emptyState();
   }

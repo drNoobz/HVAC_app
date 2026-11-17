@@ -410,7 +410,6 @@ export function LibraryPanel({
               <StackEditor
                 layers={assembly.layers}
                 materials={materials}
-                orderLabel={assembly.orderLabel}
                 series={assembly.series}
                 units="IP"
                 readOnly={assembly.origin === 'builtin'}

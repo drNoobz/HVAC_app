@@ -3,6 +3,7 @@ import { createId, nowIso } from './ids';
 import { placementZ } from './projectOps';
 import { getProduct } from './catalog';
 import type { HvacSystem, Opening, PlacedEquipment, Project, Room, SurfaceAssignment, SystemKind } from './types';
+import { repeatedWalls, separateSharedWalls } from './walls';
 
 const PLANNING_NOTE = 'Planning default from the restaurant construction library. The stack is copied onto this surface. Confirm the climate zone and the tested assembly before design use.';
 const KITCHEN_USES = new Set(['Kitchen', 'Hot line', 'Prep', 'Dish']);
@@ -52,7 +53,7 @@ function room(input: {
     heightM: input.heightM,
     surfaces: {
       floor: surface(floorId),
-      walls: surface(wallId),
+      walls: repeatedWalls(wallId),
       ceiling: surface(ceilingId),
     },
     openings: input.openings ?? [],
@@ -117,7 +118,7 @@ function base(
     units: 'IP',
     details,
     createdFrom: origin,
-    rooms,
+    rooms: separateSharedWalls(rooms),
     systems,
     equipment,
     preliminary: true,

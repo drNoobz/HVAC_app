@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatNumber } from '@/domain/units';
 
 export function UnitField({
@@ -44,14 +44,22 @@ export function TextField({
   value,
   onCommit,
   multiline = false,
+  focusToken = 0,
 }: {
   label: string;
   value: string;
   onCommit: (value: string) => void;
   multiline?: boolean;
+  focusToken?: number;
 }) {
   const [text, setText] = useState(value);
+  const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => setText(value), [value]);
+  useEffect(() => {
+    if (!focusToken) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [focusToken]);
   const commit = (current: string) => {
     if (current !== value) onCommit(current);
   };
@@ -62,6 +70,7 @@ export function TextField({
         <textarea value={text} rows={4} onChange={event => setText(event.target.value)} onBlur={event => commit(event.currentTarget.value)} />
       ) : (
         <input
+          ref={inputRef}
           value={text}
           onChange={event => setText(event.target.value)}
           onBlur={event => commit(event.currentTarget.value)}
