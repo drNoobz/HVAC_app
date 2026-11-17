@@ -101,6 +101,7 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
 .btn.primary { background: var(--teal); border-color: var(--teal); color: white; }
 .btn.danger { color: var(--danger); border-color: #e4c4c4; }
 .btn:disabled { opacity: 0.55; cursor: default; }
+.btn.active { background: #e7f3f4; border-color: #b7d6d8; color: var(--teal-dark); font-weight: 600; }
 
 .menu { position: relative; }
 .menu-panel {
@@ -296,6 +297,13 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
 .schedule-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
 .summary-line { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; color: var(--muted); }
 .table-wrap { overflow: auto; border: 1px solid var(--line); max-height: 460px; }
+.library-table { max-height: calc(100vh - 280px); }
+.library-note { max-width: 760px; }
+.cell-sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+.stack-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.stack-layer { border: 1px solid var(--line); padding: 8px; background: #f8fafb; display: grid; gap: 6px; }
+.stack-layer header { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.component-list { display: grid; gap: 10px; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .data-table th, .data-table td { border-bottom: 1px solid var(--line); padding: 8px; vertical-align: top; text-align: left; }
 .data-table th { position: sticky; top: 0; background: #f4f7f8; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }

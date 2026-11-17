@@ -268,6 +268,16 @@ export function projectSummary(project: Project, lines: ScheduleLine[], bom: Bom
           walls: room.surfaces.walls.materialKey,
           ceiling: room.surfaces.ceiling.materialKey,
         },
+        construction: {
+          floor: room.surfaces.floor.constructionId ?? null,
+          walls: room.surfaces.walls.constructionId ?? null,
+          ceiling: room.surfaces.ceiling.constructionId ?? null,
+          layers: {
+            floor: (room.surfaces.floor.layers ?? []).map(layer => layer.materialId),
+            walls: (room.surfaces.walls.layers ?? []).map(layer => layer.materialId),
+            ceiling: (room.surfaces.ceiling.layers ?? []).map(layer => layer.materialId),
+          },
+        },
         assumption: room.assumption,
       })),
       systems: project.systems.map(system => ({ name: system.name, kind: system.kind, notes: system.notes })),

@@ -12,6 +12,7 @@ export function StartScreen({
   onOpen,
   onDeleteProject,
   onDeleteTemplate,
+  onOpenLibrary,
 }: {
   projects: Project[];
   templates: StoredTemplate[];
@@ -19,6 +20,7 @@ export function StartScreen({
   onOpen: (id: string) => void;
   onDeleteProject: (id: string) => void;
   onDeleteTemplate: (id: string) => void;
+  onOpenLibrary: () => void;
 }) {
   const recent = [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return (
@@ -31,6 +33,9 @@ export function StartScreen({
             <span>Engineering studio · Stage 1</span>
           </div>
         </div>
+        <button type="button" className="btn" onClick={onOpenLibrary}>
+          Material library
+        </button>
       </header>
       <p className="disclaimer">{DISCLAIMER}</p>
       <main className="start-grid">
@@ -38,7 +43,7 @@ export function StartScreen({
           <p className="kicker">Start</p>
           <h1>Restaurant projects</h1>
           <p className="lede">
-            Model spaces, assign ThermoNode materials where the library has them, place equipment, and export a preliminary schedule. Other building types can be set on a project. Templates are restaurants for this stage.
+            Model spaces, pick construction materials, place equipment, and export a preliminary schedule. Other building types can be set on a project. Templates are restaurants for this stage.
           </p>
           <div className="choice-list">
             <button type="button" className="choice" onClick={() => onCreate(createBlankProject())}>

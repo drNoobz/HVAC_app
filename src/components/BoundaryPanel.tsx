@@ -42,7 +42,7 @@ export function BoundaryPanel({ project }: { project: Project }) {
         <p className="kicker">Adapter · v1</p>
         <h2>Thermonode boundary</h2>
         <p>
-          Projects, templates, the supplier catalog, equipment placement, and the bill of materials stay in this app. Building geometry and materials cross the adapter below.
+          Projects, templates, the supplier catalog, the construction material library, equipment placement, and the bill of materials stay in this app. ThermoNode material ids stay in the background for the adapter below. They are not the material picker.
         </p>
         <div className="split-cards">
           <article>
@@ -156,7 +156,7 @@ function IssueList({ response }: { response: ValidateModelResponseV1 }) {
             </li>
           ))}
       </ul>
-      {infos > 0 && <p className="muted">Material notices are in the JSON. Unassigned surfaces are expected where the library has no envelope material.</p>}
+      {infos > 0 && <p className="muted">Material notices in this JSON are ThermoNode ids. Construction materials stay in this app and are not sent as those ids.</p>}
     </div>
   );
 }

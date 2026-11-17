@@ -17,9 +17,22 @@ export type SystemKind =
   | 'ventilation'
   | 'other';
 
+/** One layer in a floor, wall, ceiling, roof, window, or door stack. */
+export interface StackLayer {
+  materialId: string;
+  /** Null uses the library thickness for that material. */
+  thicknessMm: number | null;
+  /** Where this layer sits, such as "Outside veneer" or "Room side". */
+  place: string;
+}
+
 export interface SurfaceAssignment {
-  /** ThermoNode library id, or null when no library material is assigned. */
+  /** ThermoNode library id kept for the adapter. The material picker does not write this. */
   materialKey: string | null;
+  /** Construction component id. Missing on projects saved before the construction library. */
+  constructionId?: string | null;
+  /** Layers in stack order. Missing on older projects; the component id still resolves a stack. */
+  layers?: StackLayer[];
   note: string;
 }
 
@@ -32,6 +45,9 @@ export interface Opening {
   widthM: number;
   heightM: number;
   sillM: number;
+  /** Construction component id for a door or window. A plain opening has none. */
+  constructionId?: string | null;
+  layers?: StackLayer[];
 }
 
 export interface Room {
@@ -113,6 +129,7 @@ export interface StoredTemplate {
 export type Selection =
   | { kind: 'project' }
   | { kind: 'room'; id: string }
+  | { kind: 'surface'; roomId: string; face: SurfaceFace; wallFace?: WallFace }
   | { kind: 'opening'; roomId: string; id: string }
   | { kind: 'system'; id: string }
   | { kind: 'equipment'; id: string };

@@ -1,4 +1,5 @@
 import { getProduct, type CatalogProduct } from './catalog';
+import { builtinAssembly, cloneLayers } from './constructionLibrary';
 import { createId, nowIso } from './ids';
 import type {
   HvacSystem,
@@ -11,12 +12,15 @@ import type {
   SystemKind,
 } from './types';
 
-export const UNASSIGNED_SURFACE =
-  'No ThermoNode material assigned. Gypsum board, concrete, glass, and wood are not in the library snapshot used by this app.';
+export const UNASSIGNED_SURFACE = 'No construction material assigned. Choose one from the material library, or add a row there.';
 
 export function blankSurfaces(): Room['surfaces'] {
-  const surface = (): SurfaceAssignment => ({ materialKey: null, note: UNASSIGNED_SURFACE });
+  const surface = (): SurfaceAssignment => ({ materialKey: null, constructionId: null, layers: [], note: UNASSIGNED_SURFACE });
   return { floor: surface(), walls: surface(), ceiling: surface() };
+}
+
+function cloneSurface(surface: SurfaceAssignment): SurfaceAssignment {
+  return { ...surface, layers: surface.layers ? cloneLayers(surface.layers) : undefined };
 }
 
 export function createBlankProject(): Project {
@@ -105,10 +109,21 @@ export function buildDimensionedRoom(count: number): Room {
 }
 
 export function addOpening(room: Room, kind: OpeningKind): Room {
+  const assembly = kind === 'window' ? builtinAssembly('asm-window-dining') : kind === 'door' ? builtinAssembly('asm-door-restaurant') : undefined;
   const opening: Opening =
     kind === 'window'
-      ? { id: createId('open'), kind, face: 'ny', offsetM: 0.4, widthM: 1.2, heightM: 1.2, sillM: 0.9 }
-      : { id: createId('open'), kind, face: 'px', offsetM: 0.3, widthM: kind === 'door' ? 0.9 : 1, heightM: 2.13, sillM: 0 };
+      ? { id: createId('open'), kind, face: 'ny', offsetM: 0.4, widthM: 1.2, heightM: 1.2, sillM: 0.9, constructionId: assembly?.id ?? null, layers: assembly ? cloneLayers(assembly.layers) : [] }
+      : {
+          id: createId('open'),
+          kind,
+          face: 'px',
+          offsetM: 0.3,
+          widthM: kind === 'door' ? 0.9 : 1,
+          heightM: 2.13,
+          sillM: 0,
+          constructionId: assembly?.id ?? null,
+          layers: assembly ? cloneLayers(assembly.layers) : [],
+        };
   return { ...room, openings: [...room.openings, opening] };
 }
 
@@ -137,11 +152,11 @@ export function duplicateRoom(project: Project, roomId: string): Project {
     xM: room.xM + 0.5,
     yM: room.yM + 0.5,
     surfaces: {
-      floor: { ...room.surfaces.floor },
-      walls: { ...room.surfaces.walls },
-      ceiling: { ...room.surfaces.ceiling },
+      floor: cloneSurface(room.surfaces.floor),
+      walls: cloneSurface(room.surfaces.walls),
+      ceiling: cloneSurface(room.surfaces.ceiling),
     },
-    openings: room.openings.map(opening => ({ ...opening, id: createId('open') })),
+    openings: room.openings.map(opening => ({ ...opening, id: createId('open'), layers: opening.layers ? cloneLayers(opening.layers) : undefined })),
   };
   return { ...project, rooms: [...project.rooms, copy] };
 }

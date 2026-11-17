@@ -1,19 +1,23 @@
+import { builtinAssembly, cloneLayers } from './constructionLibrary';
 import { createId, nowIso } from './ids';
 import { placementZ } from './projectOps';
 import { getProduct } from './catalog';
 import type { HvacSystem, Opening, PlacedEquipment, Project, Room, SurfaceAssignment, SystemKind } from './types';
 
-const CEILING_NOTE =
-  'Planning assumption. Microlite_24_kg_m3 is a ThermoNode insulation entry, not a specified ceiling assembly.';
-const WALL_METAL_NOTE =
-  'Planning assumption. Stainless_steel_AISI_304 is a ThermoNode solid used as a metal wall finish, not a rated partition.';
-const UNASSIGNED_NOTE =
-  'No ThermoNode material assigned. Gypsum board, concrete, glass, and wood are not in the library snapshot.';
+const PLANNING_NOTE = 'Planning default from the restaurant construction library. The stack is copied onto this surface. Confirm the climate zone and the tested assembly before design use.';
+const KITCHEN_USES = new Set(['Kitchen', 'Hot line', 'Prep', 'Dish']);
+const DINING_USES = new Set(['Dining', 'Bar']);
 
-const KITCHEN_USES = new Set(['Kitchen', 'Hot line', 'Prep', 'Dish', 'Walk-in']);
+function surface(assemblyId: string): SurfaceAssignment {
+  const assembly = builtinAssembly(assemblyId);
+  if (!assembly) throw new Error(`Unknown assembly ${assemblyId}`);
+  return { materialKey: null, constructionId: assembly.id, layers: cloneLayers(assembly.layers), note: PLANNING_NOTE };
+}
 
-function surface(materialKey: string | null, note: string): SurfaceAssignment {
-  return { materialKey, note };
+function withAssembly(kind: 'door' | 'window'): Pick<Opening, 'constructionId' | 'layers'> {
+  const assembly = builtinAssembly(kind === 'door' ? 'asm-door-restaurant' : 'asm-window-dining');
+  if (!assembly) throw new Error(`Unknown ${kind} assembly`);
+  return { constructionId: assembly.id, layers: cloneLayers(assembly.layers) };
 }
 
 function room(input: {
@@ -26,7 +30,16 @@ function room(input: {
   heightM: number;
   openings?: Opening[];
 }): Room {
-  const metal = KITCHEN_USES.has(input.use);
+  const floorId =
+    input.use === 'Walk-in'
+      ? 'asm-floor-walkin'
+      : KITCHEN_USES.has(input.use) || input.use === 'Restroom'
+        ? 'asm-floor-kitchen'
+        : DINING_USES.has(input.use) || input.use === 'Office'
+          ? 'asm-floor-dining'
+          : 'asm-floor-service';
+  const wallId = input.use === 'Walk-in' ? 'asm-wall-walkin' : KITCHEN_USES.has(input.use) ? 'asm-wall-kitchen' : DINING_USES.has(input.use) ? 'asm-wall-dining' : 'asm-wall-partition';
+  const ceilingId = input.use === 'Walk-in' ? 'asm-ceiling-walkin' : KITCHEN_USES.has(input.use) || input.use === 'Restroom' ? 'asm-ceiling-kitchen' : 'asm-ceiling-dining';
   return {
     id: createId('room'),
     name: input.name,
@@ -38,9 +51,9 @@ function room(input: {
     widthM: input.widthM,
     heightM: input.heightM,
     surfaces: {
-      floor: surface(null, UNASSIGNED_NOTE),
-      walls: metal ? surface('Stainless_steel_AISI_304', WALL_METAL_NOTE) : surface(null, UNASSIGNED_NOTE),
-      ceiling: surface('Microlite_24_kg_m3', CEILING_NOTE),
+      floor: surface(floorId),
+      walls: surface(wallId),
+      ceiling: surface(ceilingId),
     },
     openings: input.openings ?? [],
     assumption: true,
@@ -48,11 +61,11 @@ function room(input: {
 }
 
 function door(face: Opening['face'], offsetM: number, widthM = 0.9): Opening {
-  return { id: createId('open'), kind: 'door', face, offsetM, widthM, heightM: 2.13, sillM: 0 };
+  return { id: createId('open'), kind: 'door', face, offsetM, widthM, heightM: 2.13, sillM: 0, ...withAssembly('door') };
 }
 
 function windowOpening(face: Opening['face'], offsetM: number, widthM: number): Opening {
-  return { id: createId('open'), kind: 'window', face, offsetM, widthM, heightM: 1.2, sillM: 0.9 };
+  return { id: createId('open'), kind: 'window', face, offsetM, widthM, heightM: 1.2, sillM: 0.9, ...withAssembly('window') };
 }
 
 function system(name: string, kind: SystemKind, notes = ''): HvacSystem {

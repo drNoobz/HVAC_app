@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { loadAddedAssemblies, loadAddedMaterials, saveAddedAssemblies, saveAddedMaterials, type ConstructionAssembly, type ConstructionMaterial } from '@/domain/constructionLibrary';
 import { createId, nowIso } from '@/domain/ids';
 import { cloneProject } from '@/domain/projectOps';
 import { loadState, saveState } from '@/domain/storage';
 import type { Project, StoredTemplate } from '@/domain/types';
+import { LibraryPanel } from './LibraryPanel';
 import { StartScreen } from './StartScreen';
 import { Studio } from './Studio';
 
@@ -16,11 +18,16 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [templates, setTemplates] = useState<StoredTemplate[]>([]);
+  const [addedMaterials, setAddedMaterials] = useState<ConstructionMaterial[]>([]);
+  const [addedAssemblies, setAddedAssemblies] = useState<ConstructionAssembly[]>([]);
+  const [libraryOpen, setLibraryOpen] = useState(false);
 
   useEffect(() => {
     const loaded = loadState();
     setProjects(loaded.projects);
     setTemplates(loaded.templates);
+    setAddedMaterials(loadAddedMaterials());
+    setAddedAssemblies(loadAddedAssemblies());
     setReady(true);
   }, []);
 
@@ -29,10 +36,43 @@ export default function App() {
     saveState({ schemaVersion: 1, projects, templates });
   }, [ready, projects, templates]);
 
+  useEffect(() => {
+    if (!ready) return;
+    saveAddedMaterials(addedMaterials);
+  }, [ready, addedMaterials]);
+
+  useEffect(() => {
+    if (!ready) return;
+    saveAddedAssemblies(addedAssemblies);
+  }, [ready, addedAssemblies]);
+
   if (!ready) return <div className="boot">Loading workspace…</div>;
 
-  const open = (id: string) => router.push(`/?project=${encodeURIComponent(id)}`);
+  const open = (id: string) => {
+    setLibraryOpen(false);
+    router.push(`/?project=${encodeURIComponent(id)}`);
+  };
   const project = projects.find(item => item.id === projectId) ?? null;
+
+  if (!projectId && libraryOpen) {
+    return (
+      <div className="start">
+        <header className="topbar">
+          <div className="brand">
+            <span className="mark">HP</span>
+            <div>
+              <strong>HVAC Project Planner</strong>
+              <span>Material library</span>
+            </div>
+          </div>
+          <button type="button" className="btn" onClick={() => setLibraryOpen(false)}>
+            Back
+          </button>
+        </header>
+        <LibraryPanel added={addedMaterials} onChange={setAddedMaterials} addedAssemblies={addedAssemblies} onAssembliesChange={setAddedAssemblies} />
+      </div>
+    );
+  }
 
   if (!projectId) {
     return (
@@ -46,6 +86,7 @@ export default function App() {
         onOpen={open}
         onDeleteProject={id => setProjects(list => list.filter(item => item.id !== id))}
         onDeleteTemplate={id => setTemplates(list => list.filter(item => item.id !== id))}
+        onOpenLibrary={() => setLibraryOpen(true)}
       />
     );
   }
@@ -65,6 +106,10 @@ export default function App() {
     <Studio
       project={project}
       templates={templates}
+      addedMaterials={addedMaterials}
+      addedAssemblies={addedAssemblies}
+      onLibraryChange={setAddedMaterials}
+      onAssembliesChange={setAddedAssemblies}
       onChange={next =>
         setProjects(list => list.map(item => (item.id === next.id ? { ...next, preliminary: true, updatedAt: nowIso() } : item)))
       }

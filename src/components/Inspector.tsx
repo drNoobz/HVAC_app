@@ -22,24 +22,34 @@ import {
   WALL_FACES,
   type OpeningKind,
   type Project,
+  type Room,
   type Selection,
   type SurfaceFace,
+  type WallFace,
 } from '@/domain/types';
 import { lengthToM, lengthUnit, mToLength } from '@/domain/units';
-import { MATERIAL_SNAPSHOT } from '@/thermonode/materials';
+import {
+  assemblyCategoriesForFace,
+  assemblyCategoriesForOpening,
+  constructionCategoryLabel,
+  findAssembly,
+  findConstruction,
+  resolveStack,
+  type ConstructionAssembly,
+  type ConstructionCategory,
+  type ConstructionMaterial,
+} from '@/domain/constructionLibrary';
+import { StackEditor } from './StackEditor';
+import { materialByKey } from '@/thermonode/materials';
 import type { ModelIssueV1 } from '@/thermonode/contract';
 import { TextField, UnitField } from './Fields';
-
-const GROUPS: { id: 'insulation' | 'metal' | 'fluid'; label: string }[] = [
-  { id: 'insulation', label: 'Insulation' },
-  { id: 'metal', label: 'Metals' },
-  { id: 'fluid', label: 'Fluids' },
-];
 
 export function Inspector({
   project,
   selection,
   issues,
+  materials,
+  assemblies,
   onChange,
   onSelect,
   onDeleteProject,
@@ -47,11 +57,13 @@ export function Inspector({
   project: Project;
   selection: Selection;
   issues: ModelIssueV1[];
+  materials: ConstructionMaterial[];
+  assemblies: ConstructionAssembly[];
   onChange: (project: Project) => void;
   onSelect: (selection: Selection) => void;
   onDeleteProject: () => void;
 }) {
-  const subjectId = 'id' in selection ? selection.id : undefined;
+  const subjectId = selection.kind === 'surface' ? selection.roomId : 'id' in selection ? selection.id : undefined;
   const relevant = issues.filter(issue => issue.severity !== 'info' && (!subjectId || issue.subjectId === subjectId));
   return (
     <aside className="inspector">
@@ -72,12 +84,34 @@ export function Inspector({
         <RoomFields
           project={project}
           roomId={selection.id}
+          materials={materials}
+          assemblies={assemblies}
+          onChange={onChange}
+          onSelect={onSelect}
+        />
+      )}
+      {selection.kind === 'surface' && (
+        <SurfaceFields
+          project={project}
+          roomId={selection.roomId}
+          face={selection.face}
+          wallFace={selection.wallFace}
+          materials={materials}
+          assemblies={assemblies}
           onChange={onChange}
           onSelect={onSelect}
         />
       )}
       {selection.kind === 'opening' && (
-        <OpeningFields project={project} roomId={selection.roomId} openingId={selection.id} onChange={onChange} onSelect={onSelect} />
+        <OpeningFields
+          project={project}
+          roomId={selection.roomId}
+          openingId={selection.id}
+          materials={materials}
+          assemblies={assemblies}
+          onChange={onChange}
+          onSelect={onSelect}
+        />
       )}
       {selection.kind === 'system' && <SystemFields project={project} systemId={selection.id} onChange={onChange} onSelect={onSelect} />}
       {selection.kind === 'equipment' && (
@@ -129,14 +163,169 @@ function ProjectFields({
   );
 }
 
-function RoomFields({
+function ThermoNodeNote({ materialKey }: { materialKey?: string | null }) {
+  if (!materialKey) return null;
+  const thermonode = materialByKey(materialKey);
+  return (
+    <p className="muted">
+      ThermoNode id still stored for the adapter: {thermonode?.name ?? materialKey}. Choosing a component clears it.
+    </p>
+  );
+}
+
+function ComponentSelect({
+  label,
+  assemblies,
+  categories,
+  value,
+  onChange,
+}: {
+  label: string;
+  assemblies: ConstructionAssembly[];
+  categories: readonly string[];
+  value: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  const options = assemblies.filter(item => categories.includes(item.category));
+  const current = findAssembly(assemblies, value);
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <select value={value ?? ''} onChange={event => onChange(event.target.value || null)}>
+        <option value="">Unassigned</option>
+        {value && !current && <option value={value}>{value}</option>}
+        {categories.map(category => {
+          const items = options.filter(item => item.category === category);
+          if (items.length === 0) return null;
+          return (
+            <optgroup key={category} label={constructionCategoryLabel[category as ConstructionCategory]}>
+              {items.map(item => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </optgroup>
+          );
+        })}
+      </select>
+    </label>
+  );
+}
+
+function assignSurface(project: Project, room: Room, face: SurfaceFace, constructionId: string | null, assemblies: ConstructionAssembly[]): Project {
+  const assembly = findAssembly(assemblies, constructionId);
+  const note = assembly ? `${assembly.name}. ${assembly.notes}` : UNASSIGNED_SURFACE;
+  return updateRoom(project, room.id, {
+    assumption: false,
+    surfaces: {
+      ...room.surfaces,
+      [face]: { materialKey: null, constructionId, layers: assembly ? assembly.layers.map(layer => ({ ...layer })) : [], note },
+    },
+  });
+}
+
+function SurfaceFields({
   project,
   roomId,
+  face,
+  wallFace,
+  materials,
+  assemblies,
   onChange,
   onSelect,
 }: {
   project: Project;
   roomId: string;
+  face: SurfaceFace;
+  wallFace?: WallFace;
+  materials: ConstructionMaterial[];
+  assemblies: ConstructionAssembly[];
+  onChange: (project: Project) => void;
+  onSelect: (selection: Selection) => void;
+}) {
+  const room = project.rooms.find(item => item.id === roomId);
+  if (!room) return <p>Surface not found.</p>;
+  const assignment = room.surfaces[face];
+  const faceLabel = SURFACE_FACES.find(item => item.id === face)?.label ?? face;
+  const wallLabel = wallFace ? WALL_FACES.find(item => item.id === wallFace)?.label : undefined;
+  return (
+    <div className="stack">
+      <h2>{wallLabel ?? faceLabel}</h2>
+      <p className="muted">
+        {room.name}. {face === 'walls' ? 'All four walls share this stack. ' : ''}
+        A component is a stack of layers. Swap a layer here without changing the library preset.
+      </p>
+      <button type="button" className="btn" onClick={() => onSelect({ kind: 'room', id: room.id })}>
+        Room properties
+      </button>
+      {face === 'walls' && (
+        <div className="button-row">
+          <button
+            type="button"
+            className={wallFace ? 'btn' : 'btn active'}
+            onClick={() => onSelect({ kind: 'surface', roomId: room.id, face: 'walls' })}
+          >
+            All walls
+          </button>
+          {WALL_FACES.map(item => (
+            <button
+              key={item.id}
+              type="button"
+              className={wallFace === item.id ? 'btn active' : 'btn'}
+              onClick={() => onSelect({ kind: 'surface', roomId: room.id, face: 'walls', wallFace: item.id })}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+      <ComponentSelect
+        label="Component"
+        assemblies={assemblies}
+        categories={assemblyCategoriesForFace(face)}
+        value={assignment.constructionId ?? null}
+        onChange={constructionId => onChange(assignSurface(project, room, face, constructionId, assemblies))}
+      />
+      <StackEditor
+        layers={resolveStack(assignment, assemblies, materials)}
+        materials={materials}
+        orderLabel={findAssembly(assemblies, assignment.constructionId)?.orderLabel ?? 'Layer order'}
+        series={findAssembly(assemblies, assignment.constructionId)?.series ?? true}
+        units={project.units}
+        onChange={layers =>
+          onChange(
+            updateRoom(project, room.id, {
+              assumption: false,
+              surfaces: { ...room.surfaces, [face]: { ...assignment, materialKey: null, layers } },
+            })
+          )
+        }
+      />
+      {findAssembly(assemblies, assignment.constructionId)?.notes && <p className="muted">{findAssembly(assemblies, assignment.constructionId)?.notes}</p>}
+      <ThermoNodeNote materialKey={assignment.materialKey} />
+      <TextField
+        label="Note"
+        value={assignment.note}
+        onCommit={note =>
+          onChange(updateRoom(project, room.id, { surfaces: { ...room.surfaces, [face]: { ...assignment, note } } }))
+        }
+      />
+    </div>
+  );
+}
+
+function RoomFields({
+  project,
+  roomId,
+  materials,
+  assemblies,
+  onChange,
+  onSelect,
+}: {
+  project: Project;
+  roomId: string;
+  materials: ConstructionMaterial[];
+  assemblies: ConstructionAssembly[];
   onChange: (project: Project) => void;
   onSelect: (selection: Selection) => void;
 }) {
@@ -146,16 +335,8 @@ function RoomFields({
   const setLength = (key: 'xM' | 'yM' | 'zM' | 'lengthM' | 'widthM' | 'heightM', display: number) => {
     onChange(updateRoom(project, room.id, { [key]: lengthToM(display, project.units), assumption: false }));
   };
-  const setSurface = (face: SurfaceFace, materialKey: string | null) => {
-    const note = materialKey
-      ? `Assigned from the ThermoNode snapshot (${materialKey}). Confirm the assembly.`
-      : UNASSIGNED_SURFACE;
-    onChange(
-      updateRoom(project, room.id, {
-        assumption: false,
-        surfaces: { ...room.surfaces, [face]: { materialKey, note } },
-      })
-    );
+  const setSurface = (face: SurfaceFace, constructionId: string | null) => {
+    onChange(assignSurface(project, room, face, constructionId, assemblies));
   };
   return (
     <div className="stack">
@@ -180,32 +361,28 @@ function RoomFields({
         <UnitField label="Height Z" unit={unit} value={mToLength(room.heightM, project.units)} onCommit={value => setLength('heightM', value)} />
       </div>
       <h3>Surfaces</h3>
-      <p className="muted">Materials are ThermoNode library ids. Emissivity is not in the snapshot. Unassigned means no matching library entry was chosen.</p>
+      <p className="muted">Each surface uses a restaurant component. Open the surface to add or swap layers.</p>
       {SURFACE_FACES.map(face => {
         const assignment = room.surfaces[face.id];
-        const material = assignment.materialKey ? MATERIAL_SNAPSHOT.find(item => item.key === assignment.materialKey) : undefined;
+        const layers = resolveStack(assignment, assemblies, materials);
         return (
           <div key={face.id} className="surface-block">
-            <label className="field">
-              <span>{face.label}</span>
-              <select value={assignment.materialKey ?? ''} onChange={event => setSurface(face.id, event.target.value || null)}>
-                <option value="">Unassigned</option>
-                {GROUPS.map(group => (
-                  <optgroup key={group.id} label={group.label}>
-                    {MATERIAL_SNAPSHOT.filter(item => item.plannerGroup === group.id).map(item => (
-                      <option key={item.key} value={item.key}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-            </label>
-            {material && (
-              <p className="spec">
-                k {material.k} W/(m·K) · cp {material.cp} J/(kg·K) · ρ {material.rho} kg/m³ · reference constants
-              </p>
-            )}
+            <ComponentSelect
+              label={face.label}
+              assemblies={assemblies}
+              categories={assemblyCategoriesForFace(face.id)}
+              value={assignment.constructionId ?? null}
+              onChange={constructionId => setSurface(face.id, constructionId)}
+            />
+            <ol className="plain-list">
+              {layers.map((layer, index) => (
+                <li key={`${layer.materialId}-${index}`}>
+                  {index + 1}. {layer.place || 'Layer'} — {findConstruction(materials, layer.materialId)?.name ?? layer.materialId}
+                </li>
+              ))}
+              {layers.length === 0 && <li className="muted">No layers.</li>}
+            </ol>
+            <ThermoNodeNote materialKey={assignment.materialKey} />
             <TextField
               label={`${face.label} note`}
               value={assignment.note}
@@ -257,12 +434,16 @@ function OpeningFields({
   project,
   roomId,
   openingId,
+  materials,
+  assemblies,
   onChange,
   onSelect,
 }: {
   project: Project;
   roomId: string;
   openingId: string;
+  materials: ConstructionMaterial[];
+  assemblies: ConstructionAssembly[];
   onChange: (project: Project) => void;
   onSelect: (selection: Selection) => void;
 }) {
@@ -282,6 +463,38 @@ function OpeningFields({
     <div className="stack">
       <h2>{opening.kind}</h2>
       <p className="muted">Offset runs along the wall from the minimum corner. These openings are project data. GeometryDocument v1 has no door or window entity.</p>
+      {opening.kind === 'opening' ? (
+        <p className="muted">A plain opening has no door or window assembly.</p>
+      ) : (
+        <>
+          <ComponentSelect
+            label="Component"
+            assemblies={assemblies}
+            categories={assemblyCategoriesForOpening(opening.kind)}
+            value={opening.constructionId ?? null}
+            onChange={constructionId => {
+              const assembly = findAssembly(assemblies, constructionId);
+              patch({ constructionId, layers: assembly ? assembly.layers.map(layer => ({ ...layer })) : [] });
+            }}
+          />
+          <StackEditor
+            layers={resolveStack(opening, assemblies, materials)}
+            materials={materials}
+            orderLabel={findAssembly(assemblies, opening.constructionId)?.orderLabel ?? 'Layer order'}
+            series={findAssembly(assemblies, opening.constructionId)?.series ?? true}
+            units={project.units}
+            onChange={layers => patch({ layers })}
+          />
+          {findAssembly(assemblies, opening.constructionId)?.notes && <p className="muted">{findAssembly(assemblies, opening.constructionId)?.notes}</p>}
+        </>
+      )}
+      <button
+        type="button"
+        className="btn"
+        onClick={() => onSelect({ kind: 'surface', roomId: room.id, face: 'walls', wallFace: opening.face })}
+      >
+        Edit this wall
+      </button>
       <label className="field">
         <span>Kind</span>
         <select value={opening.kind} onChange={event => patch({ kind: event.target.value as OpeningKind })}>

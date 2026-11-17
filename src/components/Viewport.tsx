@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { getProduct } from '@/domain/catalog';
-import type { EditorTool, PlacedEquipment, Room, Selection } from '@/domain/types';
+import type { EditorTool, PlacedEquipment, Room, Selection, WallFace } from '@/domain/types';
 
 const USE_COLOR: Record<string, number> = {
   Kitchen: 0xc5ddd6,
@@ -25,6 +25,15 @@ const USE_COLOR: Record<string, number> = {
 const SNAP_M = 0.05;
 const MIN_DRAW_M = 0.4;
 const DEFAULT_HEIGHT_M = 3.05;
+const SHELL_M = 0.15;
+const SLAB_M = 0.05;
+const CLICK_PX = 10;
+const OPENING_PICK_PX = 14;
+const OPENING_BIAS_M = 0.45;
+const SELECT_GLOW = 0xf6ad55;
+const SELECT_EDGE = 0xd9843f;
+const HIGHLIGHT_OPACITY = 0.28;
+const EDGE_COLOR = 0x5c6d78;
 
 export interface ViewportProps {
   rooms: Room[];
@@ -32,6 +41,7 @@ export interface ViewportProps {
   selection: Selection;
   tool: EditorTool;
   fitToken: number;
+  hideRoof: boolean;
   onSelect: (selection: Selection) => void;
   onDrawRoom: (rect: { xM: number; yM: number; lengthM: number; widthM: number }) => void;
   onPlace: (point: { xM: number; yM: number }) => void;
@@ -80,6 +90,216 @@ function makeLabel(text: string, accent: string): THREE.Sprite | null {
   return sprite;
 }
 
+type Panel = { u: number; v: number; du: number; dv: number };
+
+function subtractPanel(panel: Panel, hole: Panel): Panel[] {
+  const x0 = panel.u;
+  const y0 = panel.v;
+  const x1 = panel.u + panel.du;
+  const y1 = panel.v + panel.dv;
+  const ix0 = Math.max(x0, hole.u);
+  const iy0 = Math.max(y0, hole.v);
+  const ix1 = Math.min(x1, hole.u + hole.du);
+  const iy1 = Math.min(y1, hole.v + hole.dv);
+  if (ix1 <= ix0 + 1e-4 || iy1 <= iy0 + 1e-4) return [panel];
+  const parts: Panel[] = [];
+  if (iy0 > y0 + 0.01) parts.push({ u: x0, v: y0, du: x1 - x0, dv: iy0 - y0 });
+  if (y1 > iy1 + 0.01) parts.push({ u: x0, v: iy1, du: x1 - x0, dv: y1 - iy1 });
+  if (ix0 > x0 + 0.01) parts.push({ u: x0, v: iy0, du: ix0 - x0, dv: iy1 - iy0 });
+  if (x1 > ix1 + 0.01) parts.push({ u: ix1, v: iy0, du: x1 - ix1, dv: iy1 - iy0 });
+  return parts;
+}
+
+function wallPanels(span: number, height: number, openings: Room['openings']): Panel[] {
+  let panels: Panel[] = [{ u: 0, v: 0, du: span, dv: height }];
+  openings.forEach(opening => {
+    const hole = { u: opening.offsetM, v: opening.sillM, du: opening.widthM, dv: opening.heightM };
+    panels = panels.flatMap(panel => subtractPanel(panel, hole));
+  });
+  return panels;
+}
+
+type PickData = {
+  kind?: string;
+  id?: string;
+  roomId?: string;
+  face?: string;
+  wallFace?: string;
+  highlight?: THREE.Mesh;
+  edgeRole?: number;
+  baseEdge?: number;
+};
+
+function shellMaterial(color: number, opacity = 1, bias = 1): THREE.MeshStandardMaterial {
+  const transparent = opacity < 1;
+  return new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.88,
+    metalness: 0.02,
+    side: THREE.DoubleSide,
+    transparent,
+    opacity,
+    depthWrite: !transparent,
+    polygonOffset: true,
+    polygonOffsetFactor: bias,
+    polygonOffsetUnits: bias * 2,
+  });
+}
+
+function depthBias(id: string): number {
+  let hash = 0;
+  for (let index = 0; index < id.length; index += 1) hash = (hash + id.charCodeAt(index) * (index + 1)) % 8;
+  return 1 + hash;
+}
+
+function matchesSelection(data: PickData, selection: Selection): boolean {
+  if (data.kind === 'surface' && data.roomId && data.face) {
+    if (selection.kind === 'room' && selection.id === data.roomId) return true;
+    if (selection.kind !== 'surface' || selection.roomId !== data.roomId || selection.face !== data.face) return false;
+    if (data.face !== 'walls' || !selection.wallFace || !data.wallFace) return true;
+    return data.wallFace === selection.wallFace;
+  }
+  if (data.kind === 'opening' && data.roomId && data.id) {
+    if (selection.kind === 'room' && selection.id === data.roomId) return true;
+    return selection.kind === 'opening' && selection.roomId === data.roomId && selection.id === data.id;
+  }
+  if (data.kind === 'equipment' && data.id) return selection.kind === 'equipment' && selection.id === data.id;
+  return false;
+}
+
+function paintSelection(group: THREE.Object3D, selection: Selection): void {
+  group.traverse(object => {
+    const data = object.userData as PickData;
+    if (data.highlight) data.highlight.visible = matchesSelection(data, selection);
+    if (data.edgeRole && (object as THREE.Line).isLine) {
+      const material = (object as THREE.Line).material as THREE.LineBasicMaterial;
+      material.color.setHex(matchesSelection(data, selection) ? SELECT_EDGE : (data.baseEdge ?? EDGE_COLOR));
+    }
+  });
+}
+
+function attachHighlight(mesh: THREE.Mesh, size: [number, number, number]): void {
+  const pad = 0.012;
+  const highlight = new THREE.Mesh(
+    new THREE.BoxGeometry(size[0] + pad, size[1] + pad, size[2] + pad),
+    new THREE.MeshBasicMaterial({
+      color: SELECT_GLOW,
+      transparent: true,
+      opacity: HIGHLIGHT_OPACITY,
+      depthWrite: false,
+      side: THREE.FrontSide,
+    })
+  );
+  highlight.visible = false;
+  highlight.raycast = () => undefined;
+  highlight.renderOrder = 3;
+  mesh.add(highlight);
+  mesh.userData.highlight = highlight;
+}
+
+function addOutline(parent: THREE.Object3D, corners: THREE.Vector3[], userData: PickData): void {
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([...corners, corners[0]]),
+    new THREE.LineBasicMaterial({ color: userData.baseEdge ?? EDGE_COLOR, depthWrite: false })
+  );
+  line.userData = userData;
+  line.raycast = () => undefined;
+  line.renderOrder = 4;
+  parent.add(line);
+}
+
+function wallOutline(room: Room, face: WallFace): THREE.Vector3[] {
+  const nudge = 0.008;
+  const z0 = room.zM;
+  const z1 = room.zM + room.heightM;
+  const y0 = room.yM;
+  const y1 = room.yM + room.widthM;
+  const x0 = room.xM;
+  const x1 = room.xM + room.lengthM;
+  if (face === 'px') {
+    const x = x1 + nudge;
+    return [new THREE.Vector3(x, y0, z0), new THREE.Vector3(x, y1, z0), new THREE.Vector3(x, y1, z1), new THREE.Vector3(x, y0, z1)];
+  }
+  if (face === 'nx') {
+    const x = x0 - nudge;
+    return [new THREE.Vector3(x, y0, z0), new THREE.Vector3(x, y1, z0), new THREE.Vector3(x, y1, z1), new THREE.Vector3(x, y0, z1)];
+  }
+  if (face === 'py') {
+    const y = y1 + nudge;
+    return [new THREE.Vector3(x0, y, z0), new THREE.Vector3(x1, y, z0), new THREE.Vector3(x1, y, z1), new THREE.Vector3(x0, y, z1)];
+  }
+  const y = y0 - nudge;
+  return [new THREE.Vector3(x0, y, z0), new THREE.Vector3(x1, y, z0), new THREE.Vector3(x1, y, z1), new THREE.Vector3(x0, y, z1)];
+}
+
+function openingOutline(room: Room, opening: Room['openings'][number]): THREE.Vector3[] {
+  const nudge = 0.014;
+  const z0 = room.zM + opening.sillM;
+  const z1 = z0 + opening.heightM;
+  if (opening.face === 'px' || opening.face === 'nx') {
+    const x = (opening.face === 'px' ? room.xM + room.lengthM + nudge : room.xM - nudge);
+    const y0 = room.yM + opening.offsetM;
+    const y1 = y0 + opening.widthM;
+    return [new THREE.Vector3(x, y0, z0), new THREE.Vector3(x, y1, z0), new THREE.Vector3(x, y1, z1), new THREE.Vector3(x, y0, z1)];
+  }
+  const y = opening.face === 'py' ? room.yM + room.widthM + nudge : room.yM - nudge;
+  const x0 = room.xM + opening.offsetM;
+  const x1 = x0 + opening.widthM;
+  return [new THREE.Vector3(x0, y, z0), new THREE.Vector3(x1, y, z0), new THREE.Vector3(x1, y, z1), new THREE.Vector3(x0, y, z1)];
+}
+
+function addBox(
+  parent: THREE.Object3D,
+  size: [number, number, number],
+  position: [number, number, number],
+  material: THREE.Material,
+  userData: PickData,
+  withEdges: boolean
+): void {
+  if (size.some(value => value <= 0.001)) return;
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), material);
+  mesh.position.set(position[0], position[1], position[2]);
+  mesh.userData = { ...userData };
+  if ((material as THREE.Material).transparent) mesh.renderOrder = 2;
+  attachHighlight(mesh, size);
+  if (withEdges) {
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(mesh.geometry),
+      new THREE.LineBasicMaterial({ color: EDGE_COLOR, depthWrite: false })
+    );
+    edges.raycast = () => undefined;
+    edges.renderOrder = 4;
+    edges.userData = { ...userData, edgeRole: 1, baseEdge: EDGE_COLOR };
+    mesh.add(edges);
+  }
+  parent.add(mesh);
+}
+
+function isLine(object: THREE.Object3D): boolean {
+  return (object as THREE.Line).isLine === true;
+}
+
+function selectionFromObject(object: THREE.Object3D): Selection | null {
+  let current: THREE.Object3D | null = object;
+  while (current) {
+    const data = current.userData as { kind?: string; id?: string; roomId?: string; face?: string; wallFace?: string };
+    if (data.kind === 'opening' && data.roomId && data.id) return { kind: 'opening', roomId: data.roomId, id: data.id };
+    if (data.kind === 'surface' && data.roomId && (data.face === 'floor' || data.face === 'ceiling' || data.face === 'walls')) {
+      const wallFace = data.wallFace;
+      return {
+        kind: 'surface',
+        roomId: data.roomId,
+        face: data.face,
+        ...(data.face === 'walls' && (wallFace === 'px' || wallFace === 'nx' || wallFace === 'py' || wallFace === 'ny') ? { wallFace } : {}),
+      };
+    }
+    if (data.kind === 'equipment' && data.id) return { kind: 'equipment', id: data.id };
+    if (data.kind === 'room' && data.id) return { kind: 'room', id: data.id };
+    current = current.parent;
+  }
+  return null;
+}
+
 function openingFrame(room: Room, opening: Room['openings'][number]): { position: THREE.Vector3; size: THREE.Vector3 } {
   const thickness = 0.08;
   const z = room.zM + opening.sillM + opening.heightM / 2;
@@ -93,7 +313,7 @@ function openingFrame(room: Room, opening: Room['openings'][number]): { position
   return { position: new THREE.Vector3(x, y, z), size: new THREE.Vector3(opening.widthM, thickness, opening.heightM) };
 }
 
-export default function Viewport({ rooms, equipment, selection, tool, fitToken, onSelect, onDrawRoom, onPlace }: ViewportProps) {
+export default function Viewport({ rooms, equipment, selection, tool, fitToken, hideRoof, onSelect, onDrawRoom, onPlace }: ViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool);
   const handlersRef = useRef({ onSelect, onDrawRoom, onPlace });
@@ -103,7 +323,10 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
   const groundRef = useRef<THREE.Mesh | null>(null);
   const previewRef = useRef<THREE.Mesh | null>(null);
   const contentRef = useRef<THREE.Group | null>(null);
+  const paintRef = useRef<(next: Selection) => void>(() => undefined);
+  const selectionRef = useRef(selection);
   const lastFit = useRef(-1);
+  selectionRef.current = selection;
   toolRef.current = tool;
   handlersRef.current = { onSelect, onDrawRoom, onPlace };
 
@@ -115,7 +338,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
     camera.up.set(0, 0, 1);
     camera.position.set(14, -16, 12);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     host.appendChild(renderer.domElement);
@@ -154,6 +377,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
     previewRef.current = preview;
 
     const raycaster = new THREE.Raycaster();
+    raycaster.params.Line.threshold = 0.001;
     const pointer = new THREE.Vector2();
     let drawing = false;
     let start: THREE.Vector3 | null = null;
@@ -172,14 +396,57 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
     observer.observe(host);
     resize();
 
-    const pointOnGround = (event: PointerEvent): THREE.Vector3 | null => {
+    const setPointer = (clientX: number, clientY: number): boolean => {
       const rect = renderer.domElement.getBoundingClientRect();
-      if (rect.width < 1 || rect.height < 1) return null;
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      if (rect.width < 1 || rect.height < 1) return false;
+      pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      return true;
+    };
+
+    const pointOnGround = (event: PointerEvent): THREE.Vector3 | null => {
+      if (!setPointer(event.clientX, event.clientY)) return null;
       raycaster.setFromCamera(pointer, camera);
       const hit = raycaster.intersectObject(ground)[0];
       return hit ? hit.point : null;
+    };
+
+    const closestHit = (): { selection: Selection; distance: number } | null => {
+      const group = contentRef.current;
+      if (!group) return null;
+      const hits = raycaster.intersectObjects(group.children, true);
+      for (const hit of hits) {
+        if (isLine(hit.object)) continue;
+        const selection = selectionFromObject(hit.object);
+        if (selection) return { selection, distance: hit.distance };
+      }
+      return null;
+    };
+
+    const pickSelection = (event: PointerEvent): Selection => {
+      if (!setPointer(event.clientX, event.clientY)) return { kind: 'project' };
+      raycaster.setFromCamera(pointer, camera);
+      const center = closestHit();
+      let opening = center?.selection.kind === 'opening' ? center : null;
+      const samples = [
+        [OPENING_PICK_PX, 0],
+        [-OPENING_PICK_PX, 0],
+        [0, OPENING_PICK_PX],
+        [0, -OPENING_PICK_PX],
+        [OPENING_PICK_PX, OPENING_PICK_PX],
+        [OPENING_PICK_PX, -OPENING_PICK_PX],
+        [-OPENING_PICK_PX, OPENING_PICK_PX],
+        [-OPENING_PICK_PX, -OPENING_PICK_PX],
+      ];
+      const limit = (center?.distance ?? Number.POSITIVE_INFINITY) + OPENING_BIAS_M;
+      for (const [dx, dy] of samples) {
+        if (!setPointer(event.clientX + dx, event.clientY + dy)) continue;
+        raycaster.setFromCamera(pointer, camera);
+        const found = closestHit();
+        if (found?.selection.kind !== 'opening') continue;
+        if (found.distance <= limit && (!opening || found.distance < opening.distance)) opening = found;
+      }
+      return opening?.selection ?? center?.selection ?? { kind: 'project' };
     };
 
     const updatePreview = (end: THREE.Vector3) => {
@@ -227,27 +494,15 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
         controls.enabled = true;
         return;
       }
-      if (moved < 5 && toolRef.current.kind === 'place' && point) {
+      if (moved < CLICK_PX && toolRef.current.kind === 'place' && point) {
         handlersRef.current.onPlace({ xM: snap(point.x), yM: snap(point.y) });
         return;
       }
-      if (moved < 5 && toolRef.current.kind === 'select') {
-        raycaster.setFromCamera(pointer, camera);
-        const group = contentRef.current;
-        const hits = group ? raycaster.intersectObjects(group.children, true) : [];
-        let picked: Selection | null = null;
-        for (const hit of hits) {
-          let object: THREE.Object3D | null = hit.object;
-          while (object) {
-            if (object.userData.kind === 'room' || object.userData.kind === 'equipment') {
-              picked = { kind: object.userData.kind, id: object.userData.id as string };
-              break;
-            }
-            object = object.parent;
-          }
-          if (picked) break;
-        }
-        handlersRef.current.onSelect(picked ?? { kind: 'project' });
+      if (moved < CLICK_PX && toolRef.current.kind === 'select') {
+        const picked = pickSelection(event);
+        if (contentRef.current) paintSelection(contentRef.current, picked);
+        renderer.render(scene, camera);
+        handlersRef.current.onSelect(picked);
       }
     };
 
@@ -290,6 +545,10 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
   }, [tool]);
 
   useEffect(() => {
+    paintRef.current(selection);
+  }, [selection]);
+
+  useEffect(() => {
     const scene = sceneRef.current;
     const camera = cameraRef.current;
     const controls = controlsRef.current;
@@ -300,36 +559,144 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
 
     rooms.forEach(room => {
       if (room.lengthM <= 0 || room.widthM <= 0 || room.heightM <= 0) return;
-      const selected = selection.kind === 'room' && selection.id === room.id;
+      const color = USE_COLOR[room.use] ?? 0xd5dee6;
+      const bias = depthBias(room.id);
       const wrap = new THREE.Group();
       wrap.userData = { kind: 'room', id: room.id };
-      const geometry = new THREE.BoxGeometry(room.lengthM, room.widthM, room.heightM);
-      const material = new THREE.MeshStandardMaterial({
-        color: USE_COLOR[room.use] ?? 0xd5dee6,
-        roughness: 0.88,
-        metalness: 0.02,
-        emissive: selected ? 0x0f6e78 : 0x000000,
-        emissiveIntensity: selected ? 0.22 : 0,
-      });
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(room.xM + room.lengthM / 2, room.yM + room.widthM / 2, room.zM + room.heightM / 2);
-      const edges = new THREE.LineSegments(
-        new THREE.EdgesGeometry(geometry),
-        new THREE.LineBasicMaterial({ color: selected ? 0x0c6c74 : 0x5c6d78 })
+      const gap = 0.015;
+      const insetX = Math.min(SHELL_M + gap, room.lengthM * 0.45);
+      const insetY = Math.min(SHELL_M + gap, room.widthM * 0.45);
+      const floorData: PickData = { kind: 'surface', roomId: room.id, face: 'floor' };
+      const x0 = room.xM + insetX;
+      const x1 = room.xM + room.lengthM - insetX;
+      const y0 = room.yM + insetY;
+      const y1 = room.yM + room.widthM - insetY;
+      addBox(
+        wrap,
+        [Math.max(room.lengthM - insetX * 2, 0.05), Math.max(room.widthM - insetY * 2, 0.05), SLAB_M],
+        [room.xM + room.lengthM / 2, room.yM + room.widthM / 2, room.zM + 0.012 + SLAB_M / 2],
+        shellMaterial(color, 1, bias),
+        floorData,
+        false
       );
-      edges.position.copy(mesh.position);
-      wrap.add(mesh, edges);
+      addOutline(wrap, [
+        new THREE.Vector3(x0, y0, room.zM + 0.012 + SLAB_M + 0.006),
+        new THREE.Vector3(x1, y0, room.zM + 0.012 + SLAB_M + 0.006),
+        new THREE.Vector3(x1, y1, room.zM + 0.012 + SLAB_M + 0.006),
+        new THREE.Vector3(x0, y1, room.zM + 0.012 + SLAB_M + 0.006),
+      ], { ...floorData, edgeRole: 1, baseEdge: EDGE_COLOR });
+      if (!hideRoof) {
+        const ceilingData: PickData = { kind: 'surface', roomId: room.id, face: 'ceiling' };
+        addBox(
+          wrap,
+          [Math.max(room.lengthM - insetX * 2, 0.05), Math.max(room.widthM - insetY * 2, 0.05), SLAB_M],
+          [room.xM + room.lengthM / 2, room.yM + room.widthM / 2, room.zM + room.heightM - SLAB_M / 2],
+          shellMaterial(color, 1, bias),
+          ceilingData,
+          false
+        );
+        const ceilingZ = room.zM + room.heightM + 0.006;
+        addOutline(wrap, [
+          new THREE.Vector3(x0, y0, ceilingZ),
+          new THREE.Vector3(x1, y0, ceilingZ),
+          new THREE.Vector3(x1, y1, ceilingZ),
+          new THREE.Vector3(x0, y1, ceilingZ),
+        ], { ...ceilingData, edgeRole: 1, baseEdge: EDGE_COLOR });
+      }
+      (['px', 'nx', 'py', 'ny'] as const).forEach(face => {
+        const alongX = face === 'py' || face === 'ny';
+        const span = alongX ? room.lengthM : room.widthM;
+        const trim = alongX ? Math.min(SHELL_M + 0.004, Math.max(0, span / 2 - 0.02)) : 0;
+        const panels = wallPanels(
+          span,
+          room.heightM,
+          room.openings.filter(opening => opening.face === face)
+        );
+        panels.forEach(panel => {
+          let u = panel.u;
+          let du = panel.du;
+          if (trim > 0) {
+            const u0 = Math.max(panel.u, trim);
+            const u1 = Math.min(panel.u + panel.du, span - trim);
+            if (u1 - u0 <= 0.01) return;
+            u = u0;
+            du = u1 - u0;
+          }
+          const x = alongX
+            ? room.xM + u + du / 2
+            : face === 'px'
+              ? room.xM + room.lengthM - SHELL_M / 2
+              : room.xM + SHELL_M / 2;
+          const y = alongX
+            ? face === 'py'
+              ? room.yM + room.widthM - SHELL_M / 2
+              : room.yM + SHELL_M / 2
+            : room.yM + u + du / 2;
+          addBox(
+            wrap,
+            alongX ? [du, SHELL_M, panel.dv] : [SHELL_M, du, panel.dv],
+            [x, y, room.zM + panel.v + panel.dv / 2],
+            shellMaterial(color, 1, bias),
+            { kind: 'surface', roomId: room.id, face: 'walls', wallFace: face },
+            false
+          );
+        });
+        addOutline(wrap, wallOutline(room, face), {
+          kind: 'surface',
+          roomId: room.id,
+          face: 'walls',
+          wallFace: face,
+          edgeRole: 1,
+          baseEdge: EDGE_COLOR,
+        });
+      });
       room.openings.forEach(opening => {
         const frame = openingFrame(room, opening);
-        const openingMesh = new THREE.Mesh(
-          new THREE.BoxGeometry(frame.size.x, frame.size.y, frame.size.z),
-          new THREE.MeshStandardMaterial({ color: opening.kind === 'window' ? 0x6f93a8 : 0x6b5344, roughness: 0.7 })
+        const position = frame.position.clone();
+        if (opening.face === 'px') position.x -= SHELL_M / 2;
+        if (opening.face === 'nx') position.x += SHELL_M / 2;
+        if (opening.face === 'py') position.y -= SHELL_M / 2;
+        if (opening.face === 'ny') position.y += SHELL_M / 2;
+        const across = opening.face === 'px' || opening.face === 'nx';
+        const width = Math.max(opening.widthM, 0.05);
+        const height = Math.max(opening.heightM, 0.05);
+        const openingData: PickData = { kind: 'opening', roomId: room.id, id: opening.id };
+        const openingGroup = new THREE.Group();
+        openingGroup.position.copy(position);
+        openingGroup.userData = openingData;
+        const pick = new THREE.Mesh(
+          new THREE.BoxGeometry(across ? SHELL_M + 0.12 : width, across ? width : SHELL_M + 0.12, height),
+          new THREE.MeshBasicMaterial({
+            transparent: true,
+            opacity: 0,
+            depthWrite: false,
+            depthTest: false,
+            colorWrite: false,
+            side: THREE.DoubleSide,
+          })
         );
-        openingMesh.position.copy(frame.position);
-        wrap.add(openingMesh);
+        pick.userData = openingData;
+        const leafScale = opening.kind === 'door' ? 0.94 : 0.9;
+        const leafDepth = opening.kind === 'door' ? SHELL_M * 0.5 : SHELL_M * 0.22;
+        const leafSize: [number, number, number] = [
+          across ? leafDepth : width * leafScale,
+          across ? width * leafScale : leafDepth,
+          height * (opening.kind === 'door' ? 0.97 : leafScale),
+        ];
+        const leaf = new THREE.Mesh(
+          new THREE.BoxGeometry(leafSize[0], leafSize[1], leafSize[2]),
+          shellMaterial(opening.kind === 'window' ? 0x7eb0c4 : opening.kind === 'door' ? 0x6b5344 : 0x8aa0ae, opening.kind === 'door' ? 1 : 0.42, bias)
+        );
+        leaf.userData = { ...openingData };
+        if (leaf.material instanceof THREE.Material && leaf.material.transparent) leaf.renderOrder = 2;
+        attachHighlight(leaf, leafSize);
+        openingGroup.add(pick, leaf);
+        addOutline(wrap, openingOutline(room, opening), { ...openingData, edgeRole: 1, baseEdge: EDGE_COLOR });
+        wrap.add(openingGroup);
       });
-      const label = makeLabel(room.name, selected ? '#0f6e78' : '#5c6d78');
+      const label = makeLabel(room.name, '#5c6d78');
       if (label) {
+        label.raycast = () => undefined;
         label.position.set(room.xM + room.lengthM / 2, room.yM + room.widthM / 2, room.zM + room.heightM + 0.45);
         wrap.add(label);
       }
@@ -340,29 +707,34 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       const product = getProduct(item.catalogId);
       const size = product?.dimensions ?? { lengthM: 0.6, widthM: 0.6, heightM: 0.6 };
       const missingSize = !product?.dimensions;
-      const selected = selection.kind === 'equipment' && selection.id === item.id;
+      const equipmentData: PickData = { kind: 'equipment', id: item.id };
       const wrap = new THREE.Group();
-      wrap.userData = { kind: 'equipment', id: item.id };
-      const geometry = new THREE.BoxGeometry(size.lengthM, size.widthM, size.heightM);
+      wrap.userData = equipmentData;
+      const dims: [number, number, number] = [size.lengthM, size.widthM, size.heightM];
       const mesh = new THREE.Mesh(
-        geometry,
+        new THREE.BoxGeometry(dims[0], dims[1], dims[2]),
         new THREE.MeshStandardMaterial({
           color: missingSize ? 0xc4a574 : 0x1f4e5f,
           roughness: 0.55,
           metalness: 0.08,
-          emissive: selected ? 0x0f6e78 : 0x000000,
-          emissiveIntensity: selected ? 0.2 : 0,
+          polygonOffset: true,
+          polygonOffsetFactor: 1,
+          polygonOffsetUnits: 1,
         })
       );
       mesh.position.set(item.xM, item.yM, item.zM + size.heightM / 2);
       mesh.rotation.z = (item.yawDeg * Math.PI) / 180;
+      mesh.userData = { ...equipmentData };
+      attachHighlight(mesh, dims);
       const edges = new THREE.LineSegments(
-        new THREE.EdgesGeometry(geometry),
-        new THREE.LineBasicMaterial({ color: selected ? 0x0c6c74 : 0xb86e00 })
+        new THREE.EdgesGeometry(mesh.geometry),
+        new THREE.LineBasicMaterial({ color: 0xb86e00, depthWrite: false })
       );
-      edges.position.copy(mesh.position);
-      edges.rotation.z = mesh.rotation.z;
-      wrap.add(mesh, edges);
+      edges.raycast = () => undefined;
+      edges.renderOrder = 4;
+      edges.userData = { ...equipmentData, edgeRole: 1, baseEdge: 0xb86e00 };
+      mesh.add(edges);
+      wrap.add(mesh);
       if (item.quantity > 1) {
         const label = makeLabel(`×${item.quantity}`, '#b86e00');
         if (label) {
@@ -390,12 +762,17 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       controls.update();
     }
 
+    const paint = (next: Selection) => paintSelection(group, next);
+    paintRef.current = paint;
+    paint(selectionRef.current);
+
     return () => {
       scene.remove(group);
       disposeNode(group);
       if (contentRef.current === group) contentRef.current = null;
+      paintRef.current = () => undefined;
     };
-  }, [rooms, equipment, selection, fitToken]);
+  }, [rooms, equipment, fitToken, hideRoof]);
 
   return <div ref={hostRef} className="viewport-canvas" />;
 }

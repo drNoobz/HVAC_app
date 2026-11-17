@@ -15,11 +15,13 @@ import {
   updateRoom,
 } from '@/domain/projectOps';
 import { buildBom, buildSchedule, projectSummary, scheduleCsv } from '@/domain/schedule';
-import { DISCLAIMER, SYSTEM_KINDS, type EditorTool, type Project, type Selection, type StoredTemplate } from '@/domain/types';
+import { DISCLAIMER, SURFACE_FACES, SYSTEM_KINDS, type EditorTool, type Project, type Selection, type StoredTemplate } from '@/domain/types';
 import { formatLength } from '@/domain/units';
 import { projectToBuildingModel, validateModel } from '@/thermonode/localAdapter';
+import { mergeAssemblies, mergeLibrary, type ConstructionAssembly, type ConstructionMaterial } from '@/domain/constructionLibrary';
 import { BoundaryPanel } from './BoundaryPanel';
 import { Inspector } from './Inspector';
+import { LibraryPanel } from './LibraryPanel';
 import { SchedulePanel } from './SchedulePanel';
 
 const Viewport = dynamic(() => import('./Viewport'), {
@@ -27,13 +29,24 @@ const Viewport = dynamic(() => import('./Viewport'), {
   loading: () => <div className="viewport-loading">Loading 3D workspace…</div>,
 });
 
-type CenterView = 'model' | 'schedule' | 'boundary';
+type CenterView = 'model' | 'schedule' | 'library' | 'boundary';
+
+const CENTER_VIEWS: { id: CenterView; label: string }[] = [
+  { id: 'model', label: 'Model' },
+  { id: 'schedule', label: 'Schedule' },
+  { id: 'library', label: 'Library' },
+  { id: 'boundary', label: 'Thermonode' },
+];
 type SideTab = 'project' | 'catalog';
 
 export function Studio({
   project,
   templates,
+  addedMaterials,
+  addedAssemblies,
   onChange,
+  onLibraryChange,
+  onAssembliesChange,
   onBack,
   onSaveTemplate,
   onUpdateTemplate,
@@ -41,7 +54,11 @@ export function Studio({
 }: {
   project: Project;
   templates: StoredTemplate[];
+  addedMaterials: ConstructionMaterial[];
+  addedAssemblies: ConstructionAssembly[];
   onChange: (next: Project) => void;
+  onLibraryChange: (next: ConstructionMaterial[]) => void;
+  onAssembliesChange: (next: ConstructionAssembly[]) => void;
   onBack: () => void;
   onSaveTemplate: (name: string) => void;
   onUpdateTemplate: () => void;
@@ -55,12 +72,15 @@ export function Studio({
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<EquipmentCategory | 'all'>('all');
   const [showDimensions, setShowDimensions] = useState(false);
+  const [hideRoof, setHideRoof] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [templateName, setTemplateName] = useState(`${project.name} template`);
   const actions = useRef({ selection, onChange, setSelection, setTool });
   actions.current = { selection, onChange, setSelection, setTool };
 
+  const materials = useMemo(() => mergeLibrary(addedMaterials), [addedMaterials]);
+  const assemblies = useMemo(() => mergeAssemblies(addedAssemblies), [addedAssemblies]);
   const validation = useMemo(() => validateModel(projectToBuildingModel(project)), [project]);
   const errors = validation.issues.filter(issue => issue.severity === 'error').length;
   const warnings = validation.issues.filter(issue => issue.severity === 'warning').length;
@@ -80,6 +100,9 @@ export function Studio({
     if (selection.kind === 'opening') {
       const room = project.rooms.find(item => item.id === selection.roomId);
       if (!room || !room.openings.some(item => item.id === selection.id)) setSelection({ kind: 'project' });
+    }
+    if (selection.kind === 'surface' && !project.rooms.some(room => room.id === selection.roomId)) {
+      setSelection({ kind: 'project' });
     }
   }, [project, selection]);
 
@@ -146,9 +169,9 @@ export function Studio({
           />
         </div>
         <div className="view-tabs" role="tablist">
-          {(['model', 'schedule', 'boundary'] as const).map(item => (
-            <button key={item} type="button" role="tab" aria-selected={view === item} className={view === item ? 'active' : ''} onClick={() => setView(item)}>
-              {item === 'model' ? 'Model' : item === 'schedule' ? 'Schedule' : 'Thermonode'}
+          {CENTER_VIEWS.map(item => (
+            <button key={item.id} type="button" role="tab" aria-selected={view === item.id} className={view === item.id ? 'active' : ''} onClick={() => setView(item.id)}>
+              {item.label}
             </button>
           ))}
         </div>
@@ -262,10 +285,13 @@ export function Studio({
                 <button type="button" className={showDimensions ? 'active' : ''} onClick={() => setShowDimensions(value => !value)}>
                   Enter dimensions
                 </button>
+                <button type="button" className={hideRoof ? 'active' : ''} aria-pressed={hideRoof} onClick={() => setHideRoof(value => !value)}>
+                  Hide roof
+                </button>
                 <button type="button" onClick={() => setFitToken(token => token + 1)}>
                   Fit
                 </button>
-                <span className="stage-hint">Left-drag orbits · Right-drag pans · Wheel zooms · Delete removes</span>
+                <span className="stage-hint">Hide roof to see inside · Click a wall, door, or window · Left-drag orbits</span>
               </div>
               {showDimensions && (
                 <DimensionForm
@@ -292,6 +318,7 @@ export function Studio({
                   selection={selection}
                   tool={tool}
                   fitToken={fitToken}
+                  hideRoof={hideRoof}
                   onSelect={setSelection}
                   onDrawRoom={rect => {
                     const room = buildDrawnRoom(rect, project.rooms.length);
@@ -314,12 +341,17 @@ export function Studio({
             </>
           )}
           {view === 'schedule' && <SchedulePanel project={project} />}
+          {view === 'library' && (
+            <LibraryPanel added={addedMaterials} onChange={onLibraryChange} addedAssemblies={addedAssemblies} onAssembliesChange={onAssembliesChange} />
+          )}
           {view === 'boundary' && <BoundaryPanel project={project} />}
         </section>
         <Inspector
           project={project}
           selection={selection}
           issues={validation.issues}
+          materials={materials}
+          assemblies={assemblies}
           onChange={onChange}
           onSelect={setSelection}
           onDeleteProject={onDeleteProject}
@@ -400,6 +432,20 @@ function ProjectTree({
               {formatLength(room.lengthM, project.units, 2)} × {formatLength(room.widthM, project.units, 2)} × {formatLength(room.heightM, project.units, 2)}
             </span>
           </button>
+          {SURFACE_FACES.map(face => (
+            <button
+              key={face.id}
+              type="button"
+              className={
+                selection.kind === 'surface' && selection.roomId === room.id && selection.face === face.id
+                  ? 'tree-item child active'
+                  : 'tree-item child'
+              }
+              onClick={() => onSelect({ kind: 'surface', roomId: room.id, face: face.id })}
+            >
+              {face.label}
+            </button>
+          ))}
           {room.openings.map(opening => (
             <button
               key={opening.id}
