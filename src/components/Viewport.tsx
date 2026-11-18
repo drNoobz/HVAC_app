@@ -5,22 +5,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { getProduct } from '@/domain/catalog';
 import type { EditorTool, PlacedEquipment, Room, Selection, WallFace } from '@/domain/types';
-
-const USE_COLOR: Record<string, number> = {
-  Kitchen: 0xc5ddd6,
-  'Hot line': 0xc5ddd6,
-  Prep: 0xd5e4d8,
-  Dish: 0xd7e3ea,
-  'Walk-in': 0xd4e1ea,
-  Dining: 0xd9e3f0,
-  Bar: 0xe4ddd6,
-  Restroom: 0xe7e2d4,
-  Storage: 0xe6e1d2,
-  'Dry storage': 0xe6e1d2,
-  Corridor: 0xe1e6ea,
-  Office: 0xdce6ea,
-  Service: 0xddd9e6,
-};
+import { MARK_COLOR, colorNumber, roomFill, wallColor } from '@/domain/walls';
 
 const SNAP_M = 0.05;
 const MIN_DRAW_M = 0.4;
@@ -38,6 +23,8 @@ const EDGE_COLOR = 0x5c6d78;
 export interface ViewportProps {
   rooms: Room[];
   equipment: PlacedEquipment[];
+  cameraPose?: 'orbit' | 'top';
+  onCameraSettled?: (pose: 'orbit' | 'top') => void;
   selection: Selection;
   tool: EditorTool;
   fitToken: number;
@@ -314,7 +301,35 @@ function openingFrame(room: Room, opening: Room['openings'][number]): { position
   return { position: new THREE.Vector3(x, y, z), size: new THREE.Vector3(opening.widthM, thickness, opening.heightM) };
 }
 
-export default function Viewport({ rooms, equipment, selection, tool, fitToken, hideRoof, onSelect, onDrawRoom, onPlace, onContextMenu }: ViewportProps) {
+function easeInOut(t: number): number {
+  return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
+}
+
+function viewPoses(rooms: readonly Room[]): {
+  top: { position: THREE.Vector3; target: THREE.Vector3 };
+  orbit: { position: THREE.Vector3; target: THREE.Vector3 };
+} {
+  const box = new THREE.Box3();
+  rooms.forEach(room => {
+    box.expandByPoint(new THREE.Vector3(room.xM, room.yM, room.zM));
+    box.expandByPoint(new THREE.Vector3(room.xM + room.lengthM, room.yM + room.widthM, room.zM + room.heightM));
+  });
+  const center = rooms.length && !box.isEmpty() ? box.getCenter(new THREE.Vector3()) : new THREE.Vector3(2, 2, 1);
+  const size = rooms.length && !box.isEmpty() ? box.getSize(new THREE.Vector3()) : new THREE.Vector3(8, 8, 3);
+  const span = Math.max(size.x, size.y, size.z, 6);
+  return {
+    top: {
+      position: new THREE.Vector3(center.x, center.y - span * 0.18, center.z + span * 1.45),
+      target: center.clone(),
+    },
+    orbit: {
+      position: new THREE.Vector3(center.x + span * 0.85, center.y - span * 1.15, center.z + span * 0.85),
+      target: center.clone(),
+    },
+  };
+}
+
+export default function Viewport({ rooms, equipment, selection, tool, fitToken, hideRoof, cameraPose = 'orbit', onCameraSettled, onSelect, onDrawRoom, onPlace, onContextMenu }: ViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool);
   const handlersRef = useRef({ onSelect, onDrawRoom, onPlace, onContextMenu });
@@ -326,9 +341,22 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
   const contentRef = useRef<THREE.Group | null>(null);
   const paintRef = useRef<(next: Selection) => void>(() => undefined);
   const selectionRef = useRef(selection);
-  const lastFit = useRef(-1);
+  const roomsRef = useRef(rooms);
+  const poseListenerRef = useRef(onCameraSettled);
+  const enteredRef = useRef(false);
+  const blendRef = useRef<{
+    fromPos: THREE.Vector3;
+    fromTarget: THREE.Vector3;
+    toPos: THREE.Vector3;
+    toTarget: THREE.Vector3;
+    start: number;
+    duration: number;
+    pose: 'orbit' | 'top';
+  } | null>(null);
   selectionRef.current = selection;
   toolRef.current = tool;
+  roomsRef.current = rooms;
+  poseListenerRef.current = onCameraSettled;
   handlersRef.current = { onSelect, onDrawRoom, onPlace, onContextMenu };
 
   useEffect(() => {
@@ -338,13 +366,14 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
     scene.background = new THREE.Color(0xd7e1e8);
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
     camera.up.set(0, 0, 1);
-    camera.position.set(14, -16, 12);
+    const overhead = viewPoses(roomsRef.current).top;
+    camera.position.copy(overhead.position);
     const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     host.appendChild(renderer.domElement);
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(8, 6, 1);
+    controls.target.copy(overhead.target);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
@@ -366,7 +395,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
     scene.add(ground);
     const preview = new THREE.Mesh(
       new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshStandardMaterial({ color: 0x0f6e78, transparent: true, opacity: 0.35, roughness: 0.8 })
+      new THREE.MeshStandardMaterial({ color: colorNumber(MARK_COLOR.equipment), transparent: true, opacity: 0.35, roughness: 0.8 })
     );
     preview.visible = false;
     scene.add(preview);
@@ -531,9 +560,25 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
     renderer.domElement.addEventListener('pointerup', onPointerUp);
     renderer.domElement.addEventListener('contextmenu', onContextMenuEvent);
 
+    const onControlStart = () => {
+      blendRef.current = null;
+    };
+    controls.addEventListener('start', onControlStart);
+
     let frame = 0;
     const loop = () => {
       frame = requestAnimationFrame(loop);
+      const blend = blendRef.current;
+      if (blend) {
+        const t = Math.min(1, (performance.now() - blend.start) / blend.duration);
+        const eased = easeInOut(t);
+        camera.position.lerpVectors(blend.fromPos, blend.toPos, eased);
+        controls.target.lerpVectors(blend.fromTarget, blend.toTarget, eased);
+        if (t >= 1) {
+          blendRef.current = null;
+          poseListenerRef.current?.(blend.pose);
+        }
+      }
       controls.update();
       renderer.render(scene, camera);
     };
@@ -546,6 +591,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       renderer.domElement.removeEventListener('contextmenu', onContextMenuEvent);
+      controls.removeEventListener('start', onControlStart);
       controls.dispose();
       preview.geometry.dispose();
       (preview.material as THREE.Material).dispose();
@@ -557,9 +603,31 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       cameraRef.current = null;
       controlsRef.current = null;
       contentRef.current = null;
-      lastFit.current = -1;
     };
   }, []);
+
+  useEffect(() => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    const poses = viewPoses(roomsRef.current);
+    const dest = cameraPose === 'top' ? poses.top : poses.orbit;
+    const fromPlan = cameraPose === 'orbit' && !enteredRef.current;
+    enteredRef.current = true;
+    const fromPos = (fromPlan ? poses.top.position : camera.position).clone();
+    const fromTarget = (fromPlan ? poses.top.target : controls.target).clone();
+    camera.position.copy(fromPos);
+    controls.target.copy(fromTarget);
+    blendRef.current = {
+      fromPos,
+      fromTarget,
+      toPos: dest.position.clone(),
+      toTarget: dest.target.clone(),
+      start: performance.now(),
+      duration: 720,
+      pose: cameraPose,
+    };
+  }, [cameraPose, fitToken]);
 
   useEffect(() => {
     if (tool.kind !== 'draw' && previewRef.current) previewRef.current.visible = false;
@@ -572,16 +640,14 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
 
   useEffect(() => {
     const scene = sceneRef.current;
-    const camera = cameraRef.current;
-    const controls = controlsRef.current;
-    if (!scene || !camera || !controls) return;
+    if (!scene) return;
     const group = new THREE.Group();
     scene.add(group);
     contentRef.current = group;
 
     rooms.forEach(room => {
       if (room.lengthM <= 0 || room.widthM <= 0 || room.heightM <= 0) return;
-      const color = USE_COLOR[room.use] ?? 0xd5dee6;
+      const floorColor = colorNumber(roomFill(room.use));
       const bias = depthBias(room.id);
       const wrap = new THREE.Group();
       wrap.userData = { kind: 'room', id: room.id };
@@ -597,7 +663,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
         wrap,
         [Math.max(room.lengthM - insetX * 2, 0.05), Math.max(room.widthM - insetY * 2, 0.05), SLAB_M],
         [room.xM + room.lengthM / 2, room.yM + room.widthM / 2, room.zM + 0.012 + SLAB_M / 2],
-        shellMaterial(color, 1, bias),
+        shellMaterial(floorColor, 1, bias),
         floorData,
         false
       );
@@ -613,7 +679,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
           wrap,
           [Math.max(room.lengthM - insetX * 2, 0.05), Math.max(room.widthM - insetY * 2, 0.05), SLAB_M],
           [room.xM + room.lengthM / 2, room.yM + room.widthM / 2, room.zM + room.heightM - SLAB_M / 2],
-          shellMaterial(color, 1, bias),
+          shellMaterial(floorColor, 1, bias),
           ceilingData,
           false
         );
@@ -658,7 +724,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
             wrap,
             alongX ? [du, SHELL_M, panel.dv] : [SHELL_M, du, panel.dv],
             [x, y, room.zM + panel.v + panel.dv / 2],
-            shellMaterial(color, 1, bias),
+            shellMaterial(colorNumber(wallColor(room.surfaces.walls[face].constructionId)), 1, bias),
             { kind: 'surface', roomId: room.id, face: 'walls', wallFace: face },
             false
           );
@@ -707,7 +773,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
         ];
         const leaf = new THREE.Mesh(
           new THREE.BoxGeometry(leafSize[0], leafSize[1], leafSize[2]),
-          shellMaterial(opening.kind === 'window' ? 0x7eb0c4 : opening.kind === 'door' ? 0x6b5344 : 0x8aa0ae, opening.kind === 'door' ? 1 : 0.42, bias)
+          shellMaterial(colorNumber(opening.kind === 'window' ? MARK_COLOR.window : opening.kind === 'door' ? MARK_COLOR.door : MARK_COLOR.opening), opening.kind === 'door' ? 1 : 0.42, bias)
         );
         leaf.userData = { ...openingData };
         if (leaf.material instanceof THREE.Material && leaf.material.transparent) leaf.renderOrder = 2;
@@ -736,7 +802,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(dims[0], dims[1], dims[2]),
         new THREE.MeshStandardMaterial({
-          color: missingSize ? 0xc4a574 : 0x1f4e5f,
+          color: colorNumber(missingSize ? '#c4a574' : MARK_COLOR.equipment),
           roughness: 0.55,
           metalness: 0.08,
           polygonOffset: true,
@@ -760,15 +826,15 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       attachHighlight(mesh, dims);
       const edges = new THREE.LineSegments(
         new THREE.EdgesGeometry(mesh.geometry),
-        new THREE.LineBasicMaterial({ color: 0xb86e00, depthWrite: false })
+        new THREE.LineBasicMaterial({ color: colorNumber(MARK_COLOR.equipment), depthWrite: false })
       );
       edges.raycast = () => undefined;
       edges.renderOrder = 4;
-      edges.userData = { ...equipmentData, edgeRole: 1, baseEdge: 0xb86e00 };
+      edges.userData = { ...equipmentData, edgeRole: 1, baseEdge: colorNumber(MARK_COLOR.equipment) };
       mesh.add(edges);
       wrap.add(mesh);
       if (item.quantity > 1) {
-        const label = makeLabel(`×${item.quantity}`, '#b86e00');
+        const label = makeLabel(`×${item.quantity}`, MARK_COLOR.equipment);
         if (label) {
           label.scale.set(1.2, 0.32, 1);
           label.position.set(item.xM, item.yM, centerZ + size.heightM / 2 + 0.35);
@@ -777,22 +843,6 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       }
       group.add(wrap);
     });
-
-    if (lastFit.current !== fitToken) {
-      lastFit.current = fitToken;
-      const box = new THREE.Box3().setFromObject(group);
-      if (rooms.length && !box.isEmpty()) {
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
-        const span = Math.max(size.x, size.y, size.z, 6);
-        camera.position.set(center.x + span * 0.85, center.y - span * 1.15, center.z + span * 0.85);
-        controls.target.copy(center);
-      } else {
-        camera.position.set(10, -12, 8);
-        controls.target.set(2, 2, 0);
-      }
-      controls.update();
-    }
 
     const paint = (next: Selection) => paintSelection(group, next);
     paintRef.current = paint;

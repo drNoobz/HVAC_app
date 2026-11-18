@@ -49,6 +49,18 @@ export function roomFill(use: string): string {
   return ROOM_FILL[use] ?? '#e4ebf0';
 }
 
+/** Shared by the plan and the 3D view. */
+export const MARK_COLOR = {
+  door: '#6b5344',
+  window: '#7eb0c4',
+  opening: '#8aa0ae',
+  equipment: '#1f4e5f',
+} as const;
+
+export function colorNumber(hex: string): number {
+  return Number.parseInt(hex.slice(1), 16);
+}
+
 export function wallColor(constructionId: string | null | undefined): string {
   if (constructionId === 'asm-wall-dining') return '#8a5a3a';
   if (constructionId === 'asm-wall-kitchen') return '#6d4c38';

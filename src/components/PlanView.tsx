@@ -5,12 +5,11 @@ import { getProduct } from '@/domain/catalog';
 import type { EditorTool, Opening, PlacedEquipment, Project, Room, Selection, WallFace } from '@/domain/types';
 import { METERS_PER_FOOT, formatArea, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
 import { clampSharedEdge, moveRoomEdge, slideOpeningsTogether } from '@/domain/spanFit';
-import { WALL_FACE_IDS, touchingRooms } from '@/domain/walls';
+import { MARK_COLOR, WALL_FACE_IDS, roomFill, touchingRooms, wallColor } from '@/domain/walls';
 
 const SNAP_M = 0.05;
 const MIN_DRAW_M = 0.4;
 const PAPER = '#f4f4f2';
-const FLOOR = '#e6e6e3';
 const INK = '#2a2e32';
 const DIM = '#0e6e66';
 const SELECT = '#f6ad55';
@@ -26,14 +25,6 @@ function graphicWall(constructionId: string | null | undefined): { role: WallRol
   if (constructionId === 'asm-wall-glass') return { role: 'glass', thickness: 0.1 };
   if (!constructionId) return { role: 'none', thickness: 0.1 };
   return { role: 'partition', thickness: 0.14 };
-}
-
-function wallFill(role: WallRole): string | null {
-  if (role === 'hatch') return 'url(#plan-hatch)';
-  if (role === 'service') return 'url(#plan-hatch-b)';
-  if (role === 'panel') return '#24272b';
-  if (role === 'partition') return '#6a6f75';
-  return null;
 }
 
 function wallBand(room: Room, face: WallFace, thickness: number) {
@@ -579,16 +570,6 @@ export function PlanView({
           }
         }}
       >
-        <defs>
-          <pattern id="plan-hatch" width="0.18" height="0.18" patternUnits="userSpaceOnUse">
-            <rect width="0.18" height="0.18" fill="#2c3034" />
-            <path d="M-0.02 0.16 L0.16 -0.02 M0 0.18 L0.18 0" stroke="#c5c5c0" strokeWidth="0.015" />
-          </pattern>
-          <pattern id="plan-hatch-b" width="0.18" height="0.18" patternUnits="userSpaceOnUse">
-            <rect width="0.18" height="0.18" fill="#2c3034" />
-            <path d="M0.02 -0.02 L-0.02 0.02 M0 0 L0.18 0.18" stroke="#c5c5c0" strokeWidth="0.015" />
-          </pattern>
-        </defs>
         <g transform="scale(1,-1)">
           {rooms.map(room => (
             <rect
@@ -598,7 +579,7 @@ export function PlanView({
               y={room.yM}
               width={room.lengthM}
               height={room.widthM}
-              fill={room.id === highlightedRoom?.id ? SELECT_FILL : FLOOR}
+              fill={room.id === highlightedRoom?.id ? SELECT_FILL : roomFill(room.use)}
               stroke="none"
               onClick={event => {
                 event.stopPropagation();
@@ -622,9 +603,9 @@ export function PlanView({
               const active = selection.kind === 'opening' && (selection.id === opening.id || (opening.kind === 'door' && doorwayKey(room, opening) === selectedDoorway));
               return (
                 <g key={opening.id} pointerEvents="none">
-                  <rect {...gap} fill={FLOOR} />
+                  <rect {...gap} fill={roomFill(room.use)} />
                   {showSwing(room, opening) && (
-                    <g fill="none" stroke={active ? SELECT : INK} strokeWidth={active ? 2.25 : HAIR}>
+                    <g fill="none" stroke={active ? SELECT : MARK_COLOR.door} strokeWidth={active ? 2.25 : HAIR}>
                       <line x1={hingeX} y1={hingeY} x2={hingeX + ix * opening.widthM} y2={hingeY + iy * opening.widthM} vectorEffect="non-scaling-stroke" />
                       <polyline points={arcPoints(hingeX, hingeY, opening.widthM, swing.from, swing.to)} vectorEffect="non-scaling-stroke" />
                     </g>
@@ -757,12 +738,12 @@ export function PlanView({
       </svg>
       <div className="plan-foot">
       <div className="plan-legend">
-        <div><i className="swatch hatch" />Exterior</div>
-        <div><i className="swatch hatch-b" />Service</div>
-        <div><i className="swatch solid" />Partition</div>
-        <div><i className="swatch panel" />Walk-in</div>
-        <div><i className="swatch glass" />Glass</div>
-        <div><i className="swatch open" />No construction</div>
+        <div><i className="swatch" style={{ background: wallColor('asm-wall-dining') }} />Exterior</div>
+        <div><i className="swatch" style={{ background: wallColor('asm-wall-kitchen') }} />Service</div>
+        <div><i className="swatch" style={{ background: wallColor('asm-wall-partition') }} />Partition</div>
+        <div><i className="swatch" style={{ background: wallColor('asm-wall-walkin') }} />Walk-in</div>
+        <div><i className="swatch" style={{ background: wallColor('asm-wall-glass') }} />Glass</div>
+        <div><i className="swatch" style={{ background: wallColor(null) }} />No construction</div>
         <p>Door swing is drawn into one room. Scroll to zoom. Drag empty space to pan.</p>
       </div>
       <div className="plan-scale" aria-hidden="true">
@@ -911,7 +892,7 @@ function EquipmentMark({
         width={length}
         height={width}
         fill={active ? SELECT_FILL : 'none'}
-        stroke={active ? SELECT : INK}
+        stroke={active ? SELECT : MARK_COLOR.equipment}
         strokeWidth={active ? 2.25 : HAIR}
         vectorEffect="non-scaling-stroke"
         strokeDasharray={roof ? '0.16 0.1' : undefined}
@@ -919,7 +900,7 @@ function EquipmentMark({
       <g transform={`translate(${item.xM} ${item.yM}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
         <g transform={`translate(0 ${width / 2 + chipH / 2 + fontM * 0.12})`}>
           <rect x={-chipW / 2} y={-chipH / 2} width={chipW} height={chipH} fill={PAPER} stroke="none" />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.68} fill={active ? SELECT : INK}>
+          <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.68} fill={active ? SELECT : MARK_COLOR.equipment}>
             {label}
           </text>
         </g>
@@ -977,57 +958,33 @@ function SheetGrid({ view, pxPerM }: { view: ViewBox; pxPerM: number }) {
 }
 
 function PlanWalls({ rooms }: { rooms: readonly Room[] }) {
-  const faces = rooms.flatMap(room => WALL_FACE_IDS.map(face => ({ room, face, graphic: graphicWall(room.surfaces.walls[face].constructionId) })));
-  const order: WallRole[] = ['partition', 'panel', 'hatch', 'service'];
+  const faces = rooms.flatMap(room => WALL_FACE_IDS.map(face => ({ room, face, id: room.surfaces.walls[face].constructionId, graphic: graphicWall(room.surfaces.walls[face].constructionId) })));
   return (
     <g pointerEvents="none">
-      {order.flatMap(role =>
-        faces
-          .filter(item => item.graphic.role === role)
-          .map(item => <rect key={`${item.room.id}-${item.face}`} {...wallBand(item.room, item.face, item.graphic.thickness)} fill={wallFill(role) ?? 'none'} />)
-      )}
-      {faces
-        .filter(item => item.graphic.role === 'glass')
-        .map(item => (
-          <GlassFace key={`${item.room.id}-${item.face}`} room={item.room} face={item.face} />
-        ))}
-      {faces
-        .filter(item => item.graphic.role === 'none')
-        .map(item => {
-          const line = wallLine(item.room, item.face);
-          return (
-            <line
-              key={`${item.room.id}-${item.face}`}
-              x1={line.x1}
-              y1={line.y1}
-              x2={line.x2}
-              y2={line.y2}
-              stroke="#9a6b2f"
-              strokeWidth={HAIR}
-              strokeDasharray="0.16 0.1"
-              vectorEffect="non-scaling-stroke"
-            />
-          );
-        })}
-    </g>
-  );
-}
-
-function GlassFace({ room, face }: { room: Room; face: WallFace }) {
-  const line = wallLine(room, face);
-  const vertical = face === 'px' || face === 'nx';
-  return (
-    <g stroke={INK} strokeWidth={HAIR} fill="none">
-      {[-0.035, 0.035].map(offset => (
-        <line
-          key={offset}
-          x1={line.x1 + (vertical ? offset : 0)}
-          y1={line.y1 + (vertical ? 0 : offset)}
-          x2={line.x2 + (vertical ? offset : 0)}
-          y2={line.y2 + (vertical ? 0 : offset)}
-          vectorEffect="non-scaling-stroke"
+      {faces.filter(item => item.graphic.role !== 'none').map(item => (
+        <rect
+          key={`${item.room.id}-${item.face}`}
+          {...wallBand(item.room, item.face, item.graphic.thickness)}
+          fill={wallColor(item.id)}
+          fillOpacity={item.graphic.role === 'glass' ? 0.55 : 1}
         />
       ))}
+      {faces.filter(item => item.graphic.role === 'none').map(item => {
+        const line = wallLine(item.room, item.face);
+        return (
+          <line
+            key={`${item.room.id}-${item.face}`}
+            x1={line.x1}
+            y1={line.y1}
+            x2={line.x2}
+            y2={line.y2}
+            stroke={wallColor(null)}
+            strokeWidth={HAIR}
+            strokeDasharray="0.16 0.1"
+            vectorEffect="non-scaling-stroke"
+          />
+        );
+      })}
     </g>
   );
 }
@@ -1043,7 +1000,7 @@ function WindowMark({
 }) {
   const vertical = face === 'px' || face === 'nx';
   return (
-    <g stroke={active ? SELECT : INK} strokeWidth={active ? 2.25 : HAIR} fill="none">
+    <g stroke={active ? SELECT : MARK_COLOR.window} strokeWidth={active ? 2.25 : HAIR} fill="none">
       {[-1, 0, 1].map(part => {
         const offset = part * 0.045;
         return (

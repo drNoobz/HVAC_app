@@ -84,6 +84,7 @@ export function Studio({
   const [templateName, setTemplateName] = useState(`${project.name} template`);
   const [wallTypeId, setWallTypeId] = useState<string | null>(null);
   const [scene, setScene] = useState<'plan' | '3d'>('plan');
+  const [cameraPose, setCameraPose] = useState<'orbit' | 'top'>('top');
   const [menu, setMenu] = useState<{ x: number; y: number; selection: Selection } | null>(null);
   const [nameFocus, setNameFocus] = useState(0);
   const past = useRef<Project[]>([]);
@@ -397,10 +398,23 @@ export function Studio({
           {view === 'model' && (
             <>
               <div className="stage-bar">
-                <button type="button" className={scene === 'plan' ? 'active' : ''} onClick={() => setScene('plan')}>
+                <button
+                  type="button"
+                  className={scene === 'plan' ? 'active' : ''}
+                  onClick={() => {
+                    if (scene === '3d') setCameraPose('top');
+                  }}
+                >
                   Plan
                 </button>
-                <button type="button" className={scene === '3d' ? 'active' : ''} onClick={() => setScene('3d')}>
+                <button
+                  type="button"
+                  className={scene === '3d' ? 'active' : ''}
+                  onClick={() => {
+                    setCameraPose('orbit');
+                    setScene('3d');
+                  }}
+                >
                   3D
                 </button>
                 <button type="button" className={tool.kind === 'select' ? 'active' : ''} onClick={() => setTool({ kind: 'select' })}>
@@ -499,6 +513,10 @@ export function Studio({
                     tool={tool}
                     fitToken={fitToken}
                     hideRoof={hideRoof}
+                    cameraPose={cameraPose}
+                    onCameraSettled={pose => {
+                      if (pose === 'top') setScene('plan');
+                    }}
                     onSelect={next => {
                       if (wallTypeId && next.kind === 'surface' && next.face === 'walls' && next.wallFace) {
                         const type = WALL_TYPES.find(item => item.id === wallTypeId);
