@@ -45,6 +45,10 @@ export interface Opening {
   widthM: number;
   heightM: number;
   sillM: number;
+  /** Hinge at the minimum X or Y end of the opening, or the other end. Missing means the minimum end. */
+  hinge?: 'start' | 'end';
+  /** Leaf swings into this room, or out of it. Missing means into this room. */
+  swing?: 'in' | 'out';
   /** Construction component id for a door or window. A plain opening has none. */
   constructionId?: string | null;
   layers?: StackLayer[];

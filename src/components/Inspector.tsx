@@ -15,6 +15,7 @@ import {
   updateRoom,
   updateSystem,
 } from '@/domain/projectOps';
+import { doorDirection, hingeEnds, setDoorDirection, type DoorHinge } from '@/domain/doorSwing';
 import { placeBeside, resizeSpan, slideOpeningOffset } from '@/domain/spanFit';
 import {
   BUILDING_TYPES,
@@ -597,6 +598,8 @@ function OpeningFields({
   const opening = room?.openings.find(item => item.id === openingId);
   if (!room || !opening) return <p>Opening not found.</p>;
   const unit = lengthUnit(project.units);
+  const direction = opening.kind === 'door' ? doorDirection(project.rooms, room, opening) : null;
+  const hingeNames = direction ? hingeEnds(direction.face) : null;
   const patch = (partial: Partial<typeof opening>) => {
     onChange(
       updateRoom(project, room.id, {
@@ -649,6 +652,33 @@ function OpeningFields({
           <option value="opening">Opening</option>
         </select>
       </label>
+      {direction && hingeNames && (
+        <>
+          <label className="field">
+            <span>Opens into</span>
+            <select
+              value={direction.into}
+              onChange={event => onChange(setDoorDirection(project, room.id, opening.id, { into: event.target.value, hinge: direction.hinge }))}
+            >
+              {direction.choices.map(choice => (
+                <option key={choice.id} value={choice.id}>
+                  {choice.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Hinge</span>
+            <select
+              value={direction.hinge}
+              onChange={event => onChange(setDoorDirection(project, room.id, opening.id, { into: direction.into, hinge: event.target.value as DoorHinge }))}
+            >
+              <option value="start">{hingeNames.start}</option>
+              <option value="end">{hingeNames.end}</option>
+            </select>
+          </label>
+        </>
+      )}
       <label className="field">
         <span>Wall</span>
         <select

@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { getProduct } from '@/domain/catalog';
 import type { EditorTool, PlacedEquipment, Room, Selection, WallFace } from '@/domain/types';
+import { doorArc, doorHinge, doorSwingSide } from '@/domain/doorSwing';
 import { MARK_COLOR, colorNumber, roomFill, wallColor } from '@/domain/walls';
 
 const SNAP_M = 0.05;
@@ -741,10 +742,16 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       room.openings.forEach(opening => {
         const frame = openingFrame(room, opening);
         const position = frame.position.clone();
-        if (opening.face === 'px') position.x -= SHELL_M / 2;
-        if (opening.face === 'nx') position.x += SHELL_M / 2;
-        if (opening.face === 'py') position.y -= SHELL_M / 2;
-        if (opening.face === 'ny') position.y += SHELL_M / 2;
+        if (opening.kind === 'door') {
+          const arc = doorArc(opening.face, doorHinge(opening), doorSwingSide(opening));
+          position.x += arc.nx * (SHELL_M / 2);
+          position.y += arc.ny * (SHELL_M / 2);
+        } else {
+          if (opening.face === 'px') position.x -= SHELL_M / 2;
+          if (opening.face === 'nx') position.x += SHELL_M / 2;
+          if (opening.face === 'py') position.y -= SHELL_M / 2;
+          if (opening.face === 'ny') position.y += SHELL_M / 2;
+        }
         const across = opening.face === 'px' || opening.face === 'nx';
         const width = Math.max(opening.widthM, 0.05);
         const height = Math.max(opening.heightM, 0.05);

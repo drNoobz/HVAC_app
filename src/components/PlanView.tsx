@@ -4,10 +4,12 @@ import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 
 import { getProduct } from '@/domain/catalog';
 import type { EditorTool, Opening, PlacedEquipment, Project, Room, Selection, WallFace } from '@/domain/types';
 import { METERS_PER_FOOT, formatArea, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
+import { doorArc, doorHinge, doorSwingSide, doorwayKey, openingEnds } from '@/domain/doorSwing';
 import { clampSharedEdge, moveRoomEdge, slideOpeningsTogether } from '@/domain/spanFit';
 import { MARK_COLOR, WALL_FACE_IDS, roomFill, touchingRooms, wallColor } from '@/domain/walls';
 
 const SNAP_M = 0.05;
+const DRAG_PX = 5;
 const MIN_DRAW_M = 0.4;
 const PAPER = '#f4f4f2';
 const INK = '#2a2e32';
@@ -220,39 +222,6 @@ function wallLine(room: Room, face: WallFace): { x1: number; y1: number; x2: num
   return { x1: room.xM, y1: room.yM, x2: room.xM + room.lengthM, y2: room.yM };
 }
 
-function openingEnds(room: Room, opening: Opening): { x0: number; y0: number; x1: number; y1: number } {
-  if (opening.face === 'px' || opening.face === 'nx') {
-    const x = opening.face === 'px' ? room.xM + room.lengthM : room.xM;
-    return { x0: x, y0: room.yM + opening.offsetM, x1: x, y1: room.yM + opening.offsetM + opening.widthM };
-  }
-  const y = opening.face === 'py' ? room.yM + room.widthM : room.yM;
-  return { x0: room.xM + opening.offsetM, y0: y, x1: room.xM + opening.offsetM + opening.widthM, y1: y };
-}
-
-function doorwayKey(room: Room, opening: Opening): string {
-  const ends = openingEnds(room, opening);
-  const q = (value: number) => Math.round(value / 0.02);
-  const x0 = Math.min(q(ends.x0), q(ends.x1));
-  const y0 = Math.min(q(ends.y0), q(ends.y1));
-  const x1 = Math.max(q(ends.x0), q(ends.x1));
-  const y1 = Math.max(q(ends.y0), q(ends.y1));
-  return `${x0}:${y0}:${x1}:${y1}`;
-}
-
-function doorSwing(face: WallFace): { from: number; to: number } {
-  if (face === 'px') return { from: Math.PI / 2, to: Math.PI };
-  if (face === 'nx') return { from: Math.PI / 2, to: 0 };
-  if (face === 'py') return { from: 0, to: -Math.PI / 2 };
-  return { from: 0, to: Math.PI / 2 };
-}
-
-function inward(face: WallFace): [number, number] {
-  if (face === 'px') return [-1, 0];
-  if (face === 'nx') return [1, 0];
-  if (face === 'py') return [0, -1];
-  return [0, 1];
-}
-
 function arcPoints(x: number, y: number, radius: number, from: number, to: number): string {
   const steps = 16;
   const points: string[] = [];
@@ -303,8 +272,8 @@ export function PlanView({
   const suppressClick = useRef(false);
   const drag = useRef<
     | { kind: 'pan' | 'draw' | 'place'; x: number; y: number; pointerX: number; pointerY: number; view: ViewBox }
-    | { kind: 'wall'; edges: { id: string; face: WallFace }[]; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace }
-    | { kind: 'opening'; moves: { roomId: string; openingId: string }[]; grab: number; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace }
+    | { kind: 'wall'; edges: { id: string; face: WallFace }[]; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace; armed: boolean }
+    | { kind: 'opening'; moves: { roomId: string; openingId: string }[]; grab: number; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace; armed: boolean }
     | null
   >(null);
 
@@ -438,8 +407,7 @@ export function PlanView({
               const partners = touchingRooms(room, face, project.rooms)
                 .map(other => ({ id: other.id, face: partnerFace(room, face, other) }))
                 .filter((item): item is { id: string; face: WallFace } => item.face !== null);
-              drag.current = { kind: 'wall', edges: [{ id: room.id, face }, ...partners], base: project.rooms, pointerX: event.clientX, pointerY: event.clientY, view, face };
-              setGesture({ kind: 'wall', roomId: room.id, face });
+              drag.current = { kind: 'wall', edges: [{ id: room.id, face }, ...partners], base: project.rooms, pointerX: event.clientX, pointerY: event.clientY, view, face, armed: false };
               event.currentTarget.setPointerCapture(event.pointerId);
               return;
             }
@@ -458,8 +426,8 @@ export function PlanView({
                   pointerY: event.clientY,
                   view,
                   face: opening.face,
+                  armed: false,
                 };
-                setGesture({ kind: 'opening', roomId: room.id, face: opening.face, openingId: opening.id });
                 event.currentTarget.setPointerCapture(event.pointerId);
                 return;
               }
@@ -489,6 +457,11 @@ export function PlanView({
             return;
           }
           if (current.kind === 'wall') {
+            if (!current.armed) {
+              if (Math.hypot(event.clientX - current.pointerX, event.clientY - current.pointerY) < DRAG_PX) return;
+              current.armed = true;
+              setGesture({ kind: 'wall', roomId: current.edges[0].id, face: current.face });
+            }
             const raw = current.face === 'px' || current.face === 'nx' ? point.xM : point.yM;
             const next = moveEdges(current.base, current.edges, raw);
             showLive(next);
@@ -505,6 +478,11 @@ export function PlanView({
             return;
           }
           if (current.kind === 'opening') {
+            if (!current.armed) {
+              if (Math.hypot(event.clientX - current.pointerX, event.clientY - current.pointerY) < DRAG_PX) return;
+              current.armed = true;
+              setGesture({ kind: 'opening', roomId: current.moves[0].roomId, face: current.face, openingId: current.moves[0].openingId });
+            }
             const worldStart = alongPoint(current.face, point) - current.grab;
             const next = slideOpeningsTogether(current.base, current.moves, worldStart);
             showLive(next);
@@ -551,15 +529,23 @@ export function PlanView({
             return;
           }
           if (current.kind === 'wall' || current.kind === 'opening') {
+            const select = () => {
+              suppressClick.current = true;
+              if (current.kind === 'wall') onSelect({ kind: 'surface', roomId: current.edges[0].id, face: 'walls', wallFace: current.face });
+              else onSelect({ kind: 'opening', roomId: current.moves[0].roomId, id: current.moves[0].openingId });
+            };
+            if (!current.armed) {
+              showLive(null);
+              setGesture(null);
+              setReadout(null);
+              select();
+              return;
+            }
             const next = previewRef.current ? settleDrag(current, previewRef.current, pxPerM, project.units) : null;
             showLive(null);
             setGesture(null);
             setReadout(null);
-            if (moved > 3) {
-              suppressClick.current = true;
-              if (current.kind === 'wall') onSelect({ kind: 'surface', roomId: current.edges[0].id, face: 'walls', wallFace: current.face });
-              else onSelect({ kind: 'opening', roomId: current.moves[0].roomId, id: current.moves[0].openingId });
-            }
+            select();
             if (next && geometryChanged(current.base, next)) {
               onRoomsChange(next.map(room => {
                 const prev = current.base.find(item => item.id === room.id);
@@ -596,17 +582,17 @@ export function PlanView({
               const graphic = graphicWall(room.surfaces.walls[opening.face].constructionId);
               const gap = openingGap(room, opening, graphic.thickness);
               const ends = openingEnds(room, opening);
-              const [ix, iy] = inward(opening.face);
-              const swing = doorSwing(opening.face);
-              const hingeX = ends.x0 + ix * (graphic.thickness / 2);
-              const hingeY = ends.y0 + iy * (graphic.thickness / 2);
+              const swing = doorArc(opening.face, doorHinge(opening), doorSwingSide(opening));
+              const hingeAtEnd = doorHinge(opening) === 'end';
+              const hingeX = (hingeAtEnd ? ends.x1 : ends.x0) + swing.nx * (graphic.thickness / 2);
+              const hingeY = (hingeAtEnd ? ends.y1 : ends.y0) + swing.ny * (graphic.thickness / 2);
               const active = selection.kind === 'opening' && (selection.id === opening.id || (opening.kind === 'door' && doorwayKey(room, opening) === selectedDoorway));
               return (
                 <g key={opening.id} pointerEvents="none">
                   <rect {...gap} fill={roomFill(room.use)} />
                   {showSwing(room, opening) && (
                     <g fill="none" stroke={active ? SELECT : MARK_COLOR.door} strokeWidth={active ? 2.25 : HAIR}>
-                      <line x1={hingeX} y1={hingeY} x2={hingeX + ix * opening.widthM} y2={hingeY + iy * opening.widthM} vectorEffect="non-scaling-stroke" />
+                      <line x1={hingeX} y1={hingeY} x2={hingeX + swing.nx * opening.widthM} y2={hingeY + swing.ny * opening.widthM} vectorEffect="non-scaling-stroke" />
                       <polyline points={arcPoints(hingeX, hingeY, opening.widthM, swing.from, swing.to)} vectorEffect="non-scaling-stroke" />
                     </g>
                   )}
