@@ -438,7 +438,7 @@ export function Studio({
                     ))}
                   </select>
                 </label>
-                <span className="stage-hint">{scene === 'plan' ? 'Click a wall edge to edit that face' : 'Hide roof to see inside · Click a wall, door, or window'}</span>
+                <span className="stage-hint">{scene === 'plan' ? 'Drag a wall to resize. Drag a door or window along its wall.' : 'Hide roof to see inside · Click a wall, door, or window'}</span>
               </div>
               {showDimensions && (
                 <DimensionForm
@@ -488,6 +488,7 @@ export function Studio({
                     setTool({ kind: 'select' });
                   }}
                   onContextMenu={openMenu}
+                  onRoomsChange={rooms => edit({ ...project, rooms })}
                 />
               ) : (
                 <div className="viewport">

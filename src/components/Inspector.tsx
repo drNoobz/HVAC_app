@@ -15,6 +15,7 @@ import {
   updateRoom,
   updateSystem,
 } from '@/domain/projectOps';
+import { placeBeside, resizeSpan, slideOpeningOffset } from '@/domain/spanFit';
 import {
   BUILDING_TYPES,
   ROOM_USES,
@@ -278,7 +279,8 @@ function WallFaceFields({
   const openings = room.openings.filter(opening => opening.face === face);
   const partial = touchingRooms(room, face, project.rooms).length > 0 && !wallFullyShared(room, face, project.rooms);
   const setRoomLength = (display: number) => {
-    onChange(updateRoom(project, room.id, { [alongY ? 'widthM' : 'lengthM']: lengthToM(display, project.units), assumption: false }));
+    const next = resizeSpan(room, alongY ? 'y' : 'x', lengthToM(display, project.units));
+    onChange(updateRoom(project, room.id, { lengthM: next.lengthM, widthM: next.widthM, openings: next.openings, assumption: false }));
   };
   return (
     <div className="stack props">
@@ -490,7 +492,13 @@ function RoomFields({
   if (!room) return <p>Room not found.</p>;
   const unit = lengthUnit(project.units);
   const setLength = (key: 'xM' | 'yM' | 'zM' | 'lengthM' | 'widthM' | 'heightM', display: number) => {
-    onChange(updateRoom(project, room.id, { [key]: lengthToM(display, project.units), assumption: false }));
+    const meters = lengthToM(display, project.units);
+    if (key === 'lengthM' || key === 'widthM') {
+      const next = resizeSpan(room, key === 'lengthM' ? 'x' : 'y', meters);
+      onChange(updateRoom(project, room.id, { lengthM: next.lengthM, widthM: next.widthM, openings: next.openings, assumption: false }));
+      return;
+    }
+    onChange(updateRoom(project, room.id, { [key]: meters, assumption: false }));
   };
   const setSurface = (face: 'floor' | 'ceiling', constructionId: string | null) => {
     onChange(assignSurface(project, room, face, constructionId, assemblies));
@@ -643,7 +651,17 @@ function OpeningFields({
       </label>
       <label className="field">
         <span>Wall</span>
-        <select value={opening.face} onChange={event => patch({ face: event.target.value as typeof opening.face })}>
+        <select
+          value={opening.face}
+          onChange={event => {
+            const face = event.target.value as typeof opening.face;
+            const span = face === 'px' || face === 'nx' ? room.widthM : room.lengthM;
+            const obstacles = room.openings.filter(item => item.id !== opening.id && item.face === face);
+            const offsetM = placeBeside(opening.offsetM, opening.widthM, span, obstacles);
+            if (offsetM === null) return;
+            patch({ face, offsetM });
+          }}
+        >
           {WALL_FACES.map(face => (
             <option key={face.id} value={face.id}>
               {wallPlaceLabel(room, face.id, project.rooms)}
@@ -651,8 +669,25 @@ function OpeningFields({
           ))}
         </select>
       </label>
-      <UnitField label="Offset" unit={unit} value={asLength(opening.offsetM)} onCommit={value => patch({ offsetM: lengthToM(value, project.units) })} />
-      <UnitField label="Width" unit={unit} value={asLength(opening.widthM)} onCommit={value => patch({ widthM: lengthToM(value, project.units) })} />
+      <UnitField
+        label="Offset"
+        unit={unit}
+        value={asLength(opening.offsetM)}
+        onCommit={value => patch({ offsetM: slideOpeningOffset(room, opening.id, lengthToM(value, project.units)) })}
+      />
+      <UnitField
+        label="Width"
+        unit={unit}
+        value={asLength(opening.widthM)}
+        onCommit={value => {
+          const widthM = Math.max(0, lengthToM(value, project.units));
+          const span = opening.face === 'px' || opening.face === 'nx' ? room.widthM : room.lengthM;
+          const obstacles = room.openings.filter(item => item.id !== opening.id && item.face === opening.face);
+          const offsetM = placeBeside(opening.offsetM, widthM, span, obstacles);
+          if (offsetM === null) return;
+          patch({ widthM, offsetM });
+        }}
+      />
       <UnitField label="Height" unit={unit} value={asLength(opening.heightM)} onCommit={value => patch({ heightM: lengthToM(value, project.units) })} />
       <UnitField label="Sill" unit={unit} value={asLength(opening.sillM)} onCommit={value => patch({ sillM: lengthToM(value, project.units) })} />
       <button

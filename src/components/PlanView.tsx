@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { getProduct } from '@/domain/catalog';
 import type { EditorTool, Opening, PlacedEquipment, Project, Room, Selection, WallFace } from '@/domain/types';
-import { formatArea, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
+import { METERS_PER_FOOT, formatArea, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
+import { clampSharedEdge, moveRoomEdge, slideOpeningsTogether } from '@/domain/spanFit';
 import { WALL_FACE_IDS, touchingRooms } from '@/domain/walls';
 
 const SNAP_M = 0.05;
@@ -64,6 +65,142 @@ function snap(value: number): number {
   return Math.round(value / SNAP_M) * SNAP_M;
 }
 
+function gridStep(pxPerM: number): number {
+  const steps = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50];
+  const target = 32;
+  let best = steps[steps.length - 1];
+  let bestScore = Infinity;
+  for (const step of steps) {
+    const px = step * Math.max(pxPerM, 1);
+    const score = Math.abs(Math.log(px / target));
+    if (px >= 14 && px <= 72 && score < bestScore) {
+      best = step;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function formatDelta(meters: number, units: Project['units']): string {
+  const rounded = Math.round(mToLength(meters, units));
+  const body = `${formatNumber(Math.abs(rounded), 0)} ${lengthUnit(units)}`;
+  if (rounded > 0) return `+${body}`;
+  if (rounded < 0) return `-${body}`;
+  return body;
+}
+
+function niceInt(value: number): number {
+  const steps = [1, 2, 5, 10, 20, 50, 100];
+  return steps.find(step => step >= value) ?? steps[steps.length - 1];
+}
+
+function dragUnitStep(pxPerM: number, units: Project['units']): number {
+  const pxPerUnit = Math.max(pxPerM, 1) * (units === 'IP' ? METERS_PER_FOOT : 1);
+  return niceInt(Math.max(1, 18 / pxPerUnit));
+}
+
+function quantizeMeters(meters: number, step: number, units: Project['units']): number {
+  const per = units === 'IP' ? METERS_PER_FOOT : 1;
+  return round3((Math.round(meters / per / step) * step) * per);
+}
+
+function clampSpan(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, Math.min(min, max)), Math.max(min, max));
+}
+
+function dragReadoutPoint(face: WallFace, edge: number, along: number, inset: number): { x: number; y: number } {
+  if (face === 'px') return { x: edge - inset, y: along };
+  if (face === 'nx') return { x: edge + inset, y: along };
+  if (face === 'py') return { x: along, y: edge - inset };
+  return { x: along, y: edge + inset };
+}
+
+function round3(value: number): number {
+  return Number(value.toFixed(3));
+}
+
+const WALL_TOUCH_M = 0.08;
+
+function edgeValue(room: Room, face: WallFace): number {
+  if (face === 'px') return room.xM + room.lengthM;
+  if (face === 'nx') return room.xM;
+  if (face === 'py') return room.yM + room.widthM;
+  return room.yM;
+}
+
+function partnerFace(room: Room, face: WallFace, other: Room): WallFace | null {
+  const plane = edgeValue(room, face);
+  if (face === 'px' || face === 'nx') {
+    const right = Math.abs(other.xM + other.lengthM - plane);
+    const left = Math.abs(other.xM - plane);
+    if (right > WALL_TOUCH_M && left > WALL_TOUCH_M) return null;
+    return right <= left ? 'px' : 'nx';
+  }
+  const top = Math.abs(other.yM + other.widthM - plane);
+  const bottom = Math.abs(other.yM - plane);
+  if (top > WALL_TOUCH_M && bottom > WALL_TOUCH_M) return null;
+  return top <= bottom ? 'py' : 'ny';
+}
+
+function moveEdges(base: readonly Room[], edges: { id: string; face: WallFace }[], edge: number): Room[] {
+  const entries = edges.flatMap(item => {
+    const room = base.find(candidate => candidate.id === item.id);
+    return room ? [{ room, face: item.face }] : [];
+  });
+  const limited = clampSharedEdge(entries, edge);
+  const byId = new Map(edges.map(item => [item.id, item.face]));
+  return base.map(room => {
+    const face = byId.get(room.id);
+    return face ? moveRoomEdge(room, face, limited) : room;
+  });
+}
+
+function openingAlong(room: Room, opening: Opening): number {
+  return (opening.face === 'px' || opening.face === 'nx' ? room.yM : room.xM) + opening.offsetM;
+}
+
+function alongPoint(face: WallFace, point: { xM: number; yM: number }): number {
+  return face === 'px' || face === 'nx' ? point.yM : point.xM;
+}
+
+
+function settleDrag(
+  current:
+    | { kind: 'wall'; edges: { id: string; face: WallFace }[]; base: Room[]; face: WallFace }
+    | { kind: 'opening'; moves: { roomId: string; openingId: string }[]; base: Room[]; face: WallFace },
+  rooms: Room[],
+  pxPerM: number,
+  units: Project['units'],
+): Room[] {
+  const step = dragUnitStep(pxPerM, units);
+  if (current.kind === 'wall') {
+    const before = current.base.find(room => room.id === current.edges[0].id);
+    const after = rooms.find(room => room.id === current.edges[0].id);
+    if (!before || !after) return rooms;
+    const delta = quantizeMeters(edgeValue(after, current.face) - edgeValue(before, current.face), step, units);
+    if (Math.abs(delta) < 1e-6) return current.base;
+    return moveEdges(current.base, current.edges, edgeValue(before, current.face) + delta);
+  }
+  const move = current.moves[0];
+  const beforeRoom = current.base.find(room => room.id === move.roomId);
+  const before = beforeRoom?.openings.find(item => item.id === move.openingId);
+  const after = rooms.find(room => room.id === move.roomId)?.openings.find(item => item.id === move.openingId);
+  if (!beforeRoom || !before || !after) return rooms;
+  const delta = quantizeMeters(after.offsetM - before.offsetM, step, units);
+  if (Math.abs(delta) < 1e-6) return current.base;
+  const origin = current.face === 'px' || current.face === 'nx' ? beforeRoom.yM : beforeRoom.xM;
+  return slideOpeningsTogether(current.base, current.moves, origin + before.offsetM + delta);
+}
+
+function geometryChanged(base: readonly Room[], next: readonly Room[]): boolean {
+  return next.some(room => {
+    const prev = base.find(item => item.id === room.id);
+    if (!prev) return true;
+    if (prev.xM !== room.xM || prev.yM !== room.yM || prev.lengthM !== room.lengthM || prev.widthM !== room.widthM) return true;
+    return room.openings.some(opening => prev.openings.find(item => item.id === opening.id)?.offsetM !== opening.offsetM);
+  });
+}
+
 function bounds(rooms: readonly Room[]): ViewBox {
   if (rooms.length === 0) return { minX: -1, minY: -1, w: 14, h: 10 };
   const pad = 3.6;
@@ -72,6 +209,17 @@ function bounds(rooms: readonly Room[]): ViewBox {
   const maxX = Math.max(...rooms.map(room => room.xM + room.lengthM)) + pad;
   const maxY = Math.max(...rooms.map(room => room.yM + room.widthM)) + pad;
   return { minX, minY, w: Math.max(maxX - minX, 2), h: Math.max(maxY - minY, 2) };
+}
+
+function coverView(view: ViewBox, aspect: number): ViewBox {
+  if (!(aspect > 0) || !(view.h > 0)) return view;
+  if (Math.abs(view.w / view.h - aspect) < 1e-4) return view;
+  if (view.w / view.h < aspect) {
+    const w = view.h * aspect;
+    return { minX: view.minX + (view.w - w) / 2, minY: view.minY, w, h: view.h };
+  }
+  const h = view.w / aspect;
+  return { minX: view.minX, minY: view.minY + (view.h - h) / 2, w: view.w, h };
 }
 
 function wallLine(room: Room, face: WallFace): { x1: number; y1: number; x2: number; y2: number } {
@@ -141,6 +289,7 @@ export function PlanView({
   onDrawRoom,
   onPlace,
   onContextMenu,
+  onRoomsChange,
 }: {
   project: Project;
   selection: Selection;
@@ -150,16 +299,33 @@ export function PlanView({
   onDrawRoom: (rect: { xM: number; yM: number; lengthM: number; widthM: number }) => void;
   onPlace: (point: { xM: number; yM: number }) => void;
   onContextMenu: (selection: Selection, x: number, y: number) => void;
+  onRoomsChange: (rooms: Room[]) => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState<ViewBox>(() => bounds(project.rooms));
   const [pxPerM, setPxPerM] = useState(40);
   const [draft, setDraft] = useState<{ xM: number; yM: number; lengthM: number; widthM: number } | null>(null);
-  const drag = useRef<{ kind: 'pan' | 'draw' | 'place'; x: number; y: number; pointerX: number; pointerY: number; view: ViewBox } | null>(null);
+  const [preview, setPreview] = useState<Room[] | null>(null);
+  const [gesture, setGesture] = useState<{ kind: 'wall' | 'opening'; roomId: string; face: WallFace; openingId?: string } | null>(null);
+  const [readout, setReadout] = useState<{ x: number; y: number; text: string } | null>(null);
+  const previewRef = useRef<Room[] | null>(null);
+  const suppressClick = useRef(false);
+  const drag = useRef<
+    | { kind: 'pan' | 'draw' | 'place'; x: number; y: number; pointerX: number; pointerY: number; view: ViewBox }
+    | { kind: 'wall'; edges: { id: string; face: WallFace }[]; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace }
+    | { kind: 'opening'; moves: { roomId: string; openingId: string }[]; grab: number; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace }
+    | null
+  >(null);
 
   useEffect(() => {
-    setView(bounds(project.rooms));
+    const rect = svgRef.current?.getBoundingClientRect();
+    const next = bounds(project.rooms);
+    setView(rect && rect.width > 0 && rect.height > 0 ? coverView(next, rect.width / rect.height) : next);
     setDraft(null);
+    previewRef.current = null;
+    setPreview(null);
+    setGesture(null);
+    setReadout(null);
   }, [fitToken, project.id]);
 
   useEffect(() => {
@@ -167,7 +333,10 @@ export function PlanView({
     if (!svg) return;
     const measure = () => {
       const rect = svg.getBoundingClientRect();
-      if (rect.width > 0) setPxPerM(rect.width / view.w);
+      if (rect.width <= 0 || rect.height <= 0) return;
+      setPxPerM(rect.width / view.w);
+      const covered = coverView(view, rect.width / rect.height);
+      if (covered !== view) setView(covered);
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -179,9 +348,10 @@ export function PlanView({
       const py = (event.clientY - rect.top) / rect.height;
       const wx = view.minX + px * view.w;
       const wy = view.minY + (1 - py) * view.h;
-      const factor = event.deltaY > 0 ? 1.12 : 0.88;
-      const w = Math.min(Math.max(view.w * factor, 2), 400);
-      const h = Math.min(Math.max(view.h * factor, 2), 400);
+      let factor = event.deltaY > 0 ? 1.12 : 0.88;
+      factor = factor > 1 ? Math.min(factor, 400 / view.w, 400 / view.h) : Math.max(factor, 2 / view.w, 2 / view.h);
+      const w = view.w * factor;
+      const h = view.h * factor;
       setView({ minX: wx - px * w, minY: wy - (1 - py) * h, w, h });
     };
     svg.addEventListener('wheel', onWheel, { passive: false });
@@ -200,21 +370,32 @@ export function PlanView({
     return { xM: view.minX + px * view.w, yM: view.minY + (1 - py) * view.h };
   };
 
+  const showLive = (rooms: Room[] | null) => {
+    previewRef.current = rooms;
+    setPreview(rooms);
+  };
+  const rooms = preview ?? project.rooms;
   const highlightedRoom =
     selection.kind === 'room'
-      ? project.rooms.find(room => room.id === selection.id)
+      ? rooms.find(room => room.id === selection.id)
       : selection.kind === 'surface' && selection.face !== 'walls'
-        ? project.rooms.find(room => room.id === selection.roomId)
+        ? rooms.find(room => room.id === selection.roomId)
         : undefined;
   const selectedOpening = selection.kind === 'opening'
-    ? project.rooms.flatMap(room => room.openings.filter(opening => opening.id === selection.id).map(opening => ({ room, opening })))[0]
+    ? rooms.flatMap(room => room.openings.filter(opening => opening.id === selection.id).map(opening => ({ room, opening })))[0]
     : undefined;
   const selectedDoorway = selectedOpening?.opening.kind === 'door' ? doorwayKey(selectedOpening.room, selectedOpening.opening) : undefined;
   const selectedWall = selection.kind === 'surface' && selection.face === 'walls' ? selection.wallFace : undefined;
   const dimRoom =
     selection.kind === 'room' || selection.kind === 'surface' || selection.kind === 'opening'
-      ? project.rooms.find(room => room.id === (selection.kind === 'room' ? selection.id : selection.roomId))
+      ? rooms.find(room => room.id === (selection.kind === 'room' ? selection.id : selection.roomId))
       : undefined;
+  const gestureRoom = gesture ? rooms.find(room => room.id === gesture.roomId) : undefined;
+  const measuredRoom = gestureRoom ?? dimRoom;
+  const measuredFace = gesture?.kind === 'wall' ? gesture.face : selectedWall;
+  const measuredOpening = gesture?.kind === 'opening'
+    ? gestureRoom?.openings.find(opening => opening.id === gesture.openingId)
+    : undefined;
   const openHitMenu = (event: ReactMouseEvent, next: Selection) => {
     event.preventDefault();
     event.stopPropagation();
@@ -232,13 +413,19 @@ export function PlanView({
   };
 
   return (
-    <div className={`plan-wrap${tool.kind === 'draw' ? ' is-draw' : ''}${tool.kind === 'place' ? ' is-place' : ''}`}>
+    <div className={`plan-wrap${tool.kind === 'draw' ? ' is-draw' : ''}${tool.kind === 'place' ? ' is-place' : ''}${tool.kind === 'select' ? ' is-select' : ''}${gesture ? ' is-dragging' : ''}`}>
       <svg
         ref={svgRef}
         viewBox={`${view.minX} ${-(view.minY + view.h)} ${view.w} ${view.h}`}
         style={{ fontFamily: '"IBM Plex Sans", "Segoe UI", sans-serif' }}
+        onMouseDown={event => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+        }}
         onPointerDown={event => {
           if (event.button !== 0) return;
+          document.documentElement.style.userSelect = 'none';
+          window.getSelection()?.removeAllRanges();
           const point = toWorld(event.clientX, event.clientY);
           if (tool.kind === 'draw') {
             drag.current = { kind: 'draw', x: snap(point.xM), y: snap(point.yM), pointerX: event.clientX, pointerY: event.clientY, view };
@@ -251,13 +438,50 @@ export function PlanView({
             return;
           }
           const target = event.target as Element;
-          if (target.closest('[data-hit]')) return;
+          const hit = target.closest('[data-hit]');
+          if (tool.kind === 'select' && hit) {
+            const roomId = hit.getAttribute('data-room');
+            const room = roomId ? project.rooms.find(item => item.id === roomId) : undefined;
+            if (hit.getAttribute('data-hit') === 'wall' && room) {
+              const face = hit.getAttribute('data-face') as WallFace;
+              const partners = touchingRooms(room, face, project.rooms)
+                .map(other => ({ id: other.id, face: partnerFace(room, face, other) }))
+                .filter((item): item is { id: string; face: WallFace } => item.face !== null);
+              drag.current = { kind: 'wall', edges: [{ id: room.id, face }, ...partners], base: project.rooms, pointerX: event.clientX, pointerY: event.clientY, view, face };
+              setGesture({ kind: 'wall', roomId: room.id, face });
+              event.currentTarget.setPointerCapture(event.pointerId);
+              return;
+            }
+            if (hit.getAttribute('data-hit') === 'opening' && room) {
+              const openingId = hit.getAttribute('data-opening');
+              const opening = room.openings.find(item => item.id === openingId);
+              if (opening) {
+                const key = doorwayKey(room, opening);
+                const pair = project.rooms.flatMap(other => other.openings.filter(item => item.id !== opening.id && item.kind === opening.kind && doorwayKey(other, item) === key).map(item => ({ roomId: other.id, openingId: item.id })))[0];
+                drag.current = {
+                  kind: 'opening',
+                  moves: [{ roomId: room.id, openingId: opening.id }, ...(pair ? [pair] : [])],
+                  grab: alongPoint(opening.face, point) - openingAlong(room, opening),
+                  base: project.rooms,
+                  pointerX: event.clientX,
+                  pointerY: event.clientY,
+                  view,
+                  face: opening.face,
+                };
+                setGesture({ kind: 'opening', roomId: room.id, face: opening.face, openingId: opening.id });
+                event.currentTarget.setPointerCapture(event.pointerId);
+                return;
+              }
+            }
+          }
+          if (hit) return;
           drag.current = { kind: 'pan', x: point.xM, y: point.yM, pointerX: event.clientX, pointerY: event.clientY, view };
           event.currentTarget.setPointerCapture(event.pointerId);
         }}
         onPointerMove={event => {
           const current = drag.current;
           if (!current) return;
+          if (!window.getSelection()?.isCollapsed) window.getSelection()?.removeAllRanges();
           const point = toWorld(event.clientX, event.clientY);
           if (current.kind === 'pan') {
             const rect = svgRef.current?.getBoundingClientRect();
@@ -271,9 +495,51 @@ export function PlanView({
             const xM = Math.min(current.x, snap(point.xM));
             const yM = Math.min(current.y, snap(point.yM));
             setDraft({ xM, yM, lengthM: Math.max(Math.abs(snap(point.xM) - current.x), SNAP_M), widthM: Math.max(Math.abs(snap(point.yM) - current.y), SNAP_M) });
+            return;
+          }
+          if (current.kind === 'wall') {
+            const raw = current.face === 'px' || current.face === 'nx' ? point.xM : point.yM;
+            const next = moveEdges(current.base, current.edges, raw);
+            showLive(next);
+            const id = current.edges[0].id;
+            const before = current.base.find(room => room.id === id);
+            const after = next.find(room => room.id === id);
+            if (before && after) {
+              const vertical = current.face === 'px' || current.face === 'nx';
+              const along = clampSpan(vertical ? point.yM : point.xM, vertical ? after.yM : after.xM, vertical ? after.yM + after.widthM : after.xM + after.lengthM);
+              const pos = dragReadoutPoint(current.face, edgeValue(after, current.face), along, Math.max(0.45, font * 2.2));
+              const shown = quantizeMeters(edgeValue(after, current.face) - edgeValue(before, current.face), dragUnitStep(pxPerM, project.units), project.units);
+              setReadout({ ...pos, text: formatDelta(shown, project.units) });
+            }
+            return;
+          }
+          if (current.kind === 'opening') {
+            const worldStart = alongPoint(current.face, point) - current.grab;
+            const next = slideOpeningsTogether(current.base, current.moves, worldStart);
+            showLive(next);
+            const move = current.moves[0];
+            const before = current.base.find(room => room.id === move.roomId)?.openings.find(item => item.id === move.openingId);
+            const afterRoom = next.find(room => room.id === move.roomId);
+            const after = afterRoom?.openings.find(item => item.id === move.openingId);
+            if (before && after && afterRoom) {
+              const vertical = current.face === 'px' || current.face === 'nx';
+              const along = clampSpan(vertical ? point.yM : point.xM, vertical ? afterRoom.yM : afterRoom.xM, vertical ? afterRoom.yM + afterRoom.widthM : afterRoom.xM + afterRoom.lengthM);
+              const pos = dragReadoutPoint(current.face, edgeValue(afterRoom, current.face), along, Math.max(0.45, font * 2.2));
+              const shown = quantizeMeters(after.offsetM - before.offsetM, dragUnitStep(pxPerM, project.units), project.units);
+              setReadout({ ...pos, text: formatDelta(shown, project.units) });
+            }
           }
         }}
+        onPointerCancel={() => {
+          document.documentElement.style.userSelect = '';
+          drag.current = null;
+          showLive(null);
+          setGesture(null);
+          setReadout(null);
+        }}
         onPointerUp={event => {
+          document.documentElement.style.userSelect = '';
+          window.getSelection()?.removeAllRanges();
           const current = drag.current;
           drag.current = null;
           if (!current) return;
@@ -291,6 +557,25 @@ export function PlanView({
           if (current.kind === 'place' && moved < 6) {
             const point = toWorld(event.clientX, event.clientY);
             onPlace({ xM: snap(point.xM), yM: snap(point.yM) });
+            return;
+          }
+          if (current.kind === 'wall' || current.kind === 'opening') {
+            const next = previewRef.current ? settleDrag(current, previewRef.current, pxPerM, project.units) : null;
+            showLive(null);
+            setGesture(null);
+            setReadout(null);
+            if (moved > 3) {
+              suppressClick.current = true;
+              if (current.kind === 'wall') onSelect({ kind: 'surface', roomId: current.edges[0].id, face: 'walls', wallFace: current.face });
+              else onSelect({ kind: 'opening', roomId: current.moves[0].roomId, id: current.moves[0].openingId });
+            }
+            if (next && geometryChanged(current.base, next)) {
+              onRoomsChange(next.map(room => {
+                const prev = current.base.find(item => item.id === room.id);
+                const movedRoom = !!prev && (prev.xM !== room.xM || prev.yM !== room.yM || prev.lengthM !== room.lengthM || prev.widthM !== room.widthM || room.openings.some(opening => prev.openings.find(item => item.id === opening.id)?.offsetM !== opening.offsetM));
+                return movedRoom && room.assumption ? { ...room, assumption: false } : room;
+              }));
+            }
           }
         }}
       >
@@ -305,7 +590,7 @@ export function PlanView({
           </pattern>
         </defs>
         <g transform="scale(1,-1)">
-          {project.rooms.map(room => (
+          {rooms.map(room => (
             <rect
               key={room.id}
               data-hit="room"
@@ -323,9 +608,9 @@ export function PlanView({
               onContextMenu={event => openHitMenu(event, { kind: 'room', id: room.id })}
             />
           ))}
-          <SheetGrid view={view} />
-          <PlanWalls rooms={project.rooms} />
-          {project.rooms.flatMap(room =>
+          <SheetGrid view={view} pxPerM={pxPerM} />
+          <PlanWalls rooms={rooms} />
+          {rooms.flatMap(room =>
             room.openings.map(opening => {
               const graphic = graphicWall(room.surfaces.walls[opening.face].constructionId);
               const gap = openingGap(room, opening, graphic.thickness);
@@ -349,13 +634,15 @@ export function PlanView({
               );
             })
           )}
-          {project.rooms.flatMap(room =>
+          {rooms.flatMap(room =>
             WALL_FACE_IDS.map(face => {
               const line = wallLine(room, face);
               return (
                 <line
                   key={`${room.id}-${face}-hit`}
                   data-hit="wall"
+                  data-room={room.id}
+                  data-face={face}
                   x1={line.x1}
                   y1={line.y1}
                   x2={line.x2}
@@ -364,6 +651,10 @@ export function PlanView({
                   strokeWidth={0.5}
                   onClick={event => {
                     event.stopPropagation();
+                    if (suppressClick.current) {
+                      suppressClick.current = false;
+                      return;
+                    }
                     if (tool.kind !== 'select') return;
                     onSelect({ kind: 'surface', roomId: room.id, face: 'walls', wallFace: face });
                   }}
@@ -372,13 +663,15 @@ export function PlanView({
               );
             })
           )}
-          {project.rooms.flatMap(room =>
+          {rooms.flatMap(room =>
             room.openings.map(opening => {
               const ends = openingEnds(room, opening);
               return (
                 <line
                   key={`${opening.id}-hit`}
                   data-hit="opening"
+                  data-room={room.id}
+                  data-opening={opening.id}
                   x1={ends.x0}
                   y1={ends.y0}
                   x2={ends.x1}
@@ -387,6 +680,10 @@ export function PlanView({
                   strokeWidth={0.36}
                   onClick={event => {
                     event.stopPropagation();
+                    if (suppressClick.current) {
+                      suppressClick.current = false;
+                      return;
+                    }
                     if (tool.kind !== 'select') return;
                     onSelect({ kind: 'opening', roomId: room.id, id: opening.id });
                   }}
@@ -395,7 +692,7 @@ export function PlanView({
               );
             })
           )}
-          {project.rooms.map(room => (
+          {rooms.map(room => (
             <g key={`${room.id}-label`} transform={`translate(${room.xM + room.lengthM / 2} ${room.yM + room.widthM / 2}) scale(1,-1)`} pointerEvents="none">
               <text textAnchor="middle" fontSize={font} fontWeight={500} fill={INK}>
                 {room.name}
@@ -438,7 +735,7 @@ export function PlanView({
             />
           )}
           {selection.kind === 'opening' && (() => {
-            const room = project.rooms.find(item => item.id === selection.roomId);
+            const room = rooms.find(item => item.id === selection.roomId);
             const opening = room?.openings.find(item => item.id === selection.id);
             if (!room || !opening) return null;
             const graphic = graphicWall(room.surfaces.walls[opening.face].constructionId);
@@ -453,7 +750,9 @@ export function PlanView({
               />
             );
           })()}
-          {dimRoom && <RoomDimensions room={dimRoom} rooms={project.rooms} units={project.units} fontM={font} wallFace={selectedWall} />}
+          {measuredRoom && <RoomDimensions room={measuredRoom} rooms={rooms} units={project.units} fontM={font} wallFace={measuredFace} />}
+          {measuredRoom && measuredOpening && <OpeningSlideDimension room={measuredRoom} opening={measuredOpening} units={project.units} fontM={font} />}
+          {readout && <DragReadout x={readout.x} y={readout.y} text={readout.text} fontM={font} />}
         </g>
       </svg>
       <div className="plan-foot">
@@ -629,23 +928,49 @@ function EquipmentMark({
   );
 }
 
-function SheetGrid({ view }: { view: ViewBox }) {
-  const step = view.w > 80 ? 5 : view.w > 40 ? 2 : 1;
+function DragReadout({ x, y, text, fontM }: { x: number; y: number; text: string; fontM: number }) {
+  const height = fontM * 1.35;
+  const width = Math.max(fontM * 3.4, fontM * 0.62 * text.length + fontM);
+  return (
+    <g transform={`translate(${x} ${y}) scale(1,-1)`} pointerEvents="none">
+      <rect x={-width / 2} y={-height / 2} width={width} height={height} rx={height / 2} fill={DIM} />
+      <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.78} fill="#fff" stroke="none" fontWeight={600}>
+        {text}
+      </text>
+    </g>
+  );
+}
+
+function OpeningSlideDimension({ room, opening, units, fontM }: { room: Room; opening: Opening; units: Project['units']; fontM: number }) {
+  const gap = 0.55;
+  const label = formatLength(opening.offsetM, units, 2);
+  if (opening.face === 'px' || opening.face === 'nx') {
+    const x = edgeValue(room, opening.face) + (opening.face === 'px' ? gap : -gap);
+    return <Dimension x1={x} y1={room.yM} x2={x} y2={room.yM + opening.offsetM} label={label} fontM={fontM} outwardX={opening.face === 'px' ? 1 : -1} outwardY={0} />;
+  }
+  const y = edgeValue(room, opening.face) + (opening.face === 'py' ? gap : -gap);
+  return <Dimension x1={room.xM} y1={y} x2={room.xM + opening.offsetM} y2={y} label={label} fontM={fontM} outwardX={0} outwardY={opening.face === 'py' ? 1 : -1} />;
+}
+
+function SheetGrid({ view, pxPerM }: { view: ViewBox; pxPerM: number }) {
+  const step = gridStep(pxPerM);
+  const major = step * 5;
   const x0 = Math.floor(view.minX / step) * step;
   const y0 = Math.floor(view.minY / step) * step;
   const x1 = view.minX + view.w;
   const y1 = view.minY + view.h;
   const vertical: number[] = [];
   const horizontal: number[] = [];
-  for (let x = x0; x <= x1 + step * 0.01; x += step) vertical.push(Number(x.toFixed(3)));
-  for (let y = y0; y <= y1 + step * 0.01; y += step) horizontal.push(Number(y.toFixed(3)));
+  for (let x = x0; x <= x1 + step * 0.01; x += step) vertical.push(Number(x.toFixed(4)));
+  for (let y = y0; y <= y1 + step * 0.01; y += step) horizontal.push(Number(y.toFixed(4)));
+  const isMajor = (value: number) => Math.abs(value / major - Math.round(value / major)) < 1e-4;
   return (
-    <g stroke="#d2d2cc" strokeWidth={1} pointerEvents="none">
+    <g pointerEvents="none">
       {vertical.map(x => (
-        <line key={`x${x}`} x1={x} y1={y0} x2={x} y2={y1} vectorEffect="non-scaling-stroke" />
+        <line key={`x${x}`} x1={x} y1={y0} x2={x} y2={y1} stroke={isMajor(x) ? '#d0d0ca' : '#e4e4de'} strokeWidth={1} vectorEffect="non-scaling-stroke" />
       ))}
       {horizontal.map(y => (
-        <line key={`y${y}`} x1={x0} y1={y} x2={x1} y2={y} vectorEffect="non-scaling-stroke" />
+        <line key={`y${y}`} x1={x0} y1={y} x2={x1} y2={y} stroke={isMajor(y) ? '#d0d0ca' : '#e4e4de'} strokeWidth={1} vectorEffect="non-scaling-stroke" />
       ))}
     </g>
   );

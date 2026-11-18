@@ -417,10 +417,17 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
 .planning-issues h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0; }
 .planning-issues ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 168px; overflow: auto; }
 .planning-issues button { width: 100%; text-align: left; border: 0; background: var(--amber-bg); color: #6d4a09; padding: 6px 8px; font-size: 12px; }
-.plan-wrap { position: relative; flex: 1; min-height: 0; background: #f4f4f2; display: flex; flex-direction: column; }
+.plan-wrap { position: relative; flex: 1; min-height: 0; background: #f4f4f2; display: flex; flex-direction: column; user-select: none; }
 .plan-wrap svg { width: 100%; flex: 1; min-height: 0; display: block; touch-action: none; background: #f4f4f2; }
+.plan-wrap text { user-select: none; }
 .plan-wrap.is-draw svg { cursor: crosshair; }
 .plan-wrap.is-place svg { cursor: copy; }
+.plan-wrap.is-select [data-hit="wall"][data-face="px"],
+.plan-wrap.is-select [data-hit="wall"][data-face="nx"] { cursor: ew-resize; }
+.plan-wrap.is-select [data-hit="wall"][data-face="py"],
+.plan-wrap.is-select [data-hit="wall"][data-face="ny"] { cursor: ns-resize; }
+.plan-wrap.is-select [data-hit="opening"] { cursor: grab; }
+.plan-wrap.is-dragging [data-hit="opening"] { cursor: grabbing; }
 .plan-foot { display: flex; justify-content: space-between; gap: 12px; align-items: flex-end; padding: 6px 8px; background: white; border-top: 1px solid var(--line); }
 .plan-legend, .plan-scale { font-size: 11px; color: var(--ink); }
 .plan-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
