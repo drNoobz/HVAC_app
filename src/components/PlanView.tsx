@@ -343,6 +343,8 @@ export function PlanView({
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState<ViewBox>(() => bounds(project.rooms));
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const [pxPerM, setPxPerM] = useState(40);
   const [draft, setDraft] = useState<{ xM: number; yM: number; lengthM: number; widthM: number } | null>(null);
   const [chain, setChain] = useState<DrawPoint[] | null>(null);
@@ -420,12 +422,20 @@ export function PlanView({
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width > 0) setPxPerM(rect.width / view.w);
+  }, [view]);
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
     const measure = () => {
+      const current = viewRef.current;
       const rect = svg.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return;
-      setPxPerM(rect.width / view.w);
-      const covered = coverView(view, rect.width / rect.height);
-      if (covered !== view) setView(covered);
+      setPxPerM(rect.width / current.w);
+      const covered = coverView(current, rect.width / rect.height);
+      if (covered !== current) setView(covered);
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -433,14 +443,23 @@ export function PlanView({
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const rect = svg.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const current = viewRef.current;
+      let dy = event.deltaY;
+      if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) dy *= 16;
+      if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) dy *= rect.height;
+      // Trackpad sends many small pixel deltas; mouse wheel sends larger jumps.
+      // Scale by magnitude so Mac two-finger zoom stays smooth instead of ±12% per tick.
+      const intensity = event.ctrlKey || event.metaKey ? 0.01 : 0.0016;
+      let factor = Math.exp(dy * intensity);
+      factor = Math.min(1.15, Math.max(1 / 1.15, factor));
       const px = (event.clientX - rect.left) / rect.width;
       const py = (event.clientY - rect.top) / rect.height;
-      const wx = view.minX + px * view.w;
-      const wy = view.minY + (1 - py) * view.h;
-      let factor = event.deltaY > 0 ? 1.12 : 0.88;
-      factor = factor > 1 ? Math.min(factor, 400 / view.w, 400 / view.h) : Math.max(factor, 2 / view.w, 2 / view.h);
-      const w = view.w * factor;
-      const h = view.h * factor;
+      const wx = current.minX + px * current.w;
+      const wy = current.minY + (1 - py) * current.h;
+      factor = factor > 1 ? Math.min(factor, 400 / current.w, 400 / current.h) : Math.max(factor, 2 / current.w, 2 / current.h);
+      const w = current.w * factor;
+      const h = current.h * factor;
       setView({ minX: wx - px * w, minY: wy - (1 - py) * h, w, h });
     };
     svg.addEventListener('wheel', onWheel, { passive: false });
@@ -448,7 +467,7 @@ export function PlanView({
       observer.disconnect();
       svg.removeEventListener('wheel', onWheel);
     };
-  }, [view]);
+  }, []);
 
   const toWorld = (clientX: number, clientY: number) => {
     const svg = svgRef.current;

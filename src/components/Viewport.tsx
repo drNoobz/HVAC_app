@@ -502,6 +502,7 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
     controls.target.copy(overhead.target);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
+    controls.zoomSpeed = 0.45;
     controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     controls.update();
 
