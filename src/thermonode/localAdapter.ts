@@ -1,4 +1,6 @@
 import type { Project, SurfaceAssignment, WallFace } from '@/domain/types';
+import { interfaceTargets } from '@/domain/walls';
+import type { BuildingEnvelopeV1 } from './contract';
 import type { GeometryDocument } from './geometry';
 import { MATERIAL_SNAPSHOT, MATERIAL_SNAPSHOT_NOTE, materialByKey } from './materials';
 import {
@@ -18,6 +20,33 @@ const WALL_FACES: WallFace[] = ['px', 'nx', 'py', 'ny'];
 function sharedWallKey(walls: Record<WallFace, SurfaceAssignment>): string | null {
   const keys = WALL_FACES.map(face => walls[face].materialKey);
   return keys.every(key => key === keys[0]) ? (keys[0] ?? null) : null;
+}
+
+function hasConstruction(assignment: { constructionId?: string | null; layers?: unknown[] } | undefined): boolean {
+  return Boolean(assignment?.constructionId) || Boolean(assignment?.layers && assignment.layers.length > 0);
+}
+
+function envelopeFor(project: Project): BuildingEnvelopeV1 {
+  return {
+    interfaces: interfaceTargets(project.rooms).map(target => ({
+      key: target.key,
+      lengthM: target.lengthM,
+      outside: target.sides.length < 2,
+      spaces: target.sides.map(side => side.name),
+      hasConstruction: hasConstruction(project.interfaceWalls?.[target.key]),
+    })),
+    openings: project.rooms.flatMap(room =>
+      room.openings.map(opening => ({
+        id: opening.id,
+        roomId: room.id,
+        kind: opening.kind,
+        face: opening.face,
+        widthM: opening.widthM,
+        heightM: opening.heightM,
+        hasConstruction: hasConstruction(opening),
+      })),
+    ),
+  };
 }
 
 const UNAVAILABLE =
@@ -68,6 +97,7 @@ export function projectToBuildingModel(project: Project): BuildingModelV1 {
         sillM: opening.sillM,
       })),
     })),
+    envelope: envelopeFor(project),
   };
 }
 
@@ -213,12 +243,41 @@ export function validateModel(model: BuildingModelV1): ValidateModelResponseV1 {
         issues.push({
           severity: 'warning',
           code: 'room-overlap',
-          message: `${model.rooms[i].name} and ${model.rooms[j].name} overlap by about ${area.toFixed(2)} m² in plan. This is a geometry notice, not a solver result.`,
+          message: `${model.rooms[i].name} and ${model.rooms[j].name} overlap by about ${area.toFixed(2)} m² in plan.`,
           subjectId: model.rooms[i].id,
         });
       }
     }
   }
+  const seenInterfaces = new Set<string>();
+  model.envelope?.interfaces.forEach(item => {
+    if (seenInterfaces.has(item.key)) {
+      issues.push({ severity: 'error', code: 'duplicate-interface', message: `Duplicate interface ${item.key}.`, subjectId: item.key });
+    }
+    seenInterfaces.add(item.key);
+    if (!(item.lengthM > 0)) {
+      issues.push({ severity: 'error', code: 'interface-length', message: `${item.spaces.join(' · ') || 'Interface'} has no length.`, subjectId: item.key });
+    }
+    if (!item.hasConstruction) {
+      const label = item.outside ? 'interface with outside air' : 'interface';
+      issues.push({
+        severity: 'info',
+        code: 'envelope-unassigned',
+        message: `${item.spaces.join(' · ') || 'Interface'} ${label} has no construction.`,
+        subjectId: item.key,
+      });
+    }
+  });
+  model.envelope?.openings.forEach(opening => {
+    if (!opening.hasConstruction) {
+      issues.push({
+        severity: 'info',
+        code: 'opening-unassigned',
+        message: `${opening.kind} ${opening.id} has no construction.`,
+        subjectId: opening.id,
+      });
+    }
+  });
   const mapped = toGeometryDocument(model);
   const valid = !issues.some(issue => issue.severity === 'error');
   return {

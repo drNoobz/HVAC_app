@@ -1,27 +1,37 @@
 'use client';
 
 import { useMemo } from 'react';
-import { buildBom, buildSchedule, scheduleCsv, projectSummary } from '@/domain/schedule';
-import { DISCLAIMER, type Project } from '@/domain/types';
+import { buildBom, buildConstructionBom, buildConstructionSchedule, buildSchedule, scheduleCsv, projectSummary } from '@/domain/schedule';
+import type { ConstructionAssembly, ConstructionMaterial } from '@/domain/constructionLibrary';
+import { type Project } from '@/domain/types';
 import { downloadText, fileSlug } from '@/domain/download';
 
-export function SchedulePanel({ project }: { project: Project }) {
+export function SchedulePanel({
+  project,
+  assemblies,
+  materials,
+}: {
+  project: Project;
+  assemblies: ConstructionAssembly[];
+  materials: ConstructionMaterial[];
+}) {
   const lines = useMemo(() => buildSchedule(project), [project]);
   const bom = useMemo(() => buildBom(lines), [lines]);
+  const construction = useMemo(() => buildConstructionSchedule(project, assemblies, materials), [project, assemblies, materials]);
+  const constructionBom = useMemo(() => buildConstructionBom(construction, project.units), [construction, project.units]);
   const quantity = lines.reduce((sum, line) => sum + line.quantity, 0);
   return (
     <div className="schedule print-root">
       <header className="schedule-head">
         <div>
           <p className="kicker">Preliminary</p>
-          <h2>Equipment schedule and bill of materials</h2>
-          <p className="muted">{DISCLAIMER}</p>
+          <h2>Equipment schedule, construction, and bill of materials</h2>
         </div>
         <div className="button-row">
           <button
             type="button"
             className="btn"
-            onClick={() => downloadText(`${fileSlug(project.name)}-schedule.csv`, scheduleCsv(project, lines, bom), 'text/csv')}
+            onClick={() => downloadText(`${fileSlug(project.name)}-schedule.csv`, scheduleCsv(project, lines, bom, construction, constructionBom), 'text/csv')}
           >
             Export CSV
           </button>
@@ -31,7 +41,7 @@ export function SchedulePanel({ project }: { project: Project }) {
             onClick={() =>
               downloadText(
                 `${fileSlug(project.name)}-summary.json`,
-                JSON.stringify(projectSummary(project, lines, bom), null, 2),
+                JSON.stringify(projectSummary(project, lines, bom, construction, constructionBom), null, 2),
                 'application/json'
               )
             }
@@ -44,10 +54,10 @@ export function SchedulePanel({ project }: { project: Project }) {
         </div>
       </header>
       <p className="summary-line">
-        {lines.length} placed items · quantity {quantity} · {bom.length} BoM lines · display units {project.units === 'IP' ? 'ft, CFM, Btu/h' : 'm, L/s, kW'}
+        {lines.length} placed items · quantity {quantity} · {bom.length} equipment BoM lines · {construction.length} construction lines · display units {project.units === 'IP' ? 'ft, CFM, Btu/h' : 'm, L/s, kW'}
       </p>
       {lines.length === 0 ? (
-        <p className="empty">No equipment is placed. Choose a product in the catalog and place it in the model.</p>
+        <p className="empty">No equipment is placed.</p>
       ) : (
         <>
           <h3>Equipment schedule</h3>
@@ -64,7 +74,7 @@ export function SchedulePanel({ project }: { project: Project }) {
                   <th>Airflow</th>
                   <th>Capacity</th>
                   <th>Dimensions</th>
-                  <th>Room</th>
+                  <th>Space</th>
                   <th>System</th>
                   <th>Review</th>
                 </tr>
@@ -110,7 +120,6 @@ export function SchedulePanel({ project }: { project: Project }) {
             </table>
           </div>
           <h3>Preliminary bill of materials</h3>
-          <p className="muted">Aggregated by manufacturer and model. Assignments stay visible so the count can be traced to rooms and systems.</p>
           <div className="table-wrap">
             <table className="data-table">
               <thead>
@@ -153,6 +162,70 @@ export function SchedulePanel({ project }: { project: Project }) {
                         ))}
                       </ul>
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      {construction.length > 0 && (
+        <>
+          <h3>Preliminary construction</h3>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Name</th>
+                  <th>Space</th>
+                  <th>Size</th>
+                  <th>Thickness</th>
+                  <th>Component</th>
+                  <th>Layers</th>
+                  <th>Review</th>
+                </tr>
+              </thead>
+              <tbody>
+                {construction.map(line => (
+                  <tr key={line.id}>
+                    <td>{line.category}</td>
+                    <td>{line.name}</td>
+                    <td>{line.space}</td>
+                    <td>{line.size}</td>
+                    <td>{line.thickness}</td>
+                    <td>{line.component}</td>
+                    <td>{line.layers}</td>
+                    <td>
+                      <span className="flag amber">{line.reviewStatus}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <h3>Preliminary construction bill of materials</h3>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Component</th>
+                  <th>Quantity</th>
+                  <th>Length</th>
+                  <th>Layers</th>
+                  <th>Assignments</th>
+                </tr>
+              </thead>
+              <tbody>
+                {constructionBom.map(line => (
+                  <tr key={line.id}>
+                    <td>{line.category}</td>
+                    <td>{line.component}</td>
+                    <td className="num">{line.quantity}</td>
+                    <td>{line.size}</td>
+                    <td>{line.layers}</td>
+                    <td>{line.assignments}</td>
                   </tr>
                 ))}
               </tbody>

@@ -9,7 +9,12 @@ import {
   removeEquipment,
   removeRoom,
   removeSystem,
+  removeWallRun,
+  removeWallRunOpening,
+  setEdgeAssembly,
+  setInterfaceAssembly,
   setWallAssembly,
+  updateInterfaceAssignment,
   UNASSIGNED_SURFACE,
   updateEquipment,
   updateRoom,
@@ -31,6 +36,7 @@ import {
   type WallFace,
 } from '@/domain/types';
 import { formatArea, formatLength, lengthToM, lengthUnit, mToLength } from '@/domain/units';
+import { polygonArea } from '@/domain/wallDraw';
 import {
   assemblyCategoriesForFace,
   assemblyCategoriesForOpening,
@@ -43,17 +49,13 @@ import {
   type ConstructionCategory,
   type ConstructionMaterial,
 } from '@/domain/constructionLibrary';
-import { planningIssues } from '@/domain/issues';
-import { PLAN_SIDES, WALL_TYPES, wallFullyShared, wallPlaceLabel, touchingRooms } from '@/domain/walls';
+import { PLAN_SIDES, WALL_TYPES, edgePortions, facePortions, findInterface, interfaceTargets, northDegrees, wallPlaceLabel, type InterfaceTarget, type WallPortion } from '@/domain/walls';
 import { StackEditor } from './StackEditor';
-import { materialByKey } from '@/thermonode/materials';
-import type { ModelIssueV1 } from '@/thermonode/contract';
 import { TextField, UnitField } from './Fields';
 
 export function Inspector({
   project,
   selection,
-  issues,
   materials,
   assemblies,
   onChange,
@@ -63,7 +65,6 @@ export function Inspector({
 }: {
   project: Project;
   selection: Selection;
-  issues: ModelIssueV1[];
   materials: ConstructionMaterial[];
   assemblies: ConstructionAssembly[];
   onChange: (project: Project) => void;
@@ -71,39 +72,16 @@ export function Inspector({
   onDeleteProject: () => void;
   nameFocus?: number;
 }) {
-  const subjectId = selection.kind === 'surface' ? selection.roomId : 'id' in selection ? selection.id : undefined;
-  const relevant = issues.filter(issue => issue.severity !== 'info' && (!subjectId || issue.subjectId === subjectId));
-  const planning = planningIssues(project);
   return (
     <aside className="inspector">
-      {planning.length > 0 && (
-        <section className="planning-issues">
-          <h2>Issues · {planning.length}</h2>
-          <ul>
-            {planning.map(issue => (
-              <li key={issue.id}>
-                <button type="button" onClick={() => onSelect(issue.selection)}>
-                  {issue.message}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-      {relevant.length > 0 && (
-        <ul className="issue-list">
-          {relevant.map(issue => (
-            <li key={`${issue.code}-${issue.message}`} className={issue.severity}>
-              {issue.message}
-            </li>
-          ))}
-        </ul>
-      )}
       {selection.kind === 'project' && (
         <ProjectFields project={project} onChange={onChange} onDeleteProject={onDeleteProject} nameFocus={nameFocus} />
       )}
       {selection.kind === 'room' && (
         <RoomFields project={project} roomId={selection.id} assemblies={assemblies} onChange={onChange} onSelect={onSelect} nameFocus={nameFocus} />
+      )}
+      {selection.kind === 'interface' && (
+        <InterfaceFields project={project} interfaceKey={selection.key} materials={materials} assemblies={assemblies} onChange={onChange} />
       )}
       {selection.kind === 'surface' && (
         <SurfaceFields
@@ -111,6 +89,7 @@ export function Inspector({
           roomId={selection.roomId}
           face={selection.face}
           wallFace={selection.wallFace}
+          edge={selection.edge}
           materials={materials}
           assemblies={assemblies}
           onChange={onChange}
@@ -132,6 +111,10 @@ export function Inspector({
       {selection.kind === 'equipment' && (
         <EquipmentFields project={project} equipmentId={selection.id} onChange={onChange} onSelect={onSelect} />
       )}
+      {selection.kind === 'wallRun' && <WallRunFields project={project} wallId={selection.id} onChange={onChange} onSelect={onSelect} />}
+      {selection.kind === 'wallOpening' && (
+        <WallOpeningFields project={project} wallId={selection.wallId} openingId={selection.id} onChange={onChange} onSelect={onSelect} />
+      )}
     </aside>
   );
 }
@@ -150,7 +133,6 @@ function ProjectFields({
   return (
     <div className="stack">
       <h2>Project</h2>
-      <p className="muted">Started from {project.createdFrom.label}. Stored lengths are meters. The display unit is {project.units === 'IP' ? 'feet' : 'meters'}.</p>
       <TextField label="Name" value={project.name} focusToken={nameFocus} onCommit={name => onChange({ ...project, name })} />
       <TextField label="Location" value={project.location} onCommit={location => onChange({ ...project, location })} />
       <label className="field">
@@ -171,22 +153,21 @@ function ProjectFields({
           <option value="SI">SI (m, L/s, kW)</option>
         </select>
       </label>
+      <TextField
+        label="North, degrees clockwise from up"
+        value={String(Math.round(northDegrees(project.northDeg)))}
+        onCommit={text => {
+          const deg = Number(text);
+          if (!Number.isFinite(deg)) return;
+          const next = Math.round(northDegrees(deg));
+          onChange({ ...project, northDeg: next === 0 ? undefined : next });
+        }}
+      />
       <TextField label="Details" value={project.details} multiline onCommit={details => onChange({ ...project, details })} />
-      <p className="flag amber">Preliminary. This project is not a solver-sized design.</p>
       <button type="button" className="btn danger" onClick={onDeleteProject}>
         Delete project
       </button>
     </div>
-  );
-}
-
-function ThermoNodeNote({ materialKey }: { materialKey?: string | null }) {
-  if (!materialKey) return null;
-  const thermonode = materialByKey(materialKey);
-  return (
-    <p className="muted">
-      ThermoNode id still stored for the adapter: {thermonode?.name ?? materialKey}. Choosing a component clears it.
-    </p>
   );
 }
 
@@ -252,6 +233,156 @@ function stackThicknessMm(layers: { materialId: string; thicknessMm: number | nu
   return sum;
 }
 
+function interfacesOn(room: Room, anchor: string, rooms: readonly Room[]): InterfaceTarget[] {
+  return interfaceTargets(rooms)
+    .filter(target => target.sides.some(side => side.roomId === room.id && side.anchor === anchor))
+    .sort((a, b) => {
+      const start = (target: InterfaceTarget) => target.sides.find(side => side.roomId === room.id && side.anchor === anchor)?.startM ?? 0;
+      return start(a) - start(b);
+    });
+}
+
+function openingOnSide(opening: { offsetM: number; widthM: number }, startM: number, endM: number): boolean {
+  const mid = opening.offsetM + opening.widthM / 2;
+  return mid >= startM - 0.02 && mid <= endM + 0.02;
+}
+
+type WallPart = { kind: 'interface'; key: string; at: number } | { kind: 'opening'; id: string; at: number };
+
+function wallParts(room: Room, anchor: string, rooms: readonly Room[], openings: readonly { id: string; offsetM: number; widthM: number }[]): WallPart[] {
+  const interfaces = interfacesOn(room, anchor, rooms);
+  if (interfaces.length < 2) {
+    return openings
+      .map(opening => ({ kind: 'opening' as const, id: opening.id, at: opening.offsetM }))
+      .sort((a, b) => a.at - b.at);
+  }
+  const taken = new Set<string>();
+  const rows: Array<WallPart & { tie: number }> = [];
+  for (const target of interfaces) {
+    const side = target.sides.find(item => item.roomId === room.id && item.anchor === anchor);
+    const startM = side?.startM ?? 0;
+    const endM = side?.endM ?? startM;
+    rows.push({ kind: 'interface', key: target.key, at: startM, tie: 0 });
+    if (!side) continue;
+    for (const opening of openings) {
+      if (taken.has(opening.id) || !openingOnSide(opening, startM, endM)) continue;
+      taken.add(opening.id);
+      rows.push({ kind: 'opening', id: opening.id, at: opening.offsetM, tie: 1 });
+    }
+  }
+  rows.sort((a, b) => a.at - b.at || a.tie - b.tie);
+  for (const opening of [...openings].sort((a, b) => a.offsetM - b.offsetM)) {
+    if (!taken.has(opening.id)) rows.push({ kind: 'opening', id: opening.id, at: opening.offsetM, tie: 1 });
+  }
+  return rows;
+}
+
+function PortionLines({ portions, units }: { portions: readonly WallPortion[]; units: Project['units'] }) {
+  if (portions.length === 0) return null;
+  return (
+    <>
+      {portions.map((portion, index) => (
+        <p key={`${portion.kind}-${portion.startM}-${index}`} className="muted">
+          {portion.kind === 'interface' ? `Interface with ${portion.names.join(', ')}` : 'Interface with outside air'} · {formatLength(portion.endM - portion.startM, units, 2)}
+        </p>
+      ))}
+    </>
+  );
+}
+
+function EdgeWallFields({
+  project,
+  room,
+  edge,
+  materials,
+  assemblies,
+  onChange,
+}: {
+  project: Project;
+  room: Room;
+  edge: number;
+  materials: ConstructionMaterial[];
+  assemblies: ConstructionAssembly[];
+  onChange: (project: Project) => void;
+}) {
+  const loop = room.outline ?? [];
+  const start = loop[edge];
+  const end = loop[(edge + 1) % loop.length];
+  const lengthM = Math.hypot(end.x - start.x, end.y - start.y);
+  const children = interfacesOn(room, `e:${edge}`, project.rooms);
+  if (children.length > 1) {
+    return <InterfaceStack project={project} children={children} materials={materials} assemblies={assemblies} onChange={onChange} />;
+  }
+  const sole = children.length === 1 ? children[0] : null;
+  const assignment = sole
+    ? (project.interfaceWalls?.[sole.key] ?? { materialKey: null, constructionId: null, layers: [], note: UNASSIGNED_SURFACE })
+    : (room.edgeWalls?.[edge] ?? { materialKey: null, constructionId: null, layers: [], note: UNASSIGNED_SURFACE });
+  const layers = resolveStack(assignment, assemblies, materials);
+  const kind = WALL_TYPES.find(type => type.assemblyId === assignment.constructionId)?.id ?? '';
+  const write = (next: typeof assignment) => {
+    if (sole) {
+      onChange(updateInterfaceAssignment(project, sole.key, next));
+      return;
+    }
+    const edgeWalls = loop.map((_, index) => (index === edge ? next : room.edgeWalls?.[index] ?? { materialKey: null, constructionId: null, layers: [], note: UNASSIGNED_SURFACE }));
+    onChange(updateRoom(project, room.id, { assumption: false, edgeWalls }));
+  };
+  const setAssembly = (constructionId: string | null) => {
+    if (sole) onChange(setInterfaceAssembly(project, sole.key, constructionId, assemblies));
+    else onChange(setEdgeAssembly(project, room.id, edge, constructionId, assemblies));
+  };
+  return (
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">{room.name}</p>
+        <h2>Wall {edge + 1}</h2>
+      </header>
+      <div className="stat-row">
+        <span>{formatLength(lengthM, project.units, 2)}</span>
+      </div>
+      <PortionLines portions={edgePortions(room, edge, project.rooms)} units={project.units} />
+      <section className="prop-block">
+        <p className="prop-section">Size</p>
+        <label className="field">
+          <span>Kind</span>
+          <select
+            value={kind || 'custom'}
+            onChange={event => {
+              const type = WALL_TYPES.find(item => item.id === event.target.value);
+              if (type) setAssembly(type.assemblyId);
+            }}
+          >
+            {!kind && <option value="custom">Custom</option>}
+            {WALL_TYPES.map(type => (
+              <option key={type.id} value={type.id}>
+                {type.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <ComponentSelect
+          label="Component"
+          assemblies={assemblies}
+          categories={assemblyCategoriesForFace('walls')}
+          value={assignment.constructionId ?? null}
+          onChange={setAssembly}
+        />
+      </section>
+      <section className="prop-block">
+        <p className="prop-section">Layers</p>
+        <StackEditor
+          layers={layers}
+          materials={materials}
+          series={findAssembly(assemblies, assignment.constructionId)?.series ?? true}
+          units={project.units}
+          onChange={next => write({ ...assignment, materialKey: null, layers: next })}
+        />
+        <TextField label="Note" value={assignment.note} onCommit={note => write({ ...assignment, note })} />
+      </section>
+    </div>
+  );
+}
+
 function WallFaceFields({
   project,
   room,
@@ -274,28 +405,63 @@ function WallFaceFields({
   const unit = lengthUnit(project.units);
   const alongY = face === 'px' || face === 'nx';
   const lengthM = alongY ? room.widthM : room.lengthM;
-  const layers = resolveStack(assignment, assemblies, materials);
-  const thickness = stackThicknessMm(layers, materials);
-  const kind = WALL_TYPES.find(type => type.assemblyId === assignment.constructionId)?.id ?? '';
   const openings = room.openings.filter(opening => opening.face === face);
-  const partial = touchingRooms(room, face, project.rooms).length > 0 && !wallFullyShared(room, face, project.rooms);
+  const children = interfacesOn(room, `f:${face}`, project.rooms);
+  const sole = children.length === 1 ? children[0] : null;
+  const stack = sole ? (project.interfaceWalls?.[sole.key] ?? { materialKey: null, constructionId: null, layers: [], note: UNASSIGNED_SURFACE }) : assignment;
+  const layers = resolveStack(stack, assemblies, materials);
+  const thickness = stackThicknessMm(layers, materials);
+  const kind = WALL_TYPES.find(type => type.assemblyId === stack.constructionId)?.id ?? '';
+  const parts = wallParts(room, `f:${face}`, project.rooms, openings);
+  const openingPanel = (id: string) => (
+    <OpeningFields key={id} project={project} roomId={room.id} openingId={id} materials={materials} assemblies={assemblies} onChange={onChange} onSelect={onSelect} />
+  );
+  if (children.length > 1) {
+    return (
+      <div className="interface-stack">
+        {parts.map(part =>
+          part.kind === 'interface' ? (
+            <InterfaceFields key={part.key} project={project} interfaceKey={part.key} materials={materials} assemblies={assemblies} onChange={onChange} />
+          ) : (
+            openingPanel(part.id)
+          ),
+        )}
+      </div>
+    );
+  }
   const setRoomLength = (display: number) => {
     const next = resizeSpan(room, alongY ? 'y' : 'x', lengthToM(display, project.units));
     onChange(updateRoom(project, room.id, { lengthM: next.lengthM, widthM: next.widthM, openings: next.openings, assumption: false }));
   };
-  return (
+  const writeStack = (next: typeof stack) => {
+    if (sole) {
+      onChange(updateInterfaceAssignment(project, sole.key, next));
+      return;
+    }
+    onChange(
+      updateRoom(project, room.id, {
+        assumption: false,
+        surfaces: { ...room.surfaces, walls: { ...room.surfaces.walls, [face]: next } },
+      }),
+    );
+  };
+  const setAssembly = (constructionId: string | null) => {
+    if (sole) onChange(setInterfaceAssembly(project, sole.key, constructionId, assemblies));
+    else onChange(setWallAssembly(project, room.id, face, constructionId, assemblies));
+  };
+  const wallPanel = (
     <div className="stack props">
       <header className="prop-head">
         <p className="prop-kicker">Wall</p>
         <h2>{PLAN_SIDES[face].title} wall</h2>
       </header>
-      {partial && <p className="muted">Only part of this wall touches another room. The whole face uses one stack.</p>}
+      <PortionLines portions={facePortions(room, face, project.rooms)} units={project.units} />
       <section className="prop-block">
         <p className="prop-section">Size</p>
         <UnitField label="Length" unit={unit} value={mToLength(lengthM, project.units)} onCommit={setRoomLength} />
         <label className="field">
           <span>Thickness</span>
-          <span className="prop-value" title="Sum of the layer thicknesses">
+          <span className="prop-value">
             {thickness == null ? 'Not stated' : formatThickness(thickness, project.units)}
           </span>
         </label>
@@ -306,7 +472,100 @@ function WallFaceFields({
             value={kind || 'custom'}
             onChange={event => {
               const type = WALL_TYPES.find(item => item.id === event.target.value);
-              if (type) onChange(setWallAssembly(project, room.id, face, type.assemblyId, assemblies));
+              if (type) setAssembly(type.assemblyId);
+            }}
+          >
+            {!kind && <option value="custom">Custom</option>}
+            {WALL_TYPES.map(type => (
+              <option key={type.id} value={type.id}>
+                {type.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <ComponentSelect
+          label="Component"
+          assemblies={assemblies}
+          categories={assemblyCategoriesForFace('walls')}
+          value={stack.constructionId ?? null}
+          onChange={setAssembly}
+        />
+      </section>
+      <section className="prop-block">
+      <p className="prop-section">Layers</p>
+      <StackEditor
+        layers={layers}
+        materials={materials}
+        series={findAssembly(assemblies, assignment.constructionId)?.series ?? true}
+        units={project.units}
+        onChange={next => writeStack({ ...stack, materialKey: null, layers: next })}
+      />
+      <TextField label="Note" value={stack.note} onCommit={note => writeStack({ ...stack, note })} />
+      </section>
+      <section className="prop-block">
+      <p className="prop-section">Openings{openings.length > 0 ? ` · ${openings.length}` : ''}</p>
+      <div className="button-row">
+        <button type="button" className="btn" onClick={() => onChange(updateRoom(project, room.id, addOpening(room, 'door', face)))}>
+          Add door
+        </button>
+        <button type="button" className="btn" onClick={() => onChange(updateRoom(project, room.id, addOpening(room, 'window', face)))}>
+          Add window
+        </button>
+      </div>
+      </section>
+    </div>
+  );
+  if (openings.length === 0) return wallPanel;
+  return (
+    <div className="interface-stack">
+      {wallPanel}
+      {parts.map(part => (part.kind === 'opening' ? openingPanel(part.id) : null))}
+    </div>
+  );
+}
+
+function InterfaceFields({
+  project,
+  interfaceKey,
+  materials,
+  assemblies,
+  onChange,
+}: {
+  project: Project;
+  interfaceKey: string;
+  materials: ConstructionMaterial[];
+  assemblies: ConstructionAssembly[];
+  onChange: (project: Project) => void;
+}) {
+  const hit = findInterface(project.rooms, interfaceKey);
+  if (!hit) return <p>Interface not found.</p>;
+  const assignment = project.interfaceWalls?.[hit.key] ?? { materialKey: null, constructionId: null, layers: [], note: UNASSIGNED_SURFACE };
+  const layers = resolveStack(assignment, assemblies, materials);
+  const thickness = stackThicknessMm(layers, materials);
+  const kind = WALL_TYPES.find(type => type.assemblyId === assignment.constructionId)?.id ?? '';
+  const write = (next: typeof assignment) => onChange(updateInterfaceAssignment(project, hit.key, next));
+  return (
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">{hit.names.join(' · ')}</p>
+        <h2>Interface</h2>
+      </header>
+      <div className="stat-row">
+        <span>{formatLength(hit.lengthM, project.units, 2)}</span>
+      </div>
+      <section className="prop-block">
+        <p className="prop-section">Construction</p>
+        <label className="field">
+          <span>Thickness</span>
+          <span className="prop-value">{thickness == null ? 'Not stated' : formatThickness(thickness, project.units)}</span>
+        </label>
+        <label className="field">
+          <span>Kind</span>
+          <select
+            value={kind || 'custom'}
+            onChange={event => {
+              const type = WALL_TYPES.find(item => item.id === event.target.value);
+              if (type) onChange(setInterfaceAssembly(project, hit.key, type.assemblyId, assemblies));
             }}
           >
             {!kind && <option value="custom">Custom</option>}
@@ -322,60 +581,42 @@ function WallFaceFields({
           assemblies={assemblies}
           categories={assemblyCategoriesForFace('walls')}
           value={assignment.constructionId ?? null}
-          onChange={constructionId => onChange(setWallAssembly(project, room.id, face, constructionId, assemblies))}
+          onChange={constructionId => onChange(setInterfaceAssembly(project, hit.key, constructionId, assemblies))}
         />
       </section>
       <section className="prop-block">
-      <p className="prop-section">Layers</p>
-      <StackEditor
-        layers={layers}
-        materials={materials}
-        series={findAssembly(assemblies, assignment.constructionId)?.series ?? true}
-        units={project.units}
-        onChange={next =>
-          onChange(
-            updateRoom(project, room.id, {
-              assumption: false,
-              surfaces: { ...room.surfaces, walls: { ...room.surfaces.walls, [face]: { ...assignment, materialKey: null, layers: next } } },
-            })
-          )
-        }
-      />
-      <ThermoNodeNote materialKey={assignment.materialKey} />
-      <TextField
-        label="Note"
-        value={assignment.note}
-        onCommit={note =>
-          onChange(
-            updateRoom(project, room.id, {
-              surfaces: { ...room.surfaces, walls: { ...room.surfaces.walls, [face]: { ...assignment, note } } },
-            })
-          )
-        }
-      />
+        <p className="prop-section">Layers</p>
+        <StackEditor
+          layers={layers}
+          materials={materials}
+          series={findAssembly(assemblies, assignment.constructionId)?.series ?? true}
+          units={project.units}
+          onChange={next => write({ ...assignment, materialKey: null, layers: next })}
+        />
+        <TextField label="Note" value={assignment.note} onCommit={note => write({ ...assignment, note })} />
       </section>
-      <section className="prop-block">
-      <p className="prop-section">Openings{openings.length > 0 ? ` · ${openings.length}` : ''}</p>
-      {openings.length > 0 && (
-        <ul className="plain-list">
-          {openings.map(opening => (
-            <li key={opening.id}>
-              <button type="button" className="linkish" onClick={() => onSelect({ kind: 'opening', roomId: room.id, id: opening.id })}>
-                {opening.kind} · {formatLength(opening.widthM, project.units, 2)}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="button-row">
-        <button type="button" className="btn" onClick={() => onChange(updateRoom(project, room.id, addOpening(room, 'door', face)))}>
-          Add door
-        </button>
-        <button type="button" className="btn" onClick={() => onChange(updateRoom(project, room.id, addOpening(room, 'window', face)))}>
-          Add window
-        </button>
-      </div>
-      </section>
+    </div>
+  );
+}
+
+function InterfaceStack({
+  project,
+  children,
+  materials,
+  assemblies,
+  onChange,
+}: {
+  project: Project;
+  children: readonly InterfaceTarget[];
+  materials: ConstructionMaterial[];
+  assemblies: ConstructionAssembly[];
+  onChange: (project: Project) => void;
+}) {
+  return (
+    <div className="interface-stack">
+      {children.map(target => (
+        <InterfaceFields key={target.key} project={project} interfaceKey={target.key} materials={materials} assemblies={assemblies} onChange={onChange} />
+      ))}
     </div>
   );
 }
@@ -385,6 +626,7 @@ function SurfaceFields({
   roomId,
   face,
   wallFace,
+  edge,
   materials,
   assemblies,
   onChange,
@@ -394,6 +636,7 @@ function SurfaceFields({
   roomId: string;
   face: SurfaceFace;
   wallFace?: WallFace;
+  edge?: number;
   materials: ConstructionMaterial[];
   assemblies: ConstructionAssembly[];
   onChange: (project: Project) => void;
@@ -417,6 +660,18 @@ function SurfaceFields({
       surfaces: { ...room.surfaces, [face]: next },
     });
   };
+  if (face === 'walls' && edge != null && room.outline && edge >= 0 && edge < room.outline.length) {
+    return (
+      <EdgeWallFields
+        project={project}
+        room={room}
+        edge={edge}
+        materials={materials}
+        assemblies={assemblies}
+        onChange={onChange}
+      />
+    );
+  }
   if (face === 'walls' && wallFace && assignment) {
     return (
       <WallFaceFields
@@ -461,7 +716,6 @@ function SurfaceFields({
         onChange={layers => onChange(writeSurface({ ...assignment, materialKey: null, layers }))}
       />
       )}
-      {assignment && <ThermoNodeNote materialKey={assignment.materialKey} />}
       {assignment && (
       <TextField
         label="Note"
@@ -469,7 +723,6 @@ function SurfaceFields({
         onCommit={note => onChange(writeSurface({ ...assignment, note }))}
       />
       )}
-      {face === 'walls' && !wallFace && <p className="muted">Choose one face. Each wall keeps its own stack.</p>}
     </div>
   );
 }
@@ -490,8 +743,9 @@ function RoomFields({
   nameFocus: number;
 }) {
   const room = project.rooms.find(item => item.id === roomId);
-  if (!room) return <p>Room not found.</p>;
+  if (!room) return <p>Space not found.</p>;
   const unit = lengthUnit(project.units);
+  const shaped = (room.outline?.length ?? 0) >= 3;
   const setLength = (key: 'xM' | 'yM' | 'zM' | 'lengthM' | 'widthM' | 'heightM', display: number) => {
     const meters = lengthToM(display, project.units);
     if (key === 'lengthM' || key === 'widthM') {
@@ -507,19 +761,18 @@ function RoomFields({
   return (
     <div className="stack props">
       <header className="prop-head">
-        <p className="prop-kicker">Room</p>
+        <p className="prop-kicker">Space</p>
         <h2>{room.name}</h2>
       </header>
       <div className="stat-row">
-        <span>{formatArea(room.lengthM * room.widthM, project.units)}</span>
+        <span>{formatArea(shaped ? polygonArea(room.outline ?? []) : room.lengthM * room.widthM, project.units)}</span>
         <span>
-          {formatLength(room.lengthM, project.units, 2)} × {formatLength(room.widthM, project.units, 2)}
+          {shaped ? `${room.outline?.length ?? 0} corners` : `${formatLength(room.lengthM, project.units, 2)} × ${formatLength(room.widthM, project.units, 2)}`}
         </span>
         <span>
           {room.openings.length} opening{room.openings.length === 1 ? '' : 's'}
         </span>
       </div>
-      {room.assumption && <p className="flag amber">Template assumption. Edit to make it your value.</p>}
       <TextField label="Name" value={room.name} focusToken={nameFocus} onCommit={name => onChange(updateRoom(project, room.id, { name, assumption: false }))} />
       <label className="field">
         <span>Use</span>
@@ -532,14 +785,21 @@ function RoomFields({
       </label>
       <section className="prop-block">
       <p className="prop-section">Size</p>
-      <div className="field-grid">
-        <UnitField label="Length" unit={unit} value={mToLength(room.lengthM, project.units)} onCommit={value => setLength('lengthM', value)} />
-        <UnitField label="Width" unit={unit} value={mToLength(room.widthM, project.units)} onCommit={value => setLength('widthM', value)} />
-        <UnitField label="Height" unit={unit} value={mToLength(room.heightM, project.units)} onCommit={value => setLength('heightM', value)} />
-        <UnitField label="Origin X" unit={unit} value={mToLength(room.xM, project.units)} onCommit={value => setLength('xM', value)} />
-        <UnitField label="Origin Y" unit={unit} value={mToLength(room.yM, project.units)} onCommit={value => setLength('yM', value)} />
-        <UnitField label="Floor Z" unit={unit} value={mToLength(room.zM, project.units)} onCommit={value => setLength('zM', value)} />
-      </div>
+      {shaped ? (
+        <div className="field-grid">
+          <UnitField label="Height" unit={unit} value={mToLength(room.heightM, project.units)} onCommit={value => setLength('heightM', value)} />
+          <UnitField label="Floor Z" unit={unit} value={mToLength(room.zM, project.units)} onCommit={value => setLength('zM', value)} />
+        </div>
+      ) : (
+        <div className="field-grid">
+          <UnitField label="Length" unit={unit} value={mToLength(room.lengthM, project.units)} onCommit={value => setLength('lengthM', value)} />
+          <UnitField label="Width" unit={unit} value={mToLength(room.widthM, project.units)} onCommit={value => setLength('widthM', value)} />
+          <UnitField label="Height" unit={unit} value={mToLength(room.heightM, project.units)} onCommit={value => setLength('heightM', value)} />
+          <UnitField label="Origin X" unit={unit} value={mToLength(room.xM, project.units)} onCommit={value => setLength('xM', value)} />
+          <UnitField label="Origin Y" unit={unit} value={mToLength(room.yM, project.units)} onCommit={value => setLength('yM', value)} />
+          <UnitField label="Floor Z" unit={unit} value={mToLength(room.zM, project.units)} onCommit={value => setLength('zM', value)} />
+        </div>
+      )}
       </section>
       <section className="prop-block">
       <p className="prop-section">Finishes</p>
@@ -570,7 +830,7 @@ function RoomFields({
             onSelect({ kind: 'project' });
           }}
         >
-          Remove room
+          Remove space
         </button>
       </div>
     </div>
@@ -614,9 +874,7 @@ function OpeningFields({
         <p className="prop-kicker">{room.name} · {PLAN_SIDES[opening.face].title}</p>
         <h2>{opening.kind}</h2>
       </header>
-      {opening.kind === 'opening' ? (
-        <p className="muted">A plain opening has no door or window assembly.</p>
-      ) : (
+      {opening.kind !== 'opening' && (
         <>
           <ComponentSelect
             label="Component"
@@ -822,7 +1080,6 @@ function EquipmentFields({
         <p className="prop-kicker">Equipment</p>
         <h2>{product ? product.name : 'Missing product'}</h2>
       </header>
-      <p className="flag amber">Planning placement. Not sized or validated by a solver.</p>
       {product && (
         <dl className="spec-list">
           <div>
@@ -855,15 +1112,6 @@ function EquipmentFields({
           </div>
         </dl>
       )}
-      {product && product.gaps.length > 0 && (
-        <ul className="issue-list">
-          {product.gaps.map(gap => (
-            <li key={gap} className="warning">
-              {gap}
-            </li>
-          ))}
-        </ul>
-      )}
       <div className="field-grid">
         <UnitField label="Center X" unit={unit} value={mToLength(item.xM, project.units)} onCommit={value => setLength('xM', value)} />
         <UnitField label="Center Y" unit={unit} value={mToLength(item.yM, project.units)} onCommit={value => setLength('yM', value)} />
@@ -871,7 +1119,7 @@ function EquipmentFields({
         <UnitField label="Yaw" unit="deg" value={item.yawDeg} onCommit={yawDeg => onChange(updateEquipment(project, item.id, { yawDeg }))} />
       </div>
       <label className="field">
-        <span>Room</span>
+        <span>Space</span>
         <select value={item.roomId ?? ''} onChange={event => onChange(assignEquipmentRoom(project, item.id, event.target.value || null))}>
           <option value="">Unassigned</option>
           {project.rooms.map(room => (
@@ -908,7 +1156,6 @@ function EquipmentFields({
           }}
         />
       </label>
-      <p className="muted">Quantity is a schedule count. The model shows one footprint.</p>
       <TextField label="Notes" value={item.notes} multiline onCommit={notes => onChange(updateEquipment(project, item.id, { notes }))} />
       <div className="button-row">
         <button type="button" className="btn" onClick={() => onChange(duplicateEquipment(project, item.id))}>
@@ -925,6 +1172,72 @@ function EquipmentFields({
           Remove
         </button>
       </div>
+    </div>
+  );
+}
+
+function WallRunFields({
+  project,
+  wallId,
+  onChange,
+  onSelect,
+}: {
+  project: Project;
+  wallId: string;
+  onChange: (project: Project) => void;
+  onSelect: (selection: Selection) => void;
+}) {
+  const run = (project.wallRuns ?? []).find(item => item.id === wallId);
+  if (!run) return <p className="muted">Wall not found.</p>;
+  const length = Math.hypot(run.x1 - run.x0, run.y1 - run.y0);
+  return (
+    <div className="stack">
+      <h2>Wall</h2>
+      <p className="muted">{formatLength(length, project.units, 2)}</p>
+      <button
+        type="button"
+        className="btn danger"
+        onClick={() => {
+          onChange(removeWallRun(project, run.id));
+          onSelect({ kind: 'project' });
+        }}
+      >
+        Delete
+      </button>
+    </div>
+  );
+}
+
+function WallOpeningFields({
+  project,
+  wallId,
+  openingId,
+  onChange,
+  onSelect,
+}: {
+  project: Project;
+  wallId: string;
+  openingId: string;
+  onChange: (project: Project) => void;
+  onSelect: (selection: Selection) => void;
+}) {
+  const run = (project.wallRuns ?? []).find(item => item.id === wallId);
+  const opening = run?.openings.find(item => item.id === openingId);
+  if (!run || !opening) return <p className="muted">Opening not found.</p>;
+  return (
+    <div className="stack">
+      <h2>{opening.kind === 'door' ? 'Door' : 'Window'}</h2>
+      <p className="muted">{formatLength(opening.widthM, project.units, 2)}</p>
+      <button
+        type="button"
+        className="btn danger"
+        onClick={() => {
+          onChange(removeWallRunOpening(project, run.id, opening.id));
+          onSelect({ kind: 'wallRun', id: run.id });
+        }}
+      >
+        Delete
+      </button>
     </div>
   );
 }

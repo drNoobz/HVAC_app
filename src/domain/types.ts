@@ -74,6 +74,10 @@ export interface Room {
     walls: Record<WallFace, SurfaceAssignment>;
   };
   openings: Opening[];
+  /** Closed plan boundary. Missing means the axis-aligned box. */
+  outline?: { x: number; y: number }[];
+  /** One stack per outline edge, in the same order. Missing entries are unassigned. */
+  edgeWalls?: SurfaceAssignment[];
   /** True when the room came from a template or sample and has not been confirmed. */
   assumption: boolean;
 }
@@ -108,6 +112,24 @@ export interface ProjectOrigin {
   label: string;
 }
 
+export interface WallRunOpening {
+  id: string;
+  kind: 'door' | 'window';
+  offsetM: number;
+  widthM: number;
+  heightM: number;
+  sillM: number;
+}
+
+export interface WallRun {
+  id: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  openings: WallRunOpening[];
+}
+
 export interface Project {
   schemaVersion: 1;
   id: string;
@@ -116,11 +138,16 @@ export interface Project {
   buildingType: BuildingType;
   subtype: string;
   units: UnitSystem;
+  /** Degrees clockwise from the top of the plan. Omitted or 0 means up is north. */
+  northDeg?: number;
   details: string;
   createdFrom: ProjectOrigin;
   rooms: Room[];
   systems: HvacSystem[];
   equipment: PlacedEquipment[];
+  wallRuns?: WallRun[];
+  /** One stack per interface stretch, shared or outside air. The adapter checks the envelope and does not write these stacks into GeometryDocument. */
+  interfaceWalls?: Record<string, SurfaceAssignment>;
   /** Stage 1 projects stay preliminary. Solver sizing is not available. */
   preliminary: true;
   createdAt: string;
@@ -138,12 +165,21 @@ export interface StoredTemplate {
 export type Selection =
   | { kind: 'project' }
   | { kind: 'room'; id: string }
-  | { kind: 'surface'; roomId: string; face: SurfaceFace; wallFace?: WallFace }
+  | { kind: 'surface'; roomId: string; face: SurfaceFace; wallFace?: WallFace; edge?: number }
+  | { kind: 'interface'; key: string }
   | { kind: 'opening'; roomId: string; id: string }
   | { kind: 'system'; id: string }
-  | { kind: 'equipment'; id: string };
+  | { kind: 'equipment'; id: string }
+  | { kind: 'wallRun'; id: string }
+  | { kind: 'wallOpening'; wallId: string; id: string };
 
-export type EditorTool = { kind: 'select' } | { kind: 'draw' } | { kind: 'place'; catalogId: string };
+export type EditorTool =
+  | { kind: 'select' }
+  | { kind: 'draw' }
+  | { kind: 'wall' }
+  | { kind: 'door' }
+  | { kind: 'window' }
+  | { kind: 'place'; catalogId: string };
 
 export const BUILDING_TYPES: { id: BuildingType; label: string }[] = [
   { id: 'restaurant', label: 'Restaurant' },

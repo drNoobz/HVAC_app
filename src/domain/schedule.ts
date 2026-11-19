@@ -1,7 +1,10 @@
 import { CATEGORY_LABEL, getProduct } from './catalog';
+import { findAssembly, findConstruction, formatThickness, resolveStack, type ConstructionAssembly, type ConstructionMaterial } from './constructionLibrary';
+import { doorCopies, doorwayKey } from './doorSwing';
 import { footprintOutsideRoom } from './projectOps';
-import type { PlacedEquipment, Project, Room } from './types';
+import type { Opening, PlacedEquipment, Project, Room, SurfaceAssignment } from './types';
 import { formatFlow, formatLength, formatPower } from './units';
+import { interfaceTargets } from './walls';
 
 export interface ScheduleLine {
   placementId: string;
@@ -74,8 +77,8 @@ function lineFor(project: Project, item: PlacedEquipment): ScheduleLine {
     };
   }
   const capacity = [
-    product.cooling ? `${formatPower(product.cooling.valueW, project.units)} cooling · assumption (stated ${product.cooling.stated})` : null,
-    product.heating ? `${formatPower(product.heating.valueW, project.units)} heating · assumption (stated ${product.heating.stated})` : null,
+    product.cooling ? `${formatPower(product.cooling.valueW, project.units)} cooling` : null,
+    product.heating ? `${formatPower(product.heating.valueW, project.units)} heating` : null,
   ]
     .filter(Boolean)
     .join('; ');
@@ -89,11 +92,11 @@ function lineFor(project: Project, item: PlacedEquipment): ScheduleLine {
     supplier: product.supplier,
     documentUrl: product.documentUrl,
     airflow: product.airflow
-      ? `${formatFlow(product.airflow.valueM3s, project.units)} · assumption (stated ${product.airflow.stated})`
+      ? formatFlow(product.airflow.valueM3s, project.units)
       : 'Not stated',
     capacity: capacity || 'Not stated',
     dimensions: product.dimensions
-      ? `${formatLength(product.dimensions.lengthM, project.units)} × ${formatLength(product.dimensions.widthM, project.units)} × ${formatLength(product.dimensions.heightM, project.units)} · assumption (stated ${product.dimensions.stated})`
+      ? `${formatLength(product.dimensions.lengthM, project.units)} × ${formatLength(product.dimensions.widthM, project.units)} × ${formatLength(product.dimensions.heightM, project.units)}`
       : 'Not stated',
     electrical: product.electrical ?? 'Not stated',
     connections: product.connections ?? 'Not stated',
@@ -101,18 +104,16 @@ function lineFor(project: Project, item: PlacedEquipment): ScheduleLine {
     system: system?.name ?? 'Unassigned',
     source: product.source,
     reviewStatus: 'Needs confirmation',
-    review: [...product.gaps, ...review],
+    review,
   };
 }
 
 function reviewNotes(item: PlacedEquipment, room: Room | undefined): string[] {
   const notes: string[] = [];
-  if (!item.roomId) notes.push('No room assignment.');
-  else if (footprintOutsideRoom(item, room)) notes.push('Footprint center is outside the assigned room.');
+  if (!item.roomId) notes.push('No space assignment.');
+  else if (footprintOutsideRoom(item, room)) notes.push('Footprint center is outside the assigned space.');
   if (!item.systemId) notes.push('No HVAC system assignment.');
-  if (item.quantity !== 1) notes.push('Quantity is a schedule count. The model shows one footprint.');
   if (item.notes.trim()) notes.push(item.notes.trim());
-  if (item.assumption) notes.push('Placement is a planning mark, not a solver result.');
   return notes;
 }
 
@@ -156,7 +157,174 @@ function csvCell(value: string | number | null): string {
   return text;
 }
 
-export function scheduleCsv(project: Project, lines: ScheduleLine[], bom: BomLine[]): string {
+export interface ConstructionLine {
+  id: string;
+  category: 'Interface' | 'Door' | 'Window' | 'Opening';
+  name: string;
+  space: string;
+  size: string;
+  thickness: string;
+  component: string;
+  layers: string;
+  lengthM: number;
+  reviewStatus: 'Preliminary';
+  review: string[];
+}
+
+export interface ConstructionBomLine {
+  id: string;
+  category: string;
+  component: string;
+  layers: string;
+  quantity: number;
+  size: string;
+  assignments: string;
+  reviewStatus: 'Preliminary';
+  review: string[];
+}
+
+function stackThicknessMm(layers: { materialId: string; thicknessMm: number | null }[], materials: ConstructionMaterial[]): number | null {
+  if (layers.length === 0) return null;
+  let sum = 0;
+  for (const layer of layers) {
+    const thickness = layer.thicknessMm ?? findConstruction(materials, layer.materialId)?.thicknessMm ?? null;
+    if (thickness == null) return null;
+    sum += thickness;
+  }
+  return sum;
+}
+
+function layerText(layers: { materialId: string; thicknessMm: number | null }[], materials: ConstructionMaterial[], units: Project['units']): string {
+  if (layers.length === 0) return 'No layers';
+  return layers
+    .map(layer => {
+      const material = findConstruction(materials, layer.materialId);
+      const name = material?.name ?? layer.materialId;
+      return `${name} (${formatThickness(layer.thicknessMm ?? material?.thicknessMm ?? null, units)})`;
+    })
+    .join('; ');
+}
+
+function constructionFacts(
+  assignment: SurfaceAssignment | Opening | undefined,
+  assemblies: ConstructionAssembly[],
+  materials: ConstructionMaterial[],
+  units: Project['units'],
+): { component: string; layers: string; thickness: string; review: string[] } {
+  const stored = assignment ?? { constructionId: null, layers: [] };
+  const layers = resolveStack(stored, assemblies, materials);
+  const assembly = findAssembly(assemblies, stored.constructionId);
+  const component = assembly?.name ?? (layers.length > 0 ? 'Custom' : 'Unassigned');
+  const review = component === 'Unassigned' ? ['No component is assigned.'] : [];
+  return {
+    component,
+    layers: layerText(layers, materials, units),
+    thickness: formatThickness(stackThicknessMm(layers, materials), units),
+    review,
+  };
+}
+
+export function buildConstructionSchedule(project: Project, assemblies: ConstructionAssembly[], materials: ConstructionMaterial[]): ConstructionLine[] {
+  const lines: ConstructionLine[] = [];
+  const seenDoors = new Set<string>();
+  for (const target of interfaceTargets(project.rooms)) {
+    const host = target.sides[0];
+    const other = target.sides[1];
+    if (!host) continue;
+    const room = project.rooms.find(item => item.id === host.roomId);
+    const facts = constructionFacts(project.interfaceWalls?.[target.key], assemblies, materials, project.units);
+    const height = room?.heightM ?? 0;
+    lines.push({
+      id: target.key,
+      category: 'Interface',
+      name: `Interface · ${other?.name || 'Outside'}`,
+      space: other ? `${host.name} · ${other.name}` : host.name,
+      size: `${formatLength(target.lengthM, project.units, 2)} × ${formatLength(height, project.units, 2)}`,
+      thickness: facts.thickness,
+      component: facts.component,
+      layers: facts.layers,
+      lengthM: target.lengthM,
+      reviewStatus: 'Preliminary',
+      review: facts.review,
+    });
+  }
+  for (const room of project.rooms) {
+    for (const opening of room.openings) {
+      let space = room.name || 'Space';
+      let source = opening;
+      if (opening.kind === 'door') {
+        const key = doorwayKey(room, opening);
+        if (seenDoors.has(key)) continue;
+        seenDoors.add(key);
+        const copies = doorCopies(project.rooms, room, opening);
+        space = [...new Set(copies.map(copy => copy.room.name || 'Space'))].join(' · ');
+        source = copies.find(copy => copy.opening.constructionId || (copy.opening.layers && copy.opening.layers.length > 0))?.opening ?? opening;
+      }
+      const facts = constructionFacts(source, assemblies, materials, project.units);
+      const category = opening.kind === 'door' ? 'Door' : opening.kind === 'window' ? 'Window' : 'Opening';
+      lines.push({
+        id: source.id,
+        category,
+        name: category,
+        space,
+        size: `${formatLength(source.widthM, project.units, 2)} × ${formatLength(source.heightM, project.units, 2)}`,
+        thickness: facts.thickness,
+        component: facts.component,
+        layers: facts.layers,
+        lengthM: source.widthM,
+        reviewStatus: 'Preliminary',
+        review: facts.review,
+      });
+    }
+  }
+  return lines;
+}
+
+export function buildConstructionBom(lines: ConstructionLine[], units: Project['units']): ConstructionBomLine[] {
+  const groups = new Map<string, ConstructionBomLine & { lengthM: number }>();
+  for (const line of lines) {
+    const key = `${line.category}|${line.component}|${line.layers}`;
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, {
+        id: key,
+        category: line.category,
+        component: line.component,
+        layers: line.layers,
+        quantity: 1,
+        size: '',
+        assignments: line.space,
+        reviewStatus: 'Preliminary',
+        review: line.review,
+        lengthM: line.lengthM,
+      });
+    } else {
+      existing.quantity += 1;
+      existing.lengthM += line.lengthM;
+      if (!existing.assignments.split('; ').includes(line.space)) existing.assignments = `${existing.assignments}; ${line.space}`;
+      existing.review = [...new Set([...existing.review, ...line.review])];
+    }
+  }
+  return [...groups.values()].map(line => ({
+    id: line.id,
+    category: line.category,
+    component: line.component,
+    layers: line.layers,
+    quantity: line.quantity,
+    size: formatLength(line.lengthM, units, 2),
+    assignments: line.assignments,
+    reviewStatus: 'Preliminary',
+    review: line.review,
+  }));
+}
+
+export function scheduleCsv(
+  project: Project,
+  lines: ScheduleLine[],
+  bom: BomLine[],
+  construction: ConstructionLine[] = [],
+  constructionBom: ConstructionBomLine[] = [],
+): string {
   const unitNote =
     project.units === 'IP'
       ? 'Display units: ft, CFM, Btu/h. Canonical project storage is m, m³/s, and W.'
@@ -180,7 +348,7 @@ export function scheduleCsv(project: Project, lines: ScheduleLine[], bom: BomLin
       'Dimensions',
       'Electrical',
       'Connections',
-      'Room',
+      'Space',
       'System',
       'Review status',
       'Review notes',
@@ -235,14 +403,26 @@ export function scheduleCsv(project: Project, lines: ScheduleLine[], bom: BomLin
       line.reviewStatus,
       line.review.join(' '),
     ]),
+    [],
+    ['Preliminary construction'],
+    ['Category', 'Name', 'Space', 'Size', 'Thickness', 'Component', 'Layers', 'Review status', 'Review notes'],
+    ...construction.map(line => [line.category, line.name, line.space, line.size, line.thickness, line.component, line.layers, line.reviewStatus, line.review.join(' ')]),
+    [],
+    ['Preliminary construction bill of materials'],
+    ['Category', 'Component', 'Layers', 'Quantity', 'Length', 'Assignments', 'Review status', 'Review notes'],
+    ...constructionBom.map(line => [line.category, line.component, line.layers, String(line.quantity), line.size, line.assignments, line.reviewStatus, line.review.join(' ')]),
   ];
   return rows.map(row => row.map(csvCell).join(',')).join('\r\n');
 }
 
-export function projectSummary(project: Project, lines: ScheduleLine[], bom: BomLine[]) {
+export function projectSummary(
+  project: Project,
+  lines: ScheduleLine[],
+  bom: BomLine[],
+  construction: ConstructionLine[] = [],
+  constructionBom: ConstructionBomLine[] = [],
+) {
   return {
-    disclaimer:
-      'Preliminary planning export. Equipment was selected in the HVAC app. ThermoNode was not asked to size or validate performance.',
     exportedAt: new Date().toISOString(),
     units: {
       storedLength: 'm',
@@ -299,5 +479,7 @@ export function projectSummary(project: Project, lines: ScheduleLine[], bom: Bom
     },
     schedule: lines,
     bom,
+    construction,
+    constructionBom,
   };
 }

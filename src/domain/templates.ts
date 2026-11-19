@@ -121,6 +121,7 @@ function base(
     rooms: separateSharedWalls(rooms),
     systems,
     equipment,
+    wallRuns: [],
     preliminary: true,
     createdAt: timestamp,
     updatedAt: timestamp,

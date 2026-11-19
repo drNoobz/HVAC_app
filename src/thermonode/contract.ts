@@ -41,11 +41,36 @@ export interface MaterialsResponseV1 extends AdapterEnvelope {
   limitations: string[];
 }
 
+export interface BuildingEnvelopeInterfaceV1 {
+  key: string;
+  lengthM: number;
+  outside: boolean;
+  spaces: string[];
+  hasConstruction: boolean;
+}
+
+export interface BuildingEnvelopeOpeningV1 {
+  id: string;
+  roomId: string;
+  kind: 'door' | 'window' | 'opening';
+  face: 'px' | 'nx' | 'py' | 'ny';
+  widthM: number;
+  heightM: number;
+  hasConstruction: boolean;
+}
+
+export interface BuildingEnvelopeV1 {
+  interfaces: BuildingEnvelopeInterfaceV1[];
+  openings: BuildingEnvelopeOpeningV1[];
+}
+
 export interface BuildingModelV1 {
   units: {
     length: 'm';
   };
   rooms: BuildingRoomV1[];
+  /** Interface stretches and openings. Checked here and not written into GeometryDocument v1. */
+  envelope?: BuildingEnvelopeV1;
 }
 
 export interface BuildingRoomV1 {
@@ -120,6 +145,7 @@ export const ADAPTER_LIMITATIONS = [
   'These routes run inside the HVAC app. ThermoNode Lab does not publish this HTTP API.',
   'upstream is not-connected: the adapter does not call ThermoNode Lab, its WASM solver, or a remote ThermoNode service.',
   'GeometryDocument version 1 matches the extruded-rectangle schema in ThermoNode Lab. Openings are validated here and are not written into that document, which has no door or window entity.',
+  'Interface stretches and openings are checked on the envelope. They are not written into GeometryDocument v1, and the solver is not called.',
   'A ThermoNode solid has one material. Per-face assignments stay on surfaceMaterials. The body material is set only when floor, walls, and ceiling share one library key.',
   'Material numbers are reference constants from thermocore/src/library_materials_data.inc. Temperature-dependent properties are not evaluated.',
   'Equipment, catalogs, templates, and bills of materials are HVAC app data and are not part of this model.',
@@ -154,6 +180,37 @@ function parseOpening(value: unknown): BuildingOpeningV1 | null {
     heightM: value.heightM as number,
     sillM: value.sillM as number,
   };
+}
+
+function parseEnvelope(value: unknown): BuildingEnvelopeV1 | null {
+  if (!isRecord(value) || !Array.isArray(value.interfaces) || !Array.isArray(value.openings)) return null;
+  const interfaces: BuildingEnvelopeInterfaceV1[] = [];
+  for (const item of value.interfaces) {
+    if (!isRecord(item) || typeof item.key !== 'string' || !finiteNumber(item.lengthM) || typeof item.outside !== 'boolean' || typeof item.hasConstruction !== 'boolean') return null;
+    if (!Array.isArray(item.spaces) || !item.spaces.every(space => typeof space === 'string')) return null;
+    interfaces.push({
+      key: item.key,
+      lengthM: item.lengthM,
+      outside: item.outside,
+      spaces: item.spaces,
+      hasConstruction: item.hasConstruction,
+    });
+  }
+  const openings: BuildingEnvelopeOpeningV1[] = [];
+  for (const item of value.openings) {
+    if (!isRecord(item) || typeof item.id !== 'string' || typeof item.roomId !== 'string' || typeof item.kind !== 'string' || typeof item.face !== 'string') return null;
+    if (!OPENING_KINDS.has(item.kind) || !WALL_FACES.has(item.face) || !finiteNumber(item.widthM) || !finiteNumber(item.heightM) || typeof item.hasConstruction !== 'boolean') return null;
+    openings.push({
+      id: item.id,
+      roomId: item.roomId,
+      kind: item.kind as BuildingEnvelopeOpeningV1['kind'],
+      face: item.face as BuildingEnvelopeOpeningV1['face'],
+      widthM: item.widthM,
+      heightM: item.heightM,
+      hasConstruction: item.hasConstruction,
+    });
+  }
+  return { interfaces, openings };
 }
 
 function parseRoom(value: unknown): BuildingRoomV1 | null {
@@ -193,7 +250,10 @@ export function parseBuildingModelV1(value: unknown): BuildingModelV1 | null {
     if (!parsed) return null;
     rooms.push(parsed);
   }
-  return { units: { length: 'm' }, rooms };
+  if (value.envelope === undefined) return { units: { length: 'm' }, rooms };
+  const envelope = parseEnvelope(value.envelope);
+  if (!envelope) return null;
+  return { units: { length: 'm' }, rooms, envelope };
 }
 
 export function parseValidateRequest(value: unknown): ValidateModelRequestV1 | null {

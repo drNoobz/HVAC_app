@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { getProduct } from '@/domain/catalog';
-import type { EditorTool, Opening, PlacedEquipment, Project, Room, Selection, WallFace } from '@/domain/types';
+import type { EditorTool, Opening, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
+import { locateOpening, NO_WALL_RUNS, outlineCentroid, outlineRoomOk, polygonArea, roomLoop, runGeom, runOpeningEnds, snapDrawPoint, wallAngleDeg, wallQuad, wallQuads, type DrawPoint, type OpeningSpot, type WallSnap } from '@/domain/wallDraw';
 import { METERS_PER_FOOT, formatArea, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
 import { doorArc, doorHinge, doorSwingSide, doorwayKey, openingEnds } from '@/domain/doorSwing';
 import { clampSharedEdge, moveRoomEdge, slideOpeningsTogether } from '@/domain/spanFit';
-import { MARK_COLOR, WALL_FACE_IDS, roomFill, touchingRooms, wallColor } from '@/domain/walls';
+import { INTERFACE_COLOR, MARK_COLOR, WALL_FACE_IDS, edgePortions, facePortions, findInterface, interfaceConstructionColor, interfaceTargets, northDegrees, roomFill, snapDrawnRect, snapPointToWalls, snapSpaceDelta, snapWallEdge, touchingRooms, wallColor, type WallPortion } from '@/domain/walls';
 
 const SNAP_M = 0.05;
 const DRAG_PX = 5;
@@ -17,6 +18,7 @@ const DIM = '#0e6e66';
 const SELECT = '#f6ad55';
 const SELECT_FILL = 'rgba(246,173,85,0.28)';
 const HAIR = 1.15;
+const SYSTEM_COLORS = ['#1f4e5f', '#8a3d2f', '#245c3a', '#3d4a8a', '#8a5a12', '#6b3d6e'];
 
 type WallRole = 'hatch' | 'service' | 'partition' | 'panel' | 'glass' | 'none';
 
@@ -135,6 +137,16 @@ function partnerFace(room: Room, face: WallFace, other: Room): WallFace | null {
   return top <= bottom ? 'py' : 'ny';
 }
 
+function shiftRoom(room: Room, dx: number, dy: number): Room {
+  if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return room;
+  return {
+    ...room,
+    xM: room.xM + dx,
+    yM: room.yM + dy,
+    outline: room.outline?.map(point => ({ x: point.x + dx, y: point.y + dy })),
+  };
+}
+
 function moveEdges(base: readonly Room[], edges: { id: string; face: WallFace }[], edge: number): Room[] {
   const entries = edges.flatMap(item => {
     const room = base.find(candidate => candidate.id === item.id);
@@ -194,13 +206,15 @@ function geometryChanged(base: readonly Room[], next: readonly Room[]): boolean 
   });
 }
 
-function bounds(rooms: readonly Room[]): ViewBox {
-  if (rooms.length === 0) return { minX: -1, minY: -1, w: 14, h: 10 };
+function bounds(rooms: readonly Room[], runs: readonly WallRun[] = []): ViewBox {
+  const xs = [...rooms.flatMap(room => [room.xM, room.xM + room.lengthM]), ...runs.flatMap(run => [run.x0, run.x1])];
+  const ys = [...rooms.flatMap(room => [room.yM, room.yM + room.widthM]), ...runs.flatMap(run => [run.y0, run.y1])];
+  if (xs.length === 0 || ys.length === 0) return { minX: -1, minY: -1, w: 14, h: 10 };
   const pad = 3.6;
-  const minX = Math.min(...rooms.map(room => room.xM)) - pad;
-  const minY = Math.min(...rooms.map(room => room.yM)) - pad;
-  const maxX = Math.max(...rooms.map(room => room.xM + room.lengthM)) + pad;
-  const maxY = Math.max(...rooms.map(room => room.yM + room.widthM)) + pad;
+  const minX = Math.min(...xs) - pad;
+  const minY = Math.min(...ys) - pad;
+  const maxX = Math.max(...xs) + pad;
+  const maxY = Math.max(...ys) + pad;
   return { minX, minY, w: Math.max(maxX - minX, 2), h: Math.max(maxY - minY, 2) };
 }
 
@@ -232,6 +246,60 @@ function arcPoints(x: number, y: number, radius: number, from: number, to: numbe
   return points.join(' ');
 }
 
+function NorthMark({ degrees, onCommit }: { degrees: number; onCommit: (deg: number) => void }) {
+  const [live, setLive] = useState<number | null>(null);
+  const drag = useRef<{ x: number; y: number; pointer: number; north: number; moved: boolean; last: number } | null>(null);
+  const shown = live ?? degrees;
+  const pointerAngle = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const dx = event.clientX - (rect.left + rect.width / 2);
+    const dy = event.clientY - (rect.top + rect.height / 2);
+    return Math.atan2(dx, -dy) * (180 / Math.PI);
+  };
+  return (
+    <button
+      type="button"
+      className={live === null ? 'north-arrow' : 'north-arrow is-turning'}
+      aria-label={`North, ${Math.round(shown)} degrees clockwise from the top of the plan`}
+      onPointerDown={event => {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        drag.current = { x: event.clientX, y: event.clientY, pointer: pointerAngle(event), north: degrees, moved: false, last: degrees };
+      }}
+      onPointerMove={event => {
+        const current = drag.current;
+        if (!current) return;
+        if (Math.hypot(event.clientX - current.x, event.clientY - current.y) >= 4) current.moved = true;
+        if (!current.moved) return;
+        const next = northDegrees(current.north + pointerAngle(event) - current.pointer);
+        current.last = next;
+        setLive(next);
+      }}
+      onPointerUp={event => {
+        const current = drag.current;
+        drag.current = null;
+        setLive(null);
+        if (current?.moved && Math.round(current.last) !== Math.round(degrees)) onCommit(Math.round(current.last));
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+    >
+      <svg viewBox="0 0 80 80" aria-hidden="true" shapeRendering="geometricPrecision">
+        <g transform={`rotate(${shown} 40 40)`}>
+          <circle cx="40" cy="40" r="31" fill="none" stroke="#1c1f22" strokeWidth="1.25" />
+          <text x="40" y="24" textAnchor="middle" fontSize="13" fontWeight="650" fill="#1c1f22" fontFamily='"IBM Plex Sans", "Segoe UI", sans-serif'>N</text>
+          <polygon points="40,28 45.5,40 40,37" fill="#1c1f22" />
+          <polygon points="40,28 34.5,40 40,37" fill="#5e686c" />
+          <polygon points="40,52 45.5,40 40,43" fill="#f4f4f2" stroke="#1c1f22" strokeWidth="1.15" strokeLinejoin="round" />
+          <polygon points="40,52 34.5,40 40,43" fill="#f4f4f2" stroke="#1c1f22" strokeWidth="1.15" strokeLinejoin="round" />
+          <path d="M12 40 H20 M60 40 H68" fill="none" stroke="#1c1f22" strokeWidth="1.25" />
+          <circle cx="40" cy="40" r="1.6" fill="#1c1f22" />
+        </g>
+      </svg>
+    </button>
+  );
+}
+
 function niceScale(pxPerM: number, units: Project['units']): { meters: number; label: string } {
   const target = 110 / Math.max(pxPerM, 1);
   const steps = units === 'IP' ? [1, 2, 5, 10, 20, 50, 100].map(feet => feet * 0.3048) : [0.5, 1, 2, 5, 10, 20, 50];
@@ -247,9 +315,15 @@ export function PlanView({
   fitToken,
   onSelect,
   onDrawRoom,
+  onDrawWalls,
+  onCloseSpace,
+  onPlaceOpening,
   onPlace,
   onContextMenu,
   onRoomsChange,
+  onMoveSpace,
+  onNorthChange,
+  sheet,
 }: {
   project: Project;
   selection: Selection;
@@ -257,36 +331,91 @@ export function PlanView({
   fitToken: number;
   onSelect: (selection: Selection) => void;
   onDrawRoom: (rect: { xM: number; yM: number; lengthM: number; widthM: number }) => void;
+  onDrawWalls: (lines: { x0: number; y0: number; x1: number; y1: number }[]) => void;
+  onCloseSpace: (points: DrawPoint[]) => void;
+  onPlaceOpening: (spot: OpeningSpot, kind: 'door' | 'window') => void;
   onPlace: (point: { xM: number; yM: number }) => void;
   onContextMenu: (selection: Selection, x: number, y: number) => void;
   onRoomsChange: (rooms: Room[]) => void;
+  onMoveSpace: (roomId: string, dx: number, dy: number) => void;
+  onNorthChange: (deg: number) => void;
+  sheet: 'all' | 'spaces' | 'systems';
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState<ViewBox>(() => bounds(project.rooms));
   const [pxPerM, setPxPerM] = useState(40);
   const [draft, setDraft] = useState<{ xM: number; yM: number; lengthM: number; widthM: number } | null>(null);
+  const [chain, setChain] = useState<DrawPoint[] | null>(null);
+  const [aim, setAim] = useState<WallSnap | null>(null);
+  const [spot, setSpot] = useState<OpeningSpot | null>(null);
   const [preview, setPreview] = useState<Room[] | null>(null);
-  const [gesture, setGesture] = useState<{ kind: 'wall' | 'opening'; roomId: string; face: WallFace; openingId?: string } | null>(null);
-  const [readout, setReadout] = useState<{ x: number; y: number; text: string } | null>(null);
-  const previewRef = useRef<Room[] | null>(null);
-  const suppressClick = useRef(false);
-  const drag = useRef<
-    | { kind: 'pan' | 'draw' | 'place'; x: number; y: number; pointerX: number; pointerY: number; view: ViewBox }
-    | { kind: 'wall'; edges: { id: string; face: WallFace }[]; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace; armed: boolean }
-    | { kind: 'opening'; moves: { roomId: string; openingId: string }[]; grab: number; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace; armed: boolean }
+  const [gesture, setGesture] = useState<
+    | { kind: 'wall' | 'opening'; roomId: string; face: WallFace; openingId?: string }
+    | { kind: 'space'; roomId: string }
     | null
   >(null);
+  const [readout, setReadout] = useState<{ x: number; y: number; text: string } | null>(null);
+  const previewRef = useRef<Room[] | null>(null);
+  const chainRef = useRef<DrawPoint[] | null>(null);
+  const commitWalls = useRef(onDrawWalls);
+  commitWalls.current = onDrawWalls;
+  const spotRef = useRef<OpeningSpot | null>(null);
+  const suppressClick = useRef(false);
+  const drag = useRef<
+    | { kind: 'pan' | 'draw' | 'place' | 'stamp'; x: number; y: number; pointerX: number; pointerY: number; view: ViewBox }
+    | { kind: 'wall'; edges: { id: string; face: WallFace }[]; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace; armed: boolean; interfaceKey?: string }
+    | { kind: 'opening'; moves: { roomId: string; openingId: string }[]; grab: number; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace; armed: boolean }
+    | { kind: 'space'; id: string; base: Room[]; grabX: number; grabY: number; pointerX: number; pointerY: number; view: ViewBox; armed: boolean }
+    | null
+  >(null);
+  const wallRuns = project.wallRuns ?? NO_WALL_RUNS;
+  useEffect(() => {
+    chainRef.current = null;
+    setChain(null);
+    setAim(null);
+  }, [project.id]);
+  useEffect(() => {
+    if (tool.kind === 'wall') return;
+    const points = chainRef.current;
+    chainRef.current = null;
+    setChain(null);
+    setAim(null);
+    if (!points || points.length < 2) return;
+    const lines: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    for (let i = 1; i < points.length; i += 1) {
+      const a = points[i - 1];
+      const b = points[i];
+      if (Math.hypot(b.x - a.x, b.y - a.y) >= MIN_DRAW_M) lines.push({ x0: a.x, y0: a.y, x1: b.x, y1: b.y });
+    }
+    if (lines.length > 0) commitWalls.current(lines);
+  }, [tool.kind]);
+  const showSpot = (next: OpeningSpot | null) => {
+    const prev = spotRef.current;
+    if (prev === next) return;
+    if (prev && next && prev.roomId === next.roomId && prev.wallId === next.wallId && prev.face === next.face && prev.offsetM === next.offsetM && prev.widthM === next.widthM) return;
+    spotRef.current = next;
+    setSpot(next);
+  };
 
   useEffect(() => {
     const rect = svgRef.current?.getBoundingClientRect();
-    const next = bounds(project.rooms);
+    const next = bounds(project.rooms, project.wallRuns ?? []);
     setView(rect && rect.width > 0 && rect.height > 0 ? coverView(next, rect.width / rect.height) : next);
     setDraft(null);
+    spotRef.current = null;
+    setSpot(null);
     previewRef.current = null;
     setPreview(null);
     setGesture(null);
     setReadout(null);
   }, [fitToken, project.id]);
+
+  useEffect(() => {
+    if (tool.kind === 'door' || tool.kind === 'window') return;
+    if (!spotRef.current) return;
+    spotRef.current = null;
+    setSpot(null);
+  }, [tool.kind]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -335,6 +464,8 @@ export function PlanView({
     setPreview(rooms);
   };
   const rooms = preview ?? project.rooms;
+  const showSpaces = sheet !== 'systems';
+  const showSystems = sheet !== 'spaces';
   const highlightedRoom =
     selection.kind === 'room'
       ? rooms.find(room => room.id === selection.id)
@@ -373,7 +504,8 @@ export function PlanView({
   };
 
   return (
-    <div className={`plan-wrap${tool.kind === 'draw' ? ' is-draw' : ''}${tool.kind === 'place' ? ' is-place' : ''}${tool.kind === 'select' ? ' is-select' : ''}${gesture ? ' is-dragging' : ''}`}>
+    <div className={['plan-wrap', tool.kind === 'draw' ? 'is-draw' : '', tool.kind === 'place' ? 'is-place' : '', tool.kind === 'select' ? 'is-select' : '', tool.kind === 'wall' ? 'is-wall' : '', tool.kind === 'door' || tool.kind === 'window' ? 'is-opening-tool' : '', gesture ? 'is-dragging' : ''].filter(Boolean).join(' ')}>
+      <div className="plan-sheet">
       <svg
         ref={svgRef}
         viewBox={`${view.minX} ${-(view.minY + view.h)} ${view.w} ${view.h}`}
@@ -388,13 +520,49 @@ export function PlanView({
           window.getSelection()?.removeAllRanges();
           const point = toWorld(event.clientX, event.clientY);
           if (tool.kind === 'draw') {
-            drag.current = { kind: 'draw', x: snap(point.xM), y: snap(point.yM), pointerX: event.clientX, pointerY: event.clientY, view };
-            setDraft({ xM: snap(point.xM), yM: snap(point.yM), lengthM: SNAP_M, widthM: SNAP_M });
+            const start = snapPointToWalls(snap(point.xM), snap(point.yM), project.rooms);
+            drag.current = { kind: 'draw', x: start.x, y: start.y, pointerX: event.clientX, pointerY: event.clientY, view };
+            setDraft({ xM: start.x, yM: start.y, lengthM: SNAP_M, widthM: SNAP_M });
             event.currentTarget.setPointerCapture(event.pointerId);
             return;
           }
           if (tool.kind === 'place') {
             drag.current = { kind: 'place', x: point.xM, y: point.yM, pointerX: event.clientX, pointerY: event.clientY, view };
+            return;
+          }
+          if (tool.kind === 'wall') {
+            const snapped = snapDrawPoint(point.xM, point.yM, project.rooms, wallRuns, chainRef.current ?? [], pxPerM);
+            const points = chainRef.current;
+            if (!points) {
+              const next = [{ x: snapped.x, y: snapped.y }];
+              chainRef.current = next;
+              setChain(next);
+              setAim(snapped);
+              return;
+            }
+            if (snapped.close) {
+              const loop = points.map(item => ({ x: Number(item.x.toFixed(3)), y: Number(item.y.toFixed(3)) }));
+              if (outlineRoomOk(loop)) {
+                chainRef.current = null;
+                setChain(null);
+                setAim(null);
+                onCloseSpace(loop);
+                return;
+              }
+            }
+            const last = points[points.length - 1];
+            if (Math.hypot(snapped.x - last.x, snapped.y - last.y) < MIN_DRAW_M) return;
+            if (points.some(item => Math.hypot(item.x - snapped.x, item.y - snapped.y) < 0.02)) return;
+            const next = [...points, { x: snapped.x, y: snapped.y }];
+            chainRef.current = next;
+            setChain(next);
+            setAim(snapped);
+            return;
+          }
+          if (tool.kind === 'door' || tool.kind === 'window') {
+            drag.current = { kind: 'stamp', x: point.xM, y: point.yM, pointerX: event.clientX, pointerY: event.clientY, view };
+            showSpot(locateOpening(project.rooms, wallRuns, point, tool.kind));
+            event.currentTarget.setPointerCapture(event.pointerId);
             return;
           }
           const target = event.target as Element;
@@ -410,6 +578,15 @@ export function PlanView({
               drag.current = { kind: 'wall', edges: [{ id: room.id, face }, ...partners], base: project.rooms, pointerX: event.clientX, pointerY: event.clientY, view, face, armed: false };
               event.currentTarget.setPointerCapture(event.pointerId);
               return;
+            }
+            if (hit.getAttribute('data-hit') === 'room') {
+              const id = hit.getAttribute('data-room');
+              const moving = id ? project.rooms.find(item => item.id === id) : undefined;
+              if (moving) {
+                drag.current = { kind: 'space', id: moving.id, base: project.rooms, grabX: point.xM, grabY: point.yM, pointerX: event.clientX, pointerY: event.clientY, view, armed: false };
+                event.currentTarget.setPointerCapture(event.pointerId);
+                return;
+              }
             }
             if (hit.getAttribute('data-hit') === 'opening' && room) {
               const openingId = hit.getAttribute('data-opening');
@@ -432,16 +609,52 @@ export function PlanView({
                 return;
               }
             }
+            if (hit.getAttribute('data-hit') === 'interface') {
+              const key = hit.getAttribute('data-key') ?? '';
+              const target = findInterface(project.rooms, key);
+              const side = target && target.sides.length === 1 ? target.sides[0] : undefined;
+              const face = side?.anchor.startsWith('f:') ? side.anchor.slice(2) : '';
+              const host = side ? project.rooms.find(item => item.id === side.roomId) : undefined;
+              if (host && (face === 'px' || face === 'nx' || face === 'py' || face === 'ny')) {
+                const partners = touchingRooms(host, face, project.rooms)
+                  .map(other => ({ id: other.id, face: partnerFace(host, face, other) }))
+                  .filter((item): item is { id: string; face: WallFace } => item.face !== null);
+                drag.current = {
+                  kind: 'wall',
+                  edges: [{ id: host.id, face }, ...partners],
+                  base: project.rooms,
+                  pointerX: event.clientX,
+                  pointerY: event.clientY,
+                  view,
+                  face,
+                  armed: false,
+                  interfaceKey: key,
+                };
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }
+              return;
+            }
           }
           if (hit) return;
           drag.current = { kind: 'pan', x: point.xM, y: point.yM, pointerX: event.clientX, pointerY: event.clientY, view };
           event.currentTarget.setPointerCapture(event.pointerId);
         }}
         onPointerMove={event => {
-          const current = drag.current;
-          if (!current) return;
-          if (!window.getSelection()?.isCollapsed) window.getSelection()?.removeAllRanges();
           const point = toWorld(event.clientX, event.clientY);
+          const current = drag.current;
+          if (!current) {
+            if (tool.kind === 'door' || tool.kind === 'window') showSpot(locateOpening(project.rooms, wallRuns, point, tool.kind));
+            if (tool.kind === 'wall') {
+              const next = snapDrawPoint(point.xM, point.yM, project.rooms, wallRuns, chainRef.current ?? [], pxPerM);
+              setAim(prev => (prev && prev.x === next.x && prev.y === next.y && prev.kind === next.kind && prev.close === next.close && prev.guides.length === next.guides.length ? prev : next));
+            }
+            return;
+          }
+          if (!window.getSelection()?.isCollapsed) window.getSelection()?.removeAllRanges();
+          if (current.kind === 'stamp') {
+            if (tool.kind === 'door' || tool.kind === 'window') showSpot(locateOpening(project.rooms, wallRuns, point, tool.kind));
+            return;
+          }
           if (current.kind === 'pan') {
             const rect = svgRef.current?.getBoundingClientRect();
             if (!rect) return;
@@ -451,9 +664,27 @@ export function PlanView({
             return;
           }
           if (current.kind === 'draw') {
-            const xM = Math.min(current.x, snap(point.xM));
-            const yM = Math.min(current.y, snap(point.yM));
-            setDraft({ xM, yM, lengthM: Math.max(Math.abs(snap(point.xM) - current.x), SNAP_M), widthM: Math.max(Math.abs(snap(point.yM) - current.y), SNAP_M) });
+            const rect = snapDrawnRect(current.x, current.y, snap(point.xM), snap(point.yM), project.rooms);
+            setDraft({ xM: rect.xM, yM: rect.yM, lengthM: Math.max(rect.lengthM, SNAP_M), widthM: Math.max(rect.widthM, SNAP_M) });
+            return;
+          }
+          if (current.kind === 'space') {
+            if (!current.armed) {
+              if (Math.hypot(event.clientX - current.pointerX, event.clientY - current.pointerY) < DRAG_PX) return;
+              current.armed = true;
+              setGesture({ kind: 'space', roomId: current.id });
+              onSelect({ kind: 'room', id: current.id });
+            }
+            const room = current.base.find(item => item.id === current.id);
+            if (!room) return;
+            const gridX = snap(room.xM + (point.xM - current.grabX));
+            const gridY = snap(room.yM + (point.yM - current.grabY));
+            const placed = shiftRoom(room, gridX - room.xM, gridY - room.yM);
+            const delta = snapSpaceDelta(placed, current.base, room.id);
+            const dx = gridX + delta.dx - room.xM;
+            const dy = gridY + delta.dy - room.yM;
+            showLive(current.base.map(item => (item.id === current.id ? shiftRoom(item, dx, dy) : item)));
+            setReadout({ x: point.xM, y: point.yM, text: `${formatDelta(dx, project.units)} · ${formatDelta(dy, project.units)}` });
             return;
           }
           if (current.kind === 'wall') {
@@ -463,7 +694,12 @@ export function PlanView({
               setGesture({ kind: 'wall', roomId: current.edges[0].id, face: current.face });
             }
             const raw = current.face === 'px' || current.face === 'nx' ? point.xM : point.yM;
-            const next = moveEdges(current.base, current.edges, raw);
+            const host = current.base.find(item => item.id === current.edges[0].id);
+            const verticalEdge = current.face === 'px' || current.face === 'nx';
+            const along0 = host ? (verticalEdge ? host.yM : host.xM) : raw;
+            const along1 = host ? (verticalEdge ? host.yM + host.widthM : host.xM + host.lengthM) : raw;
+            const edge = host ? snapWallEdge(current.face, raw, along0, along1, host, current.base, current.edges.map(item => item.id)) : raw;
+            const next = moveEdges(current.base, current.edges, edge);
             showLive(next);
             const id = current.edges[0].id;
             const before = current.base.find(room => room.id === id);
@@ -515,12 +751,18 @@ export function PlanView({
           const moved = Math.hypot(event.clientX - current.pointerX, event.clientY - current.pointerY);
           if (current.kind === 'draw') {
             const point = toWorld(event.clientX, event.clientY);
-            const xM = Math.min(current.x, snap(point.xM));
-            const yM = Math.min(current.y, snap(point.yM));
-            const lengthM = Math.abs(snap(point.xM) - current.x);
-            const widthM = Math.abs(snap(point.yM) - current.y);
+            const rect = snapDrawnRect(current.x, current.y, snap(point.xM), snap(point.yM), project.rooms);
             setDraft(null);
-            if (lengthM >= MIN_DRAW_M && widthM >= MIN_DRAW_M) onDrawRoom({ xM, yM, lengthM, widthM });
+            if (rect.lengthM >= MIN_DRAW_M && rect.widthM >= MIN_DRAW_M) onDrawRoom(rect);
+            return;
+          }
+          if (current.kind === 'stamp') {
+            const placed = spotRef.current;
+            if (moved < DRAG_PX && placed && (tool.kind === 'door' || tool.kind === 'window')) {
+              onPlaceOpening(placed, tool.kind);
+              spotRef.current = null;
+              setSpot(null);
+            }
             return;
           }
           if (current.kind === 'place' && moved < 6) {
@@ -528,11 +770,32 @@ export function PlanView({
             onPlace({ xM: snap(point.xM), yM: snap(point.yM) });
             return;
           }
+          if (current.kind === 'pan') {
+            if (moved < DRAG_PX && tool.kind === 'select') onSelect({ kind: 'project' });
+            return;
+          }
+          if (current.kind === 'space') {
+            const before = current.base.find(room => room.id === current.id);
+            const after = previewRef.current?.find(room => room.id === current.id);
+            showLive(null);
+            setGesture(null);
+            setReadout(null);
+            suppressClick.current = true;
+            onSelect({ kind: 'room', id: current.id });
+            if (current.armed && before && after) {
+              const dx = after.xM - before.xM;
+              const dy = after.yM - before.yM;
+              if (Math.abs(dx) > 1e-6 || Math.abs(dy) > 1e-6) onMoveSpace(current.id, dx, dy);
+            }
+            return;
+          }
           if (current.kind === 'wall' || current.kind === 'opening') {
             const select = () => {
               suppressClick.current = true;
-              if (current.kind === 'wall') onSelect({ kind: 'surface', roomId: current.edges[0].id, face: 'walls', wallFace: current.face });
-              else onSelect({ kind: 'opening', roomId: current.moves[0].roomId, id: current.moves[0].openingId });
+              if (current.kind === 'wall') {
+                if (!current.armed && current.interfaceKey) onSelect({ kind: 'interface', key: current.interfaceKey });
+                else onSelect({ kind: 'surface', roomId: current.edges[0].id, face: 'walls', wallFace: current.face });
+              } else onSelect({ kind: 'opening', roomId: current.moves[0].roomId, id: current.moves[0].openingId });
             };
             if (!current.armed) {
               showLive(null);
@@ -557,27 +820,51 @@ export function PlanView({
         }}
       >
         <g transform="scale(1,-1)">
-          {rooms.map(room => (
-            <rect
-              key={room.id}
-              data-hit="room"
-              x={room.xM}
-              y={room.yM}
-              width={room.lengthM}
-              height={room.widthM}
-              fill={room.id === highlightedRoom?.id ? SELECT_FILL : roomFill(room.use)}
-              stroke="none"
-              onClick={event => {
-                event.stopPropagation();
-                if (tool.kind !== 'select') return;
-                onSelect({ kind: 'room', id: room.id });
-              }}
-              onContextMenu={event => openHitMenu(event, { kind: 'room', id: room.id })}
-            />
-          ))}
+          {rooms.map(room => {
+            const shaped = (room.outline?.length ?? 0) >= 3;
+            const fill = showSpaces ? (room.id === highlightedRoom?.id ? SELECT_FILL : roomFill(room.use)) : 'none';
+            const stroke = showSpaces ? 'none' : '#b7b7b0';
+            const selectRoom = (event: ReactMouseEvent) => {
+              event.stopPropagation();
+              if (tool.kind !== 'select') return;
+              onSelect({ kind: 'room', id: room.id });
+            };
+            const menu = (event: ReactMouseEvent) => openHitMenu(event, { kind: 'room', id: room.id });
+            return shaped ? (
+              <polygon
+                key={room.id}
+                data-hit="room"
+                data-room={room.id}
+                points={room.outline!.map(point => `${point.x},${point.y}`).join(' ')}
+                fill={fill}
+                stroke={stroke}
+                strokeWidth={showSpaces ? 0 : HAIR}
+                vectorEffect="non-scaling-stroke"
+                onClick={selectRoom}
+                onContextMenu={menu}
+              />
+            ) : (
+              <rect
+                key={room.id}
+                data-hit="room"
+                data-room={room.id}
+                x={room.xM}
+                y={room.yM}
+                width={room.lengthM}
+                height={room.widthM}
+                fill={fill}
+                stroke={stroke}
+                strokeWidth={showSpaces ? 0 : HAIR}
+                vectorEffect="non-scaling-stroke"
+                onClick={selectRoom}
+                onContextMenu={menu}
+              />
+            );
+          })}
           <SheetGrid view={view} pxPerM={pxPerM} />
-          <PlanWalls rooms={rooms} />
-          {rooms.flatMap(room =>
+          {showSpaces && <PlanWalls rooms={rooms} interfaceWalls={project.interfaceWalls} />}
+          {showSpaces && <DrawnWalls runs={wallRuns} selection={selection} tool={tool} onSelect={onSelect} onMenu={openHitMenu} />}
+          {showSpaces && rooms.flatMap(room =>
             room.openings.map(opening => {
               const graphic = graphicWall(room.surfaces.walls[opening.face].constructionId);
               const gap = openingGap(room, opening, graphic.thickness);
@@ -601,7 +888,36 @@ export function PlanView({
               );
             })
           )}
-          {rooms.flatMap(room =>
+          {showSpaces && rooms.filter(room => (room.outline?.length ?? 0) >= 3).flatMap(room =>
+            (room.outline ?? []).map((point, index) => {
+              const next = room.outline![(index + 1) % room.outline!.length];
+              return (
+                <line
+                  key={`${room.id}-edge-${index}-hit`}
+                  data-hit="edge"
+                  data-room={room.id}
+                  data-edge={index}
+                  x1={point.x}
+                  y1={point.y}
+                  x2={next.x}
+                  y2={next.y}
+                  stroke="transparent"
+                  strokeWidth={0.5}
+                  onClick={event => {
+                    event.stopPropagation();
+                    if (tool.kind !== 'select') return;
+                    onSelect({ kind: 'surface', roomId: room.id, face: 'walls', edge: index });
+                  }}
+                  onContextMenu={event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onSelect({ kind: 'surface', roomId: room.id, face: 'walls', edge: index });
+                  }}
+                />
+              );
+            })
+          )}
+          {showSpaces && rooms.filter(room => (room.outline?.length ?? 0) < 3).flatMap(room =>
             WALL_FACE_IDS.map(face => {
               const line = wallLine(room, face);
               return (
@@ -630,7 +946,34 @@ export function PlanView({
               );
             })
           )}
-          {rooms.flatMap(room =>
+          {showSpaces && interfaceTargets(rooms).map(target => (
+            <line
+              key={target.key}
+              data-hit="interface"
+              data-key={target.key}
+              x1={target.x0}
+              y1={target.y0}
+              x2={target.x1}
+              y2={target.y1}
+              stroke="transparent"
+              strokeWidth={0.5}
+              onClick={event => {
+                event.stopPropagation();
+                if (suppressClick.current) {
+                  suppressClick.current = false;
+                  return;
+                }
+                if (tool.kind !== 'select') return;
+                onSelect({ kind: 'interface', key: target.key });
+              }}
+              onContextMenu={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                onSelect({ kind: 'interface', key: target.key });
+              }}
+            />
+          ))}
+          {showSpaces && rooms.flatMap(room =>
             room.openings.map(opening => {
               const ends = openingEnds(room, opening);
               return (
@@ -659,26 +1002,63 @@ export function PlanView({
               );
             })
           )}
-          {rooms.map(room => (
-            <g key={`${room.id}-label`} transform={`translate(${room.xM + room.lengthM / 2} ${room.yM + room.widthM / 2}) scale(1,-1)`} pointerEvents="none">
-              <text textAnchor="middle" fontSize={font} fontWeight={500} fill={INK}>
-                {room.name}
-              </text>
-              <text textAnchor="middle" y={font * 1.4} fontSize={font * 0.68} fill="#5e6368">
-                {formatArea(room.lengthM * room.widthM, project.units)} · {formatNumber(mToLength(room.lengthM, project.units), 2)} × {formatNumber(mToLength(room.widthM, project.units), 2)} {lengthUnit(project.units)}
-              </text>
-            </g>
-          ))}
+          {showSpaces && rooms.map(room => {
+            const shaped = (room.outline?.length ?? 0) >= 3;
+            const center = shaped ? outlineCentroid(room.outline ?? []) : { x: room.xM + room.lengthM / 2, y: room.yM + room.widthM / 2 };
+            const area = shaped ? polygonArea(room.outline ?? []) : room.lengthM * room.widthM;
+            return (
+              <g key={`${room.id}-label`} transform={`translate(${center.x} ${center.y}) scale(1,-1)`} pointerEvents="none">
+                <text textAnchor="middle" fontSize={font} fontWeight={500} fill={INK}>
+                  {room.name}
+                </text>
+                <text textAnchor="middle" y={font * 1.4} fontSize={font * 0.68} fill="#5e6368">
+                  {shaped
+                    ? formatArea(area, project.units)
+                    : `${formatArea(area, project.units)} · ${formatNumber(mToLength(room.lengthM, project.units), 2)} × ${formatNumber(mToLength(room.widthM, project.units), 2)} ${lengthUnit(project.units)}`}
+                </text>
+              </g>
+            );
+          })}
+          {showSystems && <SystemLinks project={project} />}
           {project.equipment.filter(item => {
+            if (showSystems) return true;
             const mount = getProduct(item.catalogId)?.mount;
             return mount !== 'ceiling' && mount !== 'roof';
-          }).map(item => (
-            <EquipmentMark key={item.id} item={item} active={selection.kind === 'equipment' && selection.id === item.id} onSelect={onSelect} onContextMenu={onContextMenu} tool={tool} fontM={font} />
-          ))}
+          }).map(item => {
+            const before = gesture?.kind === 'space' ? project.rooms.find(room => room.id === item.roomId) : undefined;
+            const after = before ? rooms.find(room => room.id === before.id) : undefined;
+            const placed = before && after ? { ...item, xM: item.xM + (after.xM - before.xM), yM: item.yM + (after.yM - before.yM) } : item;
+            const systemIndex = placed.systemId ? project.systems.findIndex(system => system.id === placed.systemId) : -1;
+            const system = systemIndex >= 0 ? project.systems[systemIndex] : undefined;
+            return (
+              <EquipmentMark
+                key={item.id}
+                item={placed}
+                active={selection.kind === 'equipment' && selection.id === item.id}
+                onSelect={onSelect}
+                onContextMenu={onContextMenu}
+                tool={tool}
+                fontM={font}
+                systemName={showSystems ? system?.name : undefined}
+                color={showSystems && system ? SYSTEM_COLORS[systemIndex % SYSTEM_COLORS.length] : undefined}
+              />
+            );
+          })}
           {draft && (
             <rect x={draft.xM} y={draft.yM} width={draft.lengthM} height={draft.widthM} fill="rgba(14,110,102,0.08)" stroke={DIM} strokeWidth={HAIR} vectorEffect="non-scaling-stroke" />
           )}
-          {highlightedRoom && (
+          {(chain || (aim && tool.kind === 'wall')) && <ChainPreview points={chain ?? []} aim={aim} units={project.units} fontM={font} />}
+          {spot && (tool.kind === 'door' || tool.kind === 'window') && <OpeningGhost spot={spot} kind={tool.kind} />}
+          {highlightedRoom && ((highlightedRoom.outline?.length ?? 0) >= 3 ? (
+            <polygon
+              points={highlightedRoom.outline!.map(point => `${point.x},${point.y}`).join(' ')}
+              fill="none"
+              stroke={SELECT}
+              strokeWidth={2.25}
+              vectorEffect="non-scaling-stroke"
+              pointerEvents="none"
+            />
+          ) : (
             <rect
               x={highlightedRoom.xM}
               y={highlightedRoom.yM}
@@ -690,8 +1070,39 @@ export function PlanView({
               vectorEffect="non-scaling-stroke"
               pointerEvents="none"
             />
-          )}
-          {dimRoom && selectedWall && (
+          ))}
+          {showSpaces && selection.kind === 'surface' && selection.face === 'walls' && selection.edge != null && (() => {
+            const room = rooms.find(item => item.id === selection.roomId);
+            const loop = room?.outline;
+            if (!room || !loop || selection.edge < 0 || selection.edge >= loop.length) return null;
+            const start = loop[selection.edge];
+            const end = loop[(selection.edge + 1) % loop.length];
+            return (
+              <polygon
+                points={wallQuad(start.x, start.y, end.x, end.y)}
+                fill={SELECT_FILL}
+                stroke={SELECT}
+                strokeWidth={2.25}
+                vectorEffect="non-scaling-stroke"
+                pointerEvents="none"
+              />
+            );
+          })()}
+          {showSpaces && selection.kind === 'interface' && (() => {
+            const target = interfaceTargets(rooms).find(item => item.key === selection.key);
+            if (!target) return null;
+            return (
+              <polygon
+                points={wallQuad(target.x0, target.y0, target.x1, target.y1)}
+                fill={SELECT_FILL}
+                stroke={SELECT}
+                strokeWidth={2.25}
+                vectorEffect="non-scaling-stroke"
+                pointerEvents="none"
+              />
+            );
+          })()}
+          {showSpaces && dimRoom && selectedWall && (measuredRoom?.outline?.length ?? 0) < 3 && (
             <rect
               {...wallBand(dimRoom, selectedWall, graphicWall(dimRoom.surfaces.walls[selectedWall].constructionId).thickness)}
               fill={SELECT_FILL}
@@ -701,7 +1112,7 @@ export function PlanView({
               pointerEvents="none"
             />
           )}
-          {selection.kind === 'opening' && (() => {
+          {showSpaces && selection.kind === 'opening' && (() => {
             const room = rooms.find(item => item.id === selection.roomId);
             const opening = room?.openings.find(item => item.id === selection.id);
             if (!room || !opening) return null;
@@ -717,26 +1128,33 @@ export function PlanView({
               />
             );
           })()}
-          {measuredRoom && <RoomDimensions room={measuredRoom} rooms={rooms} units={project.units} fontM={font} wallFace={measuredFace} />}
-          {measuredRoom && measuredOpening && <OpeningSlideDimension room={measuredRoom} opening={measuredOpening} units={project.units} fontM={font} />}
+          {showSpaces && measuredRoom && gesture?.kind !== 'space' && (measuredRoom.outline?.length ?? 0) < 3 && <RoomDimensions room={measuredRoom} rooms={rooms} units={project.units} fontM={font} wallFace={measuredFace} />}
+          {showSpaces && measuredRoom && measuredOpening && <OpeningSlideDimension room={measuredRoom} opening={measuredOpening} units={project.units} fontM={font} />}
           {readout && <DragReadout x={readout.x} y={readout.y} text={readout.text} fontM={font} />}
         </g>
       </svg>
+      <div className="plan-mark">
+        <NorthMark degrees={northDegrees(project.northDeg)} onCommit={onNorthChange} />
+        <div className="plan-scale">
+          <span>0</span>
+          <i style={{ width: Math.min(scale.meters * pxPerM, 140) }} />
+          <span>{scale.label}</span>
+        </div>
+      </div>
+      </div>
+      {showSpaces && (
       <div className="plan-foot">
       <div className="plan-legend">
-        <div><i className="swatch" style={{ background: wallColor('asm-wall-dining') }} />Exterior</div>
-        <div><i className="swatch" style={{ background: wallColor('asm-wall-kitchen') }} />Service</div>
-        <div><i className="swatch" style={{ background: wallColor('asm-wall-partition') }} />Partition</div>
-        <div><i className="swatch" style={{ background: wallColor('asm-wall-walkin') }} />Walk-in</div>
-        <div><i className="swatch" style={{ background: wallColor('asm-wall-glass') }} />Glass</div>
-        <div><i className="swatch" style={{ background: wallColor(null) }} />No construction</div>
-        <p>Door swing is drawn into one room. Scroll to zoom. Drag empty space to pan.</p>
-      </div>
-      <div className="plan-scale" aria-hidden="true">
-        <i style={{ width: Math.min(scale.meters * pxPerM, 160) }} />
-        <span>{scale.label}</span>
+            <div><i className="swatch" style={{ background: wallColor('asm-wall-dining') }} />Exterior</div>
+            <div><i className="swatch" style={{ background: wallColor('asm-wall-kitchen') }} />Service</div>
+            <div><i className="swatch" style={{ background: wallColor('asm-wall-partition') }} />Partition</div>
+            <div><i className="swatch" style={{ background: wallColor('asm-wall-walkin') }} />Walk-in</div>
+            <div><i className="swatch" style={{ background: wallColor('asm-wall-glass') }} />Glass</div>
+            <div><i className="swatch" style={{ background: INTERFACE_COLOR }} />Interface</div>
+            <div><i className="swatch" style={{ background: wallColor(null) }} />No construction</div>
       </div>
       </div>
+      )}
     </div>
   );
 }
@@ -829,11 +1247,27 @@ function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
   return { name: 'Unit', roof };
 }
 
+function SystemLinks({ project }: { project: Project }) {
+  return (
+    <g pointerEvents="none" fill="none" strokeWidth={HAIR} vectorEffect="non-scaling-stroke">
+      {project.systems.map((system, index) => {
+        const members = project.equipment.filter(item => item.systemId === system.id);
+        if (members.length < 2) return null;
+        const ordered = [...members].sort((a, b) => a.xM - b.xM || a.yM - b.yM);
+        const color = SYSTEM_COLORS[index % SYSTEM_COLORS.length];
+        return <polyline key={system.id} points={ordered.map(item => `${item.xM},${item.yM}`).join(' ')} stroke={color} vectorEffect="non-scaling-stroke" />;
+      })}
+    </g>
+  );
+}
+
 function EquipmentMark({
   item,
   active,
   tool,
   fontM,
+  systemName,
+  color,
   onSelect,
   onContextMenu,
 }: {
@@ -841,6 +1275,8 @@ function EquipmentMark({
   active: boolean;
   tool: EditorTool;
   fontM: number;
+  systemName?: string;
+  color?: string;
   onSelect: (selection: Selection) => void;
   onContextMenu: (selection: Selection, x: number, y: number) => void;
 }) {
@@ -849,8 +1285,9 @@ function EquipmentMark({
   const width = product?.dimensions?.widthM ?? 0.6;
   const { name, roof } = equipmentLabel(item.catalogId);
   const label = item.quantity > 1 ? `${name} ×${item.quantity}` : name;
-  const chipW = Math.max(fontM * 1.7, fontM * 0.56 * label.length);
-  const chipH = fontM * 0.95;
+  const stroke = color ?? MARK_COLOR.equipment;
+  const chipW = Math.max(fontM * 1.7, fontM * 0.56 * Math.max(label.length, systemName?.length ?? 0));
+  const chipH = systemName ? fontM * 1.7 : fontM * 0.95;
   const hitW = Math.max(length, chipW);
   const tail = chipH + fontM * 0.2;
   return (
@@ -878,7 +1315,7 @@ function EquipmentMark({
         width={length}
         height={width}
         fill={active ? SELECT_FILL : 'none'}
-        stroke={active ? SELECT : MARK_COLOR.equipment}
+        stroke={active ? SELECT : stroke}
         strokeWidth={active ? 2.25 : HAIR}
         vectorEffect="non-scaling-stroke"
         strokeDasharray={roof ? '0.16 0.1' : undefined}
@@ -886,9 +1323,14 @@ function EquipmentMark({
       <g transform={`translate(${item.xM} ${item.yM}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
         <g transform={`translate(0 ${width / 2 + chipH / 2 + fontM * 0.12})`}>
           <rect x={-chipW / 2} y={-chipH / 2} width={chipW} height={chipH} fill={PAPER} stroke="none" />
-          <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.68} fill={active ? SELECT : MARK_COLOR.equipment}>
+          <text textAnchor="middle" dominantBaseline="middle" y={systemName ? -chipH * 0.18 : 0} fontSize={fontM * 0.62} fill={active ? SELECT : stroke}>
             {label}
           </text>
+          {systemName && (
+            <text textAnchor="middle" dominantBaseline="middle" y={chipH * 0.28} fontSize={fontM * 0.52} fill={active ? SELECT : stroke}>
+              {systemName}
+            </text>
+          )}
         </g>
       </g>
     </g>
@@ -943,10 +1385,73 @@ function SheetGrid({ view, pxPerM }: { view: ViewBox; pxPerM: number }) {
   );
 }
 
-function PlanWalls({ rooms }: { rooms: readonly Room[] }) {
-  const faces = rooms.flatMap(room => WALL_FACE_IDS.map(face => ({ room, face, id: room.surfaces.walls[face].constructionId, graphic: graphicWall(room.surfaces.walls[face].constructionId) })));
+function spanLine(x1: number, y1: number, x2: number, y2: number, start: number, end: number) {
+  const geom = runGeom({ x0: x1, y0: y1, x1: x2, y1: y2 });
+  return {
+    x1: geom.x0 + geom.dx * start,
+    y1: geom.y0 + geom.dy * start,
+    x2: geom.x0 + geom.dx * end,
+    y2: geom.y0 + geom.dy * end,
+  };
+}
+
+function WallSpan({
+  x1,
+  y1,
+  x2,
+  y2,
+  portion,
+  constructionId,
+  thickness,
+  glass,
+}: {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  portion: WallPortion;
+  constructionId: string | null | undefined;
+  thickness: number;
+  glass: boolean;
+}) {
+  if (portion.kind === 'interface' || portion.endM - portion.startM < 0.02) return null;
+  const line = spanLine(x1, y1, x2, y2, portion.startM, portion.endM);
+  if (!constructionId) {
+    return <line {...line} stroke={wallColor(null)} strokeWidth={HAIR} strokeDasharray="0.16 0.1" vectorEffect="non-scaling-stroke" />;
+  }
+  return <polygon points={wallQuad(line.x1, line.y1, line.x2, line.y2, thickness)} fill={wallColor(constructionId)} fillOpacity={glass ? 0.55 : 1} />;
+}
+
+function PlanWalls({ rooms, interfaceWalls }: { rooms: readonly Room[]; interfaceWalls?: Project['interfaceWalls'] }) {
+  const boxed = rooms.filter(room => (room.outline?.length ?? 0) < 3);
+  const shaped = rooms.filter(room => (room.outline?.length ?? 0) >= 3);
+  const faces = boxed.flatMap(room => WALL_FACE_IDS.map(face => ({ room, face, id: room.surfaces.walls[face].constructionId, graphic: graphicWall(room.surfaces.walls[face].constructionId) })));
   return (
     <g pointerEvents="none">
+      {shaped.flatMap(room => {
+        const loop = room.outline ?? [];
+        return loop.flatMap((point, index) => {
+          const next = loop[(index + 1) % loop.length];
+          const constructionId = room.edgeWalls?.[index]?.constructionId;
+          const graphic = graphicWall(constructionId);
+          if (graphic.role !== 'none') {
+            return <polygon key={`${room.id}-edge-${index}`} points={wallQuad(point.x, point.y, next.x, next.y, graphic.thickness)} fill={wallColor(constructionId)} fillOpacity={graphic.role === 'glass' ? 0.55 : 1} />;
+          }
+          return edgePortions(room, index, rooms).map((portion, portionIndex) => (
+            <WallSpan
+              key={`${room.id}-edge-${index}-${portionIndex}`}
+              x1={point.x}
+              y1={point.y}
+              x2={next.x}
+              y2={next.y}
+              portion={portion}
+              constructionId={constructionId}
+              thickness={graphic.thickness}
+              glass={false}
+            />
+          ));
+        });
+      })}
       {faces.filter(item => item.graphic.role !== 'none').map(item => (
         <rect
           key={`${item.room.id}-${item.face}`}
@@ -955,19 +1460,48 @@ function PlanWalls({ rooms }: { rooms: readonly Room[] }) {
           fillOpacity={item.graphic.role === 'glass' ? 0.55 : 1}
         />
       ))}
-      {faces.filter(item => item.graphic.role === 'none').map(item => {
+      {faces.filter(item => item.graphic.role === 'none').flatMap(item => {
         const line = wallLine(item.room, item.face);
-        return (
-          <line
-            key={`${item.room.id}-${item.face}`}
+        return facePortions(item.room, item.face, rooms).map((portion, portionIndex) => (
+          <WallSpan
+            key={`${item.room.id}-${item.face}-${portionIndex}`}
             x1={line.x1}
             y1={line.y1}
             x2={line.x2}
             y2={line.y2}
-            stroke={wallColor(null)}
-            strokeWidth={HAIR}
-            strokeDasharray="0.16 0.1"
-            vectorEffect="non-scaling-stroke"
+            portion={portion}
+            constructionId={item.id}
+            thickness={item.graphic.thickness}
+            glass={item.graphic.role === 'glass'}
+          />
+        ));
+      })}
+      {interfaceTargets(rooms).map(target => {
+        const assignment = interfaceWalls?.[target.key];
+        const color = interfaceConstructionColor(assignment);
+        const outside = target.sides.length < 2;
+        if (!color) {
+          if (outside) return null;
+          return (
+            <line
+              key={`iface-${target.key}`}
+              x1={target.x0}
+              y1={target.y0}
+              x2={target.x1}
+              y2={target.y1}
+              stroke={INTERFACE_COLOR}
+              strokeWidth={2.6}
+              vectorEffect="non-scaling-stroke"
+            />
+          );
+        }
+        const graphic = graphicWall(assignment?.constructionId);
+        return (
+          <polygon
+            key={`iface-${target.key}`}
+            points={wallQuad(target.x0, target.y0, target.x1, target.y1, graphic.role === 'none' ? 0.14 : graphic.thickness)}
+            fill={color}
+            fillOpacity={graphic.role === 'glass' ? 0.55 : 1}
           />
         );
       })}
@@ -1000,6 +1534,250 @@ function WindowMark({
           />
         );
       })}
+    </g>
+  );
+}
+
+function DrawnWalls({
+  runs,
+  selection,
+  tool,
+  onSelect,
+  onMenu,
+}: {
+  runs: readonly WallRun[];
+  selection: Selection;
+  tool: EditorTool;
+  onSelect: (selection: Selection) => void;
+  onMenu: (event: ReactMouseEvent, selection: Selection) => void;
+}) {
+  return (
+    <g>
+      {runs.map(run => {
+        const selected = selection.kind === 'wallRun' && selection.id === run.id;
+        const geom = runGeom(run);
+        const selectRun = (event: ReactMouseEvent) => {
+          event.stopPropagation();
+          if (tool.kind !== 'select') return;
+          onSelect({ kind: 'wallRun', id: run.id });
+        };
+        return (
+          <g key={run.id}>
+            {wallQuads(run).map((points, index) => (
+              <polygon
+                key={index}
+                points={points}
+                fill={selected ? '#d9843f' : '#60707a'}
+                stroke={selected ? SELECT : 'none'}
+                strokeWidth={2}
+                vectorEffect="non-scaling-stroke"
+                data-hit="wall-run"
+                data-id={run.id}
+                onClick={selectRun}
+                onContextMenu={event => onMenu(event, { kind: 'wallRun', id: run.id })}
+              />
+            ))}
+            {run.openings.map(opening => {
+              const ends = runOpeningEnds(run, opening);
+              const active = selection.kind === 'wallOpening' && selection.id === opening.id;
+              const from = Math.atan2(geom.dy, geom.dx);
+              let delta = Math.atan2(ends.ny, ends.nx) - from;
+              while (delta > Math.PI) delta -= Math.PI * 2;
+              while (delta <= -Math.PI) delta += Math.PI * 2;
+              return (
+                <g key={opening.id} pointerEvents="none">
+                  {opening.kind === 'door' && (
+                    <g fill="none" stroke={active ? SELECT : MARK_COLOR.door} strokeWidth={active ? 2.25 : HAIR}>
+                      <line x1={ends.x0} y1={ends.y0} x2={ends.x0 + ends.nx * opening.widthM} y2={ends.y0 + ends.ny * opening.widthM} vectorEffect="non-scaling-stroke" />
+                      <polyline points={arcPoints(ends.x0, ends.y0, opening.widthM, from, from + delta)} vectorEffect="non-scaling-stroke" />
+                    </g>
+                  )}
+                  {opening.kind === 'window' && <SlantedWindow ends={ends} active={active} />}
+                </g>
+              );
+            })}
+            <line
+              data-hit="wall-run"
+              data-id={run.id}
+              x1={geom.x0}
+              y1={geom.y0}
+              x2={geom.x1}
+              y2={geom.y1}
+              stroke="transparent"
+              strokeWidth={0.5}
+              onClick={selectRun}
+              onContextMenu={event => onMenu(event, { kind: 'wallRun', id: run.id })}
+            />
+            {run.openings.map(opening => {
+              const ends = runOpeningEnds(run, opening);
+              return (
+                <line
+                  key={`${opening.id}-hit`}
+                  data-hit="wall-opening"
+                  data-wall={run.id}
+                  data-opening={opening.id}
+                  x1={ends.x0}
+                  y1={ends.y0}
+                  x2={ends.x1}
+                  y2={ends.y1}
+                  stroke="transparent"
+                  strokeWidth={0.36}
+                  onClick={event => {
+                    event.stopPropagation();
+                    if (tool.kind !== 'select') return;
+                    onSelect({ kind: 'wallOpening', wallId: run.id, id: opening.id });
+                  }}
+                  onContextMenu={event => onMenu(event, { kind: 'wallOpening', wallId: run.id, id: opening.id })}
+                />
+              );
+            })}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+function OpeningGhost({ spot, kind }: { spot: OpeningSpot; kind: 'door' | 'window' }) {
+  const color = kind === 'door' ? MARK_COLOR.door : MARK_COLOR.window;
+  const swing = spot.nx != null && spot.ny != null ? { nx: spot.nx, ny: spot.ny, from: 0, to: 0 } : doorArc(spot.face, 'start', 'in');
+  const dx = spot.x1 - spot.x0;
+  const dy = spot.y1 - spot.y0;
+  const len = Math.hypot(dx, dy) || 1;
+  const px = (-dy / len) * 0.12;
+  const py = (dx / len) * 0.12;
+  const slot = `${spot.x0 + px},${spot.y0 + py} ${spot.x1 + px},${spot.y1 + py} ${spot.x1 - px},${spot.y1 - py} ${spot.x0 - px},${spot.y0 - py}`;
+  const from = spot.nx != null ? Math.atan2(dy, dx) : swing.from;
+  let to = swing.to;
+  if (spot.nx != null && spot.ny != null) {
+    let delta = Math.atan2(spot.ny, spot.nx) - from;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta <= -Math.PI) delta += Math.PI * 2;
+    to = from + delta;
+  }
+  return (
+    <g pointerEvents="none" fill="none" stroke={color} strokeWidth={2.25}>
+      <polygon points={slot} fill="rgba(255,255,255,0.72)" vectorEffect="non-scaling-stroke" />
+      {kind === 'door' && (
+        <>
+          <line x1={spot.x0} y1={spot.y0} x2={spot.x0 + swing.nx * spot.widthM} y2={spot.y0 + swing.ny * spot.widthM} vectorEffect="non-scaling-stroke" />
+          <polyline points={arcPoints(spot.x0, spot.y0, spot.widthM, from, to)} vectorEffect="non-scaling-stroke" />
+        </>
+      )}
+      {kind === 'window' && <SlantedWindow ends={{ ...spot, nx: -dy / len, ny: dx / len }} active={false} />}
+    </g>
+  );
+}
+
+function SlantedWindow({
+  ends,
+  active,
+}: {
+  ends: { x0: number; y0: number; x1: number; y1: number; nx: number; ny: number };
+  active: boolean;
+}) {
+  return (
+    <g stroke={active ? SELECT : MARK_COLOR.window} strokeWidth={active ? 2.25 : HAIR} fill="none">
+      {[-1, 0, 1].map(part => {
+        const offset = part * 0.045;
+        return (
+          <line
+            key={part}
+            x1={ends.x0 + ends.nx * offset}
+            y1={ends.y0 + ends.ny * offset}
+            x2={ends.x1 + ends.nx * offset}
+            y2={ends.y1 + ends.ny * offset}
+            vectorEffect="non-scaling-stroke"
+          />
+        );
+      })}
+    </g>
+  );
+}
+
+const GUIDE = '#c43b6a';
+
+function ChainPreview({
+  points,
+  aim,
+  units,
+  fontM,
+}: {
+  points: DrawPoint[];
+  aim: WallSnap | null;
+  units: Project['units'];
+  fontM: number;
+}) {
+  const handle = Math.max(fontM * 0.55, 0.12);
+  const last = points.length > 0 ? points[points.length - 1] : null;
+  return (
+    <g pointerEvents="none">
+      {points.slice(1).map((point, index) => (
+        <polygon key={index} points={wallQuad(points[index].x, points[index].y, point.x, point.y)} fill="rgba(14,110,102,0.16)" stroke={DIM} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+      ))}
+      {aim?.guides.map((guide, index) => {
+        const length = Math.hypot(guide.x1 - guide.x0, guide.y1 - guide.y0);
+        const midX = (guide.x0 + guide.x1) / 2;
+        const midY = (guide.y0 + guide.y1) / 2;
+        let textDeg = (Math.atan2(-(guide.y1 - guide.y0), guide.x1 - guide.x0) * 180) / Math.PI;
+        if (textDeg > 90 || textDeg < -90) textDeg += 180;
+        return (
+          <g key={`guide-${index}`}>
+            <line x1={guide.x0} y1={guide.y0} x2={guide.x1} y2={guide.y1} stroke={GUIDE} strokeWidth={1.25} strokeDasharray="0.18 0.12" vectorEffect="non-scaling-stroke" />
+            {length > 0.2 && (
+              <g transform={`translate(${midX} ${midY}) scale(1,-1) rotate(${textDeg})`}>
+                <text textAnchor="middle" y={-fontM * 0.55} fontSize={fontM * 0.55} fill={GUIDE} fontWeight={600}>
+                  {formatLength(length, units, 1)}
+                </text>
+              </g>
+            )}
+          </g>
+        );
+      })}
+      {last && aim && <WallDraftCue line={{ x0: last.x, y0: last.y, x1: aim.x, y1: aim.y }} units={units} fontM={fontM} marks={false} />}
+      {points.map((point, index) => (
+        <rect key={`pt-${index}`} x={point.x - handle / 2} y={point.y - handle / 2} width={handle} height={handle} fill={index === 0 && aim?.close ? GUIDE : '#fff'} stroke={index === 0 && aim?.close ? GUIDE : DIM} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
+      ))}
+      {aim && (
+        <circle cx={aim.x} cy={aim.y} r={handle * 0.42} fill={aim.kind === 'grid' ? '#fff' : GUIDE} stroke={aim.close ? GUIDE : DIM} strokeWidth={1.8} vectorEffect="non-scaling-stroke" />
+      )}
+    </g>
+  );
+}
+
+function WallDraftCue({
+  line,
+  units,
+  fontM,
+  marks = true,
+}: {
+  line: { x0: number; y0: number; x1: number; y1: number };
+  units: Project['units'];
+  fontM: number;
+  marks?: boolean;
+}) {
+  const geom = runGeom(line);
+  if (geom.length < 0.05) return null;
+  const length = formatLength(geom.length, units, 1);
+  const badge = `${length} · ${wallAngleDeg(line.x0, line.y0, line.x1, line.y1)}°`;
+  const handle = Math.max(fontM * 0.55, 0.12);
+  let textDeg = (Math.atan2(-geom.dy, geom.dx) * 180) / Math.PI;
+  if (textDeg > 90 || textDeg < -90) textDeg += 180;
+  const midX = (geom.x0 + geom.x1) / 2;
+  const midY = (geom.y0 + geom.y1) / 2;
+  const side = Math.max(0.55, fontM * 1.7);
+  return (
+    <g pointerEvents="none">
+      <polygon points={wallQuad(line.x0, line.y0, line.x1, line.y1)} fill="rgba(14,110,102,0.16)" stroke={DIM} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+      {marks && [[geom.x0, geom.y0], [geom.x1, geom.y1]].map(([x, y], index) => (
+        <rect key={index} x={x - handle / 2} y={y - handle / 2} width={handle} height={handle} fill="#fff" stroke={DIM} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
+      ))}
+      <g transform={`translate(${midX} ${midY}) scale(1,-1) rotate(${textDeg})`}>
+        <text textAnchor="middle" y={-fontM * 0.85} fontSize={fontM * 0.62} fill={DIM} fontWeight={600}>
+          {length}
+        </text>
+      </g>
+      <DragReadout x={midX + geom.nx * side} y={midY + geom.ny * side} text={badge} fontM={fontM * 0.92} />
     </g>
   );
 }

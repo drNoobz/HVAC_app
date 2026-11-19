@@ -4,9 +4,10 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { getProduct } from '@/domain/catalog';
-import type { EditorTool, PlacedEquipment, Room, Selection, WallFace } from '@/domain/types';
+import type { EditorTool, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
+import { outlineCentroid, runGeom, solidSpans, WALL_THICK_M } from '@/domain/wallDraw';
 import { doorArc, doorHinge, doorSwingSide } from '@/domain/doorSwing';
-import { MARK_COLOR, colorNumber, roomFill, wallColor } from '@/domain/walls';
+import { INTERFACE_COLOR, MARK_COLOR, colorNumber, edgePortions, facePortions, interfaceConstructionColor, portionFill, portionInterfaceKey, roomFill, snapDrawnRect, snapPointToWalls } from '@/domain/walls';
 
 const SNAP_M = 0.05;
 const MIN_DRAW_M = 0.4;
@@ -24,6 +25,8 @@ const EDGE_COLOR = 0x5c6d78;
 export interface ViewportProps {
   rooms: Room[];
   equipment: PlacedEquipment[];
+  wallRuns?: WallRun[];
+  interfaceWalls?: Project['interfaceWalls'];
   cameraPose?: 'orbit' | 'top';
   onCameraSettled?: (pose: 'orbit' | 'top') => void;
   selection: Selection;
@@ -114,9 +117,12 @@ type PickData = {
   roomId?: string;
   face?: string;
   wallFace?: string;
+  edge?: number;
+  interfaceKey?: string;
   highlight?: THREE.Mesh;
   edgeRole?: number;
   baseEdge?: number;
+  wallId?: string;
 };
 
 function shellMaterial(color: number, opacity = 1, bias = 1): THREE.MeshStandardMaterial {
@@ -142,9 +148,11 @@ function depthBias(id: string): number {
 }
 
 function matchesSelection(data: PickData, selection: Selection): boolean {
+  if (selection.kind === 'interface') return data.interfaceKey === selection.key;
   if (data.kind === 'surface' && data.roomId && data.face) {
     if (selection.kind === 'room' && selection.id === data.roomId) return true;
     if (selection.kind !== 'surface' || selection.roomId !== data.roomId || selection.face !== data.face) return false;
+    if (data.face === 'walls' && (selection.edge != null || data.edge != null)) return selection.edge === data.edge;
     if (data.face !== 'walls' || !selection.wallFace || !data.wallFace) return true;
     return data.wallFace === selection.wallFace;
   }
@@ -153,6 +161,8 @@ function matchesSelection(data: PickData, selection: Selection): boolean {
     return selection.kind === 'opening' && selection.roomId === data.roomId && selection.id === data.id;
   }
   if (data.kind === 'equipment' && data.id) return selection.kind === 'equipment' && selection.id === data.id;
+  if (data.kind === 'wallRun' && data.id) return selection.kind === 'wallRun' && selection.id === data.id;
+  if (data.kind === 'wallOpening' && data.id) return selection.kind === 'wallOpening' && selection.id === data.id;
   return false;
 }
 
@@ -243,11 +253,13 @@ function addBox(
   position: [number, number, number],
   material: THREE.Material,
   userData: PickData,
-  withEdges: boolean
+  withEdges: boolean,
+  yaw = 0,
 ): void {
   if (size.some(value => value <= 0.001)) return;
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), material);
   mesh.position.set(position[0], position[1], position[2]);
+  mesh.rotation.z = yaw;
   mesh.userData = { ...userData };
   if ((material as THREE.Material).transparent) mesh.renderOrder = 2;
   attachHighlight(mesh, size);
@@ -264,6 +276,115 @@ function addBox(
   parent.add(mesh);
 }
 
+function addDrawnWalls(group: THREE.Group, runs: readonly WallRun[]): void {
+  const height = DEFAULT_HEIGHT_M;
+  for (const run of runs) {
+    const geom = runGeom(run);
+    if (geom.length < 0.05) continue;
+    const yaw = Math.atan2(geom.dy, geom.dx);
+    for (const [start, end] of solidSpans(geom.length, run.openings)) {
+      const len = end - start;
+      if (len < 0.02) continue;
+      const mid = (start + end) / 2;
+      addBox(
+        group,
+        [len, WALL_THICK_M, height],
+        [geom.x0 + geom.dx * mid, geom.y0 + geom.dy * mid, height / 2],
+        shellMaterial(0x60707a, 1, 2),
+        { kind: 'wallRun', id: run.id },
+        true,
+        yaw,
+      );
+    }
+    for (const opening of run.openings) {
+      const mid = opening.offsetM + opening.widthM / 2;
+      const door = opening.kind === 'door';
+      const slabH = door ? 2.13 : 1.2;
+      const slabZ = door ? slabH / 2 : 0.9 + slabH / 2;
+      addBox(
+        group,
+        [opening.widthM, 0.04, slabH],
+        [geom.x0 + geom.dx * mid, geom.y0 + geom.dy * mid, slabZ],
+        shellMaterial(colorNumber(door ? MARK_COLOR.door : MARK_COLOR.window), 1, 3),
+        { kind: 'wallOpening', id: opening.id, wallId: run.id },
+        true,
+        yaw,
+      );
+    }
+  }
+}
+
+function addPolygonRoom(group: THREE.Group, room: Room, rooms: readonly Room[], interfaceWalls: Project['interfaceWalls'], hideRoof: boolean): void {
+  const loop = room.outline;
+  if (!loop || loop.length < 3 || room.heightM <= 0) return;
+  const floorColor = colorNumber(roomFill(room.use));
+  const bias = depthBias(room.id);
+  const wrap = new THREE.Group();
+  wrap.userData = { kind: 'room', id: room.id };
+  const shape = new THREE.Shape();
+  shape.moveTo(loop[0].x, loop[0].y);
+  for (let i = 1; i < loop.length; i += 1) shape.lineTo(loop[i].x, loop[i].y);
+  shape.closePath();
+  const slab = new THREE.ExtrudeGeometry(shape, { depth: SLAB_M, bevelEnabled: false });
+  const addSlab = (z: number, face: 'floor' | 'ceiling') => {
+    const mesh = new THREE.Mesh(slab.clone(), shellMaterial(floorColor, 1, bias));
+    mesh.position.z = z;
+    mesh.userData = { kind: 'surface', roomId: room.id, face };
+    const highlight = new THREE.Mesh(
+      slab.clone(),
+      new THREE.MeshBasicMaterial({ color: SELECT_GLOW, transparent: true, opacity: HIGHLIGHT_OPACITY, depthWrite: false, side: THREE.FrontSide }),
+    );
+    highlight.position.z = 0.01;
+    highlight.visible = false;
+    highlight.raycast = () => undefined;
+    mesh.add(highlight);
+    mesh.userData.highlight = highlight;
+    wrap.add(mesh);
+  };
+  addSlab(room.zM + 0.012, 'floor');
+  if (!hideRoof) addSlab(room.zM + room.heightM - SLAB_M, 'ceiling');
+  slab.dispose();
+  for (let i = 0; i < loop.length; i += 1) {
+    const a = loop[i];
+    const b = loop[(i + 1) % loop.length];
+    const geom = runGeom({ x0: a.x, y0: a.y, x1: b.x, y1: b.y });
+    if (geom.length < 0.05) continue;
+    const constructionId = room.edgeWalls?.[i]?.constructionId;
+    const spans = edgePortions(room, i, rooms);
+    (spans.length > 0 ? spans : [{ startM: 0, endM: geom.length, kind: 'outside' as const, names: [], roomIds: [], anchors: [] }]).forEach(portion => {
+      const length = portion.endM - portion.startM;
+      if (length < 0.05) return;
+      const mid = (portion.startM + portion.endM) / 2;
+      const interfaceKey = portionInterfaceKey(room, portion, { edge: i }, spans);
+      const own = interfaceKey ? interfaceConstructionColor(interfaceWalls?.[interfaceKey]) : null;
+      const color = own ?? (portion.kind === 'interface' ? INTERFACE_COLOR : portionFill(constructionId, 'outside'));
+      addBox(
+        wrap,
+        [length, SHELL_M, room.heightM],
+        [a.x + geom.dx * mid, a.y + geom.dy * mid, room.zM + room.heightM / 2],
+        shellMaterial(colorNumber(color), 1, bias),
+        {
+          kind: 'surface',
+          roomId: room.id,
+          face: 'walls',
+          edge: i,
+          ...(interfaceKey ? { interfaceKey } : {}),
+        },
+        false,
+        Math.atan2(geom.dy, geom.dx),
+      );
+    });
+  }
+  const center = outlineCentroid(loop);
+  const label = makeLabel(room.name, '#5c6d78');
+  if (label) {
+    label.raycast = () => undefined;
+    label.position.set(center.x, center.y, room.zM + room.heightM + 0.45);
+    wrap.add(label);
+  }
+  group.add(wrap);
+}
+
 function isLine(object: THREE.Object3D): boolean {
   return (object as THREE.Line).isLine === true;
 }
@@ -271,7 +392,10 @@ function isLine(object: THREE.Object3D): boolean {
 function selectionFromObject(object: THREE.Object3D): Selection | null {
   let current: THREE.Object3D | null = object;
   while (current) {
-    const data = current.userData as { kind?: string; id?: string; roomId?: string; face?: string; wallFace?: string };
+    const data = current.userData as { kind?: string; id?: string; roomId?: string; face?: string; wallFace?: string; wallId?: string; edge?: number; interfaceKey?: string };
+    if (data.interfaceKey) return { kind: 'interface', key: data.interfaceKey };
+    if (data.kind === 'wallOpening' && data.wallId && data.id) return { kind: 'wallOpening', wallId: data.wallId, id: data.id };
+    if (data.kind === 'wallRun' && data.id) return { kind: 'wallRun', id: data.id };
     if (data.kind === 'opening' && data.roomId && data.id) return { kind: 'opening', roomId: data.roomId, id: data.id };
     if (data.kind === 'surface' && data.roomId && (data.face === 'floor' || data.face === 'ceiling' || data.face === 'walls')) {
       const wallFace = data.wallFace;
@@ -280,6 +404,7 @@ function selectionFromObject(object: THREE.Object3D): Selection | null {
         roomId: data.roomId,
         face: data.face,
         ...(data.face === 'walls' && (wallFace === 'px' || wallFace === 'nx' || wallFace === 'py' || wallFace === 'ny') ? { wallFace } : {}),
+        ...(data.face === 'walls' && typeof data.edge === 'number' ? { edge: data.edge } : {}),
       };
     }
     if (data.kind === 'equipment' && data.id) return { kind: 'equipment', id: data.id };
@@ -330,7 +455,7 @@ function viewPoses(rooms: readonly Room[]): {
   };
 }
 
-export default function Viewport({ rooms, equipment, selection, tool, fitToken, hideRoof, cameraPose = 'orbit', onCameraSettled, onSelect, onDrawRoom, onPlace, onContextMenu }: ViewportProps) {
+export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWalls, selection, tool, fitToken, hideRoof, cameraPose = 'orbit', onCameraSettled, onSelect, onDrawRoom, onPlace, onContextMenu }: ViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool);
   const handlersRef = useRef({ onSelect, onDrawRoom, onPlace, onContextMenu });
@@ -482,13 +607,12 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
 
     const updatePreview = (end: THREE.Vector3) => {
       if (!start) return;
-      const x = snap(Math.min(start.x, end.x));
-      const y = snap(Math.min(start.y, end.y));
-      const length = Math.max(snap(Math.abs(end.x - start.x)), SNAP_M);
-      const width = Math.max(snap(Math.abs(end.y - start.y)), SNAP_M);
+      const rect = snapDrawnRect(start.x, start.y, snap(end.x), snap(end.y), roomsRef.current);
+      const length = Math.max(rect.lengthM, SNAP_M);
+      const width = Math.max(rect.widthM, SNAP_M);
       preview.visible = true;
       preview.scale.set(length, width, DEFAULT_HEIGHT_M);
-      preview.position.set(x + length / 2, y + width / 2, DEFAULT_HEIGHT_M / 2);
+      preview.position.set(rect.xM + length / 2, rect.yM + width / 2, DEFAULT_HEIGHT_M / 2);
     };
 
     let rightX = 0;
@@ -506,11 +630,12 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       downY = event.clientY;
       const point = pointOnGround(event);
       if (toolRef.current.kind === 'draw' && point) {
+        const origin = snapPointToWalls(snap(point.x), snap(point.y), roomsRef.current);
         drawing = true;
-        start = point.clone();
+        start = new THREE.Vector3(origin.x, origin.y, point.z);
         controls.enabled = false;
         renderer.domElement.setPointerCapture(event.pointerId);
-        updatePreview(point);
+        updatePreview(start);
       }
     };
     const onPointerMove = (event: PointerEvent) => {
@@ -523,11 +648,8 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       const moved = Math.hypot(event.clientX - downX, event.clientY - downY);
       const point = pointOnGround(event);
       if (drawing && start && point) {
-        const xM = snap(Math.min(start.x, point.x));
-        const yM = snap(Math.min(start.y, point.y));
-        const lengthM = snap(Math.abs(point.x - start.x));
-        const widthM = snap(Math.abs(point.y - start.y));
-        if (lengthM >= MIN_DRAW_M && widthM >= MIN_DRAW_M) handlersRef.current.onDrawRoom({ xM, yM, lengthM, widthM });
+        const rect = snapDrawnRect(start.x, start.y, snap(point.x), snap(point.y), roomsRef.current);
+        if (rect.lengthM >= MIN_DRAW_M && rect.widthM >= MIN_DRAW_M) handlersRef.current.onDrawRoom(rect);
         drawing = false;
         start = null;
         preview.visible = false;
@@ -647,6 +769,10 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
     contentRef.current = group;
 
     rooms.forEach(room => {
+      if (room.outline && room.outline.length >= 3) {
+        addPolygonRoom(group, room, rooms, interfaceWalls, hideRoof);
+        return;
+      }
       if (room.lengthM <= 0 || room.widthM <= 0 || room.heightM <= 0) return;
       const floorColor = colorNumber(roomFill(room.use));
       const bias = depthBias(room.id);
@@ -696,6 +822,8 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
         const alongX = face === 'py' || face === 'ny';
         const span = alongX ? room.lengthM : room.widthM;
         const trim = alongX ? Math.min(SHELL_M + 0.004, Math.max(0, span / 2 - 0.02)) : 0;
+        const constructionId = room.surfaces.walls[face].constructionId;
+        const portions = facePortions(room, face, rooms);
         const panels = wallPanels(
           span,
           room.heightM,
@@ -711,24 +839,41 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
             u = u0;
             du = u1 - u0;
           }
-          const x = alongX
-            ? room.xM + u + du / 2
-            : face === 'px'
-              ? room.xM + room.lengthM - SHELL_M / 2
-              : room.xM + SHELL_M / 2;
-          const y = alongX
-            ? face === 'py'
-              ? room.yM + room.widthM - SHELL_M / 2
-              : room.yM + SHELL_M / 2
-            : room.yM + u + du / 2;
-          addBox(
-            wrap,
-            alongX ? [du, SHELL_M, panel.dv] : [SHELL_M, du, panel.dv],
-            [x, y, room.zM + panel.v + panel.dv / 2],
-            shellMaterial(colorNumber(wallColor(room.surfaces.walls[face].constructionId)), 1, bias),
-            { kind: 'surface', roomId: room.id, face: 'walls', wallFace: face },
-            false
-          );
+          const slices = portions.flatMap(portion => {
+            const a = Math.max(u, portion.startM);
+            const b = Math.min(u + du, portion.endM);
+            if (b - a <= 0.01) return [];
+            return [{ u: a, du: b - a, kind: portion.kind, portion }];
+          });
+          (slices.length > 0 ? slices : [{ u, du, kind: 'outside' as const, portion: undefined }]).forEach(slice => {
+            const x = alongX
+              ? room.xM + slice.u + slice.du / 2
+              : face === 'px'
+                ? room.xM + room.lengthM - SHELL_M / 2
+                : room.xM + SHELL_M / 2;
+            const y = alongX
+              ? face === 'py'
+                ? room.yM + room.widthM - SHELL_M / 2
+                : room.yM + SHELL_M / 2
+              : room.yM + slice.u + slice.du / 2;
+            const interfaceKey = slice.portion ? portionInterfaceKey(room, slice.portion, { wallFace: face }, portions) ?? undefined : undefined;
+            const own = interfaceKey ? interfaceConstructionColor(interfaceWalls?.[interfaceKey]) : null;
+            const color = own ?? (slice.kind === 'interface' ? INTERFACE_COLOR : portionFill(constructionId, 'outside'));
+            addBox(
+              wrap,
+              alongX ? [slice.du, SHELL_M, panel.dv] : [SHELL_M, slice.du, panel.dv],
+              [x, y, room.zM + panel.v + panel.dv / 2],
+              shellMaterial(colorNumber(color), 1, bias),
+              {
+                kind: 'surface',
+                roomId: room.id,
+                face: 'walls',
+                wallFace: face,
+                ...(interfaceKey ? { interfaceKey } : {}),
+              },
+              false
+            );
+          });
         });
         addOutline(wrap, wallOutline(room, face), {
           kind: 'surface',
@@ -851,6 +996,8 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       group.add(wrap);
     });
 
+    addDrawnWalls(group, wallRuns);
+
     const paint = (next: Selection) => paintSelection(group, next);
     paintRef.current = paint;
     paint(selectionRef.current);
@@ -861,7 +1008,7 @@ export default function Viewport({ rooms, equipment, selection, tool, fitToken, 
       if (contentRef.current === group) contentRef.current = null;
       paintRef.current = () => undefined;
     };
-  }, [rooms, equipment, fitToken, hideRoof]);
+  }, [rooms, equipment, wallRuns, interfaceWalls, fitToken, hideRoof]);
 
   return <div ref={hostRef} className="viewport-canvas" />;
 }
