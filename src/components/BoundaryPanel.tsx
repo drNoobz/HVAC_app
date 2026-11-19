@@ -41,9 +41,6 @@ export function BoundaryPanel({ project }: { project: Project }) {
       <div className="boundary-copy">
         <p className="kicker">Adapter · v1</p>
         <h2>Thermonode boundary</h2>
-        <p>
-          Projects, templates, the supplier catalog, the construction material library, equipment placement, and the bill of materials stay in this app. ThermoNode material ids stay in the background for the adapter below. They are not the material picker.
-        </p>
         <div className="split-cards">
           <article>
             <h3>This app</h3>
@@ -69,9 +66,6 @@ export function BoundaryPanel({ project }: { project: Project }) {
             <li key={item}>{item}</li>
           ))}
         </ul>
-        <p className="muted">
-          Schema references in the ThermoNode repo: <code>apps/thermonode-lab/lib/geometry/types.ts</code> and <code>thermocore/src/library_materials_data.inc</code>. ThermoNode Lab’s existing HTTP routes cover AI, an Excel bridge, auth, and docs. They are not this contract.
-        </p>
         <h3>Calls</h3>
         <div className="button-row">
           <button
@@ -126,7 +120,7 @@ export function BoundaryPanel({ project }: { project: Project }) {
       <div className="boundary-output">
         <p className="kicker">Response</p>
         {isValidation(output) ? <IssueList response={output.response} /> : null}
-        <pre className="json-block">{output ? JSON.stringify(output, null, 2) : 'Run a call to see the versioned response. upstream will read not-connected.'}</pre>
+        {output ? <pre className="json-block">{JSON.stringify(output, null, 2)}</pre> : null}
       </div>
     </div>
   );
@@ -156,7 +150,6 @@ function IssueList({ response }: { response: ValidateModelResponseV1 }) {
             </li>
           ))}
       </ul>
-      {infos > 0 && <p className="muted">Material notices in this JSON are ThermoNode ids. Construction materials stay in this app and are not sent as those ids.</p>}
     </div>
   );
 }

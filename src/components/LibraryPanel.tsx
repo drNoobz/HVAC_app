@@ -5,9 +5,7 @@ import { createId } from '@/domain/ids';
 import { downloadText } from '@/domain/download';
 import {
   ASSEMBLY_CATEGORIES,
-  ASSEMBLY_LIBRARY_NOTE,
   CONSTRUCTION_CATEGORIES,
-  CONSTRUCTION_LIBRARY_NOTE,
   constructionCategoryLabel,
   importAssemblies,
   importMaterials,
@@ -201,10 +199,6 @@ export function LibraryPanel({
         <div className="library-note">
           <p className="kicker">Settings</p>
           <h2>Material library</h2>
-          <p>{libraryView === 'components' ? ASSEMBLY_LIBRARY_NOTE : CONSTRUCTION_LIBRARY_NOTE}</p>
-          <p className="muted">
-            Components are the restaurant floors, walls, ceilings, roofs, windows, and doors. Each one is a stack of layers. Pick a component on a room to copy that stack, then add or swap layers on that surface. A loaded database adds new ids. Built-in rows stay as shipped.
-          </p>
         </div>
         <div className="button-row">
           <button

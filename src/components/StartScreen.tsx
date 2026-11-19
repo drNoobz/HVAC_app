@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { cloneProject, createBlankProject } from '@/domain/projectOps';
 import { BUILTIN_TEMPLATES, createSampleProject } from '@/domain/templates';
-import { DISCLAIMER, type Project, type StoredTemplate } from '@/domain/types';
+import { type Project, type StoredTemplate } from '@/domain/types';
 
 export function StartScreen({
   projects,
@@ -37,18 +37,13 @@ export function StartScreen({
           Material library
         </button>
       </header>
-      <p className="disclaimer">{DISCLAIMER}</p>
       <main className="start-grid">
         <section>
           <p className="kicker">Start</p>
           <h1>Restaurant projects</h1>
-          <p className="lede">
-            Model spaces, pick construction materials, place equipment, and export a preliminary schedule. Other building types can be set on a project. Templates are restaurants for this stage.
-          </p>
           <div className="choice-list">
             <button type="button" className="choice" onClick={() => onCreate(createBlankProject())}>
               <strong>Blank project</strong>
-              <span>Empty model. Draw spaces or enter dimensions.</span>
             </button>
             {BUILTIN_TEMPLATES.map(template => (
               <button key={template.id} type="button" className="choice" onClick={() => onCreate(template.create())}>
@@ -58,7 +53,6 @@ export function StartScreen({
             ))}
             <button type="button" className="choice sample" onClick={() => onCreate(createSampleProject())}>
               <strong>Harbor & Rye sample</strong>
-              <span>Completed example with rooms, materials, systems, and placed equipment. Every value is an assumption.</span>
             </button>
           </div>
           {templates.length > 0 && (
@@ -86,7 +80,6 @@ export function StartScreen({
         <section>
           <p className="kicker">This browser</p>
           <h2>Projects</h2>
-          <p className="muted">Stored locally. Nothing is uploaded, and there is no portal sign-in in this demo.</p>
           {recent.length === 0 ? (
             <p className="empty">No saved projects yet.</p>
           ) : (

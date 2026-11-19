@@ -119,7 +119,7 @@ export default function App() {
         const template: StoredTemplate = {
           id: createId('tpl'),
           name,
-          description: 'Saved from a project. Rooms, materials, and equipment remain assumptions until confirmed.',
+          description: '',
           updatedAt: nowIso(),
           project: snapshot,
         };
