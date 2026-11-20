@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "units": {
+    "airflow": "cfm",
+    "capacity": "Btu/h"
+  },
+  "note": "Restaurant air equipment for temperature, humidity, and outdoor-air ventilation. Capacities and suppliers are blank until a catalog is entered.",
+  "equipment": [
+    {
+      "id": "rtu-dining",
+      "name": "Packaged rooftop unit",
+      "category": "heating-cooling",
+      "typicalUse": "Dining and bar cooling, heating, and supply air",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    },
+    {
+      "id": "doas-dining",
+      "name": "Dedicated outdoor-air unit",
+      "category": "dedicated-outdoor-air",
+      "typicalUse": "Outdoor air for the dining room, cooled and dried in summer, heated in winter",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    },
+    {
+      "id": "erv-dining",
+      "name": "Energy recovery ventilator",
+      "category": "energy-recovery",
+      "typicalUse": "Dining exhaust and outdoor air. Not for grease-hood exhaust",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    },
+    {
+      "id": "hood-type-i",
+      "name": "Type I grease hood",
+      "category": "kitchen-hood",
+      "typicalUse": "Cooking line",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    },
+    {
+      "id": "fan-upblast",
+      "name": "Upblast grease exhaust fan",
+      "category": "exhaust-fan",
+      "typicalUse": "Roof exhaust for the Type I hood",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    },
+    {
+      "id": "hood-type-ii",
+      "name": "Type II hood",
+      "category": "kitchen-hood",
+      "typicalUse": "Dishwasher and other heat or moisture without grease",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    },
+    {
+      "id": "fan-dish",
+      "name": "Dishwasher exhaust fan",
+      "category": "exhaust-fan",
+      "typicalUse": "Dish room moisture exhaust",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    },
+    {
+      "id": "mau-kitchen",
+      "name": "Make-up air unit",
+      "category": "makeup-air",
+      "typicalUse": "Replace kitchen exhaust. Heat in winter. Cool and dehumidify in summer",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    },
+    {
+      "id": "ac-kitchen",
+      "name": "Kitchen cooling unit",
+      "category": "heating-cooling",
+      "typicalUse": "Kitchen heat the hood does not capture",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    },
+    {
+      "id": "fan-restroom",
+      "name": "Restroom exhaust fan",
+      "category": "bathroom-exhaust",
+      "typicalUse": "Restrooms while the restaurant is open",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    },
+    {
+      "id": "humidifier-dining",
+      "name": "Humidifier",
+      "category": "humidifier",
+      "typicalUse": "Dining room in a cold, dry season",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    },
+    {
+      "id": "sensor-co2",
+      "name": "CO2 sensor",
+      "category": "sensor",
+      "typicalUse": "Dining and bar outdoor-air control",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    },
+    {
+      "id": "sensor-co",
+      "name": "CO alarm",
+      "category": "sensor",
+      "typicalUse": "Kitchen and gas-fired heating equipment",
+      "airflowCfm": null,
+      "coolingBtuH": null,
+      "heatingBtuH": null,
+      "potentialSupplier": "",
+      "notes": ""
+    }
+  ]
+}

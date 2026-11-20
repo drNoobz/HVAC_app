@@ -375,6 +375,8 @@ export function getProduct(id: string): CatalogProduct | undefined {
   return BY_ID.get(id);
 }
 
+export const CATALOG_MIME = 'application/hvac-catalog';
+
 export const CATEGORY_ORDER: EquipmentCategory[] = [
   'kitchen-hood',
   'exhaust-fan',

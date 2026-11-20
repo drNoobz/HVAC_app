@@ -36,6 +36,7 @@ const EMPTY_DRAFT = {
   shgc: '',
   source: '',
   notes: '',
+  potentialSupplier: '',
 };
 
 type Draft = typeof EMPTY_DRAFT;
@@ -52,6 +53,7 @@ function draftFrom(material: ConstructionMaterial): Draft {
     shgc: material.shgc == null ? '' : String(material.shgc),
     source: material.source,
     notes: material.notes,
+    potentialSupplier: material.potentialSupplier,
   };
 }
 
@@ -85,7 +87,7 @@ export function LibraryPanel({
 
   const visible = materials.filter(item => {
     if (category !== 'all' && item.category !== category) return false;
-    const haystack = `${item.name} ${item.typicalUse} ${item.source}`.toLowerCase();
+    const haystack = `${item.name} ${item.typicalUse} ${item.source} ${item.potentialSupplier}`.toLowerCase();
     return haystack.includes(query.trim().toLowerCase());
   });
   const visibleAssemblies = assemblies.filter(item => {
@@ -346,6 +348,10 @@ export function LibraryPanel({
               <span>Source</span>
               <input value={draft.source} onChange={event => setDraft({ ...draft, source: event.target.value })} />
             </label>
+            <label className="field">
+              <span>Potential supplier</span>
+              <input value={draft.potentialSupplier} onChange={event => setDraft({ ...draft, potentialSupplier: event.target.value })} />
+            </label>
           </div>
           <label className="field">
             <span>Notes</span>
@@ -429,6 +435,7 @@ export function LibraryPanel({
               <th>U</th>
               <th>SHGC</th>
               <th>Source</th>
+              <th>Potential supplier</th>
               <th></th>
             </tr>
           </thead>
@@ -458,6 +465,7 @@ export function LibraryPanel({
                   {item.source || 'Not stated'}
                   <div className="cell-sub">{item.origin === 'builtin' ? 'Built-in' : item.origin === 'import' ? 'Imported' : 'Added'}</div>
                 </td>
+                <td>{item.potentialSupplier}</td>
                 <td>
                   {item.origin === 'builtin' ? (
                     <span className="muted">Built-in</span>

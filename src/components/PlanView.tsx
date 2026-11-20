@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { getProduct } from '@/domain/catalog';
+import { CATALOG_MIME, getProduct } from '@/domain/catalog';
+import { equipmentGlyph, equipmentIconFor } from './EquipmentIcon';
 import type { EditorTool, Opening, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
 import { locateOpening, NO_WALL_RUNS, outlineCentroid, outlineRoomOk, polygonArea, roomLoop, runGeom, runOpeningEnds, snapDrawPoint, wallAngleDeg, wallQuad, wallQuads, type DrawPoint, type OpeningSpot, type WallSnap } from '@/domain/wallDraw';
 import { METERS_PER_FOOT, formatArea, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
@@ -322,6 +323,7 @@ export function PlanView({
   onContextMenu,
   onRoomsChange,
   onMoveSpace,
+  onMoveEquipment,
   onNorthChange,
   sheet,
 }: {
@@ -334,10 +336,11 @@ export function PlanView({
   onDrawWalls: (lines: { x0: number; y0: number; x1: number; y1: number }[]) => void;
   onCloseSpace: (points: DrawPoint[]) => void;
   onPlaceOpening: (spot: OpeningSpot, kind: 'door' | 'window') => void;
-  onPlace: (point: { xM: number; yM: number }) => void;
+  onPlace: (point: { xM: number; yM: number }, catalogId: string) => void;
   onContextMenu: (selection: Selection, x: number, y: number) => void;
   onRoomsChange: (rooms: Room[]) => void;
   onMoveSpace: (roomId: string, dx: number, dy: number) => void;
+  onMoveEquipment: (id: string, xM: number, yM: number) => void;
   onNorthChange: (deg: number) => void;
   sheet: 'all' | 'spaces' | 'systems';
 }) {
@@ -346,18 +349,22 @@ export function PlanView({
   const viewRef = useRef(view);
   viewRef.current = view;
   const [pxPerM, setPxPerM] = useState(40);
+  const [catalogOver, setCatalogOver] = useState(false);
   const [draft, setDraft] = useState<{ xM: number; yM: number; lengthM: number; widthM: number } | null>(null);
   const [chain, setChain] = useState<DrawPoint[] | null>(null);
   const [aim, setAim] = useState<WallSnap | null>(null);
   const [spot, setSpot] = useState<OpeningSpot | null>(null);
   const [preview, setPreview] = useState<Room[] | null>(null);
+  const [movingEquipment, setMovingEquipment] = useState<{ id: string; xM: number; yM: number } | null>(null);
   const [gesture, setGesture] = useState<
     | { kind: 'wall' | 'opening'; roomId: string; face: WallFace; openingId?: string }
     | { kind: 'space'; roomId: string }
+    | { kind: 'equipment'; id: string }
     | null
   >(null);
   const [readout, setReadout] = useState<{ x: number; y: number; text: string } | null>(null);
   const previewRef = useRef<Room[] | null>(null);
+  const movingRef = useRef<{ id: string; xM: number; yM: number } | null>(null);
   const chainRef = useRef<DrawPoint[] | null>(null);
   const commitWalls = useRef(onDrawWalls);
   commitWalls.current = onDrawWalls;
@@ -368,6 +375,7 @@ export function PlanView({
     | { kind: 'wall'; edges: { id: string; face: WallFace }[]; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace; armed: boolean; interfaceKey?: string }
     | { kind: 'opening'; moves: { roomId: string; openingId: string }[]; grab: number; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace; armed: boolean }
     | { kind: 'space'; id: string; base: Room[]; grabX: number; grabY: number; pointerX: number; pointerY: number; view: ViewBox; armed: boolean }
+    | { kind: 'equipment'; id: string; xM: number; yM: number; grabX: number; grabY: number; pointerX: number; pointerY: number; view: ViewBox; armed: boolean }
     | null
   >(null);
   const wallRuns = project.wallRuns ?? NO_WALL_RUNS;
@@ -442,6 +450,7 @@ export function PlanView({
     observer.observe(svg);
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
+      if (event.ctrlKey || event.metaKey) return;
       const rect = svg.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return;
       const current = viewRef.current;
@@ -450,7 +459,7 @@ export function PlanView({
       if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) dy *= rect.height;
       // Trackpad sends many small pixel deltas; mouse wheel sends larger jumps.
       // Scale by magnitude so Mac two-finger zoom stays smooth instead of ±12% per tick.
-      const intensity = event.ctrlKey || event.metaKey ? 0.01 : 0.0016;
+      const intensity = 0.0016;
       let factor = Math.exp(dy * intensity);
       factor = Math.min(1.15, Math.max(1 / 1.15, factor));
       const px = (event.clientX - rect.left) / rect.width;
@@ -481,6 +490,10 @@ export function PlanView({
   const showLive = (rooms: Room[] | null) => {
     previewRef.current = rooms;
     setPreview(rooms);
+  };
+  const showEquipment = (next: { id: string; xM: number; yM: number } | null) => {
+    movingRef.current = next;
+    setMovingEquipment(next);
   };
   const rooms = preview ?? project.rooms;
   const showSpaces = sheet !== 'systems';
@@ -523,7 +536,31 @@ export function PlanView({
   };
 
   return (
-    <div className={['plan-wrap', tool.kind === 'draw' ? 'is-draw' : '', tool.kind === 'place' ? 'is-place' : '', tool.kind === 'select' ? 'is-select' : '', tool.kind === 'wall' ? 'is-wall' : '', tool.kind === 'door' || tool.kind === 'window' ? 'is-opening-tool' : '', gesture ? 'is-dragging' : ''].filter(Boolean).join(' ')}>
+    <div
+      className={['plan-wrap', tool.kind === 'draw' ? 'is-draw' : '', tool.kind === 'place' ? 'is-place' : '', tool.kind === 'select' ? 'is-select' : '', tool.kind === 'wall' ? 'is-wall' : '', tool.kind === 'door' || tool.kind === 'window' ? 'is-opening-tool' : '', gesture ? 'is-dragging' : '', gesture?.kind === 'equipment' ? 'is-moving-equipment' : '', catalogOver ? 'is-catalog-drop' : ''].filter(Boolean).join(' ')}
+      onDragEnter={event => {
+        if (![...event.dataTransfer.types].includes(CATALOG_MIME)) return;
+        event.preventDefault();
+        setCatalogOver(true);
+      }}
+      onDragOver={event => {
+        if (![...event.dataTransfer.types].includes(CATALOG_MIME)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={event => {
+        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+        setCatalogOver(false);
+      }}
+      onDrop={event => {
+        setCatalogOver(false);
+        const catalogId = event.dataTransfer.getData(CATALOG_MIME);
+        if (!catalogId) return;
+        event.preventDefault();
+        const point = toWorld(event.clientX, event.clientY);
+        onPlace({ xM: snap(point.xM), yM: snap(point.yM) }, catalogId);
+      }}
+    >
       <div className="plan-sheet">
       <svg
         ref={svgRef}
@@ -596,6 +633,26 @@ export function PlanView({
                 .filter((item): item is { id: string; face: WallFace } => item.face !== null);
               drag.current = { kind: 'wall', edges: [{ id: room.id, face }, ...partners], base: project.rooms, pointerX: event.clientX, pointerY: event.clientY, view, face, armed: false };
               event.currentTarget.setPointerCapture(event.pointerId);
+              return;
+            }
+            if (hit.getAttribute('data-hit') === 'equipment') {
+              const id = hit.getAttribute('data-id');
+              const item = id ? project.equipment.find(entry => entry.id === id) : undefined;
+              if (item) {
+                drag.current = {
+                  kind: 'equipment',
+                  id: item.id,
+                  xM: item.xM,
+                  yM: item.yM,
+                  grabX: point.xM,
+                  grabY: point.yM,
+                  pointerX: event.clientX,
+                  pointerY: event.clientY,
+                  view,
+                  armed: false,
+                };
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }
               return;
             }
             if (hit.getAttribute('data-hit') === 'room') {
@@ -687,6 +744,19 @@ export function PlanView({
             setDraft({ xM: rect.xM, yM: rect.yM, lengthM: Math.max(rect.lengthM, SNAP_M), widthM: Math.max(rect.widthM, SNAP_M) });
             return;
           }
+          if (current.kind === 'equipment') {
+            if (!current.armed) {
+              if (Math.hypot(event.clientX - current.pointerX, event.clientY - current.pointerY) < DRAG_PX) return;
+              current.armed = true;
+              setGesture({ kind: 'equipment', id: current.id });
+              onSelect({ kind: 'equipment', id: current.id });
+            }
+            const xM = snap(current.xM + (point.xM - current.grabX));
+            const yM = snap(current.yM + (point.yM - current.grabY));
+            showEquipment({ id: current.id, xM, yM });
+            setReadout({ x: xM, y: yM, text: `${formatDelta(xM - current.xM, project.units)} · ${formatDelta(yM - current.yM, project.units)}` });
+            return;
+          }
           if (current.kind === 'space') {
             if (!current.armed) {
               if (Math.hypot(event.clientX - current.pointerX, event.clientY - current.pointerY) < DRAG_PX) return;
@@ -758,6 +828,7 @@ export function PlanView({
           document.documentElement.style.userSelect = '';
           drag.current = null;
           showLive(null);
+          showEquipment(null);
           setGesture(null);
           setReadout(null);
         }}
@@ -786,11 +857,21 @@ export function PlanView({
           }
           if (current.kind === 'place' && moved < 6) {
             const point = toWorld(event.clientX, event.clientY);
-            onPlace({ xM: snap(point.xM), yM: snap(point.yM) });
+            if (tool.kind === 'place') onPlace({ xM: snap(point.xM), yM: snap(point.yM) }, tool.catalogId);
             return;
           }
           if (current.kind === 'pan') {
             if (moved < DRAG_PX && tool.kind === 'select') onSelect({ kind: 'project' });
+            return;
+          }
+          if (current.kind === 'equipment') {
+            const next = movingRef.current;
+            showEquipment(null);
+            setGesture(null);
+            setReadout(null);
+            suppressClick.current = true;
+            onSelect({ kind: 'equipment', id: current.id });
+            if (current.armed && next && next.id === current.id) onMoveEquipment(current.id, next.xM, next.yM);
             return;
           }
           if (current.kind === 'space') {
@@ -1039,20 +1120,17 @@ export function PlanView({
             );
           })}
           {showSystems && <SystemLinks project={project} />}
-          {project.equipment.filter(item => {
-            if (showSystems) return true;
-            const mount = getProduct(item.catalogId)?.mount;
-            return mount !== 'ceiling' && mount !== 'roof';
-          }).map(item => {
+          {project.equipment.map(item => {
             const before = gesture?.kind === 'space' ? project.rooms.find(room => room.id === item.roomId) : undefined;
             const after = before ? rooms.find(room => room.id === before.id) : undefined;
-            const placed = before && after ? { ...item, xM: item.xM + (after.xM - before.xM), yM: item.yM + (after.yM - before.yM) } : item;
-            const systemIndex = placed.systemId ? project.systems.findIndex(system => system.id === placed.systemId) : -1;
+            const shifted = before && after ? { ...item, xM: item.xM + (after.xM - before.xM), yM: item.yM + (after.yM - before.yM) } : item;
+            const dragged = movingEquipment?.id === item.id ? { ...shifted, xM: movingEquipment.xM, yM: movingEquipment.yM } : shifted;
+            const systemIndex = dragged.systemId ? project.systems.findIndex(system => system.id === dragged.systemId) : -1;
             const system = systemIndex >= 0 ? project.systems[systemIndex] : undefined;
             return (
               <EquipmentMark
                 key={item.id}
-                item={placed}
+                item={dragged}
                 active={selection.kind === 'equipment' && selection.id === item.id}
                 onSelect={onSelect}
                 onContextMenu={onContextMenu}
@@ -1300,18 +1378,19 @@ function EquipmentMark({
   onContextMenu: (selection: Selection, x: number, y: number) => void;
 }) {
   const product = getProduct(item.catalogId);
-  const length = product?.dimensions?.lengthM ?? 0.6;
-  const width = product?.dimensions?.widthM ?? 0.6;
   const { name, roof } = equipmentLabel(item.catalogId);
+  const iconM = fontM * 1.2;
   const label = item.quantity > 1 ? `${name} ×${item.quantity}` : name;
   const stroke = color ?? MARK_COLOR.equipment;
   const chipW = Math.max(fontM * 1.7, fontM * 0.56 * Math.max(label.length, systemName?.length ?? 0));
   const chipH = systemName ? fontM * 1.7 : fontM * 0.95;
-  const hitW = Math.max(length, chipW);
-  const tail = chipH + fontM * 0.2;
+  const hitW = Math.max(iconM * 1.4, chipW);
+  const hitTop = iconM * 0.72;
+  const hitBottom = iconM * 0.72 + chipH + fontM * 0.16;
   return (
     <g
       data-hit="equipment"
+      data-id={item.id}
       role="button"
       aria-label={product ? `${product.name}${roof ? ', roof' : ''}` : 'Equipment'}
       transform={`rotate(${item.yawDeg} ${item.xM} ${item.yM})`}
@@ -1327,20 +1406,13 @@ function EquipmentMark({
       }}
     >
       <title>{product?.name ?? 'Equipment'}</title>
-      <rect x={item.xM - hitW / 2} y={item.yM - width / 2 - tail} width={hitW} height={width + tail} fill="transparent" />
-      <rect
-        x={item.xM - length / 2}
-        y={item.yM - width / 2}
-        width={length}
-        height={width}
-        fill={active ? SELECT_FILL : 'none'}
-        stroke={active ? SELECT : stroke}
-        strokeWidth={active ? 2.25 : HAIR}
-        vectorEffect="non-scaling-stroke"
-        strokeDasharray={roof ? '0.16 0.1' : undefined}
-      />
+      <rect x={item.xM - hitW / 2} y={item.yM - hitTop} width={hitW} height={hitTop + hitBottom} fill="transparent" />
       <g transform={`translate(${item.xM} ${item.yM}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
-        <g transform={`translate(0 ${width / 2 + chipH / 2 + fontM * 0.12})`}>
+        <circle r={iconM * 0.68} fill={PAPER} stroke={active ? SELECT : stroke} strokeWidth={active ? 2.25 : HAIR} vectorEffect="non-scaling-stroke" pointerEvents="all" />
+        <g transform={`scale(${iconM / 960}) translate(-480 480)`} pointerEvents="all">
+          <path d={equipmentGlyph(product ? equipmentIconFor(product) : 'hvac')} fill={active ? SELECT : stroke} />
+        </g>
+        <g transform={`translate(0 ${iconM * 0.68 + chipH / 2 + fontM * 0.08})`}>
           <rect x={-chipW / 2} y={-chipH / 2} width={chipW} height={chipH} fill={PAPER} stroke="none" />
           <text textAnchor="middle" dominantBaseline="middle" y={systemName ? -chipH * 0.18 : 0} fontSize={fontM * 0.62} fill={active ? SELECT : stroke}>
             {label}

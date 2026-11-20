@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { planningIssues } from '@/domain/issues';
-import { CATEGORY_LABEL, CATEGORY_ORDER, CATALOG, getProduct, type EquipmentCategory } from '@/domain/catalog';
+import { CATALOG_MIME, CATEGORY_LABEL, CATEGORY_ORDER, CATALOG, getProduct, type EquipmentCategory } from '@/domain/catalog';
 import { downloadText, fileSlug } from '@/domain/download';
 import {
   addOpening,
@@ -25,8 +25,10 @@ import {
   setInterfaceAssembly,
   setWallAssembly,
   translateRoom,
+  updateEquipment,
   updateRoom,
   updateSystem,
+  placementZ,
 } from '@/domain/projectOps';
 import { buildBom, buildConstructionBom, buildConstructionSchedule, buildSchedule, projectSummary, scheduleCsv } from '@/domain/schedule';
 import { SURFACE_FACES, SYSTEM_KINDS, WALL_FACES, type EditorTool, type Project, type Selection, type StoredTemplate, type WallFace } from '@/domain/types';
@@ -37,6 +39,7 @@ import { formatArea, formatLength, formatNumber, lengthUnit, mToLength } from '@
 import { projectToBuildingModel, validateModel } from '@/thermonode/localAdapter';
 import { mergeAssemblies, mergeLibrary, type ConstructionAssembly, type ConstructionMaterial } from '@/domain/constructionLibrary';
 import { BoundaryPanel } from './BoundaryPanel';
+import { EquipmentIcon, categoryIcon, equipmentIconFor } from './EquipmentIcon';
 import { Inspector } from './Inspector';
 import { LibraryPanel } from './LibraryPanel';
 import { SchedulePanel } from './SchedulePanel';
@@ -285,10 +288,6 @@ export function Studio({
     return () => window.removeEventListener('keydown', onKey);
   }, [project]);
 
-  const filtered = CATALOG.filter(product => {
-    const haystack = `${product.name} ${product.manufacturer} ${product.model} ${product.category} ${product.supplier}`.toLowerCase();
-    return (category === 'all' || product.category === category) && haystack.includes(query.trim().toLowerCase());
-  });
   const customTemplate = templates.find(item => item.id === project.createdFrom.templateId);
 
   const constructionExport = () => {
@@ -477,6 +476,7 @@ export function Studio({
               Catalog
             </button>
           </div>
+          <div className="side-scroll">
           {side === 'project' ? (
             <ProjectTree project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} onAddSystem={openSystemMenu} />
           ) : (
@@ -492,31 +492,18 @@ export function Studio({
                   ))}
                 </select>
               </div>
-              {filtered.map(product => {
-                const spec = [product.dimensions?.stated, product.airflow?.stated ?? product.cooling?.stated ?? product.heating?.stated].filter(Boolean).join(' · ');
-                return (
-                  <article key={product.id} className={tool.kind === 'place' && tool.catalogId === product.id ? 'catalog-card armed' : 'catalog-card'}>
-                    <header>
-                      <strong>{product.name}</strong>
-                      <span>{product.model}</span>
-                    </header>
-                    <p>{spec || CATEGORY_LABEL[product.category]}</p>
-                    <button
-                      type="button"
-                      className="btn primary"
-                      onClick={() => {
-                        setTool({ kind: 'place', catalogId: product.id });
-                        setView('model');
-                      }}
-                    >
-                      Place
-                    </button>
-                  </article>
-                );
-              })}
-              {filtered.length === 0 && <p className="empty">No products match.</p>}
+              <CatalogTree
+                query={query}
+                category={category}
+                armedId={tool.kind === 'place' ? tool.catalogId : null}
+                onArm={catalogId => {
+                  setTool({ kind: 'place', catalogId });
+                  setView('model');
+                }}
+              />
             </div>
           )}
+          </div>
         </aside>
         <section className="stage">
           {view === 'model' && (
@@ -678,9 +665,8 @@ export function Studio({
                     edit(next);
                     if (created) setSelection({ kind: 'wallOpening', wallId: spot.wallId, id: created.id });
                   }}
-                  onPlace={point => {
-                    if (tool.kind !== 'place') return;
-                    const product = getProduct(tool.catalogId);
+                  onPlace={(point, catalogId) => {
+                    const product = getProduct(catalogId);
                     if (!product) return;
                     const room = roomAtPoint(project.rooms, point.xM, point.yM);
                     const item = buildPlacement(product, room, point);
@@ -698,6 +684,15 @@ export function Studio({
                       rooms: project.rooms.map(room => (room.id === roomId ? translateRoom(room, dx, dy) : room)),
                       equipment: project.equipment.map(item => (item.roomId === roomId ? { ...item, xM: Number((item.xM + dx).toFixed(3)), yM: Number((item.yM + dy).toFixed(3)) } : item)),
                     });
+                  }}
+                  onMoveEquipment={(id, xM, yM) => {
+                    const item = project.equipment.find(entry => entry.id === id);
+                    const product = item ? getProduct(item.catalogId) : undefined;
+                    if (!item || !product) return;
+                    if (Math.abs(xM - item.xM) < 1e-6 && Math.abs(yM - item.yM) < 1e-6) return;
+                    const room = roomAtPoint(project.rooms, xM, yM);
+                    edit(updateEquipment(project, id, { xM, yM, roomId: room?.id ?? null, zM: placementZ(room, product) }));
+                    setSelection({ kind: 'equipment', id });
                   }}
                 />
               ) : (
@@ -721,16 +716,15 @@ export function Studio({
                       edit({ ...project, rooms: [...project.rooms, room] });
                       setSelection({ kind: 'room', id: room.id });
                     }}
-                    onPlace={point => {
-                      if (tool.kind !== 'place') return;
-                      const product = getProduct(tool.catalogId);
+                    onPlace={(point, catalogId) => {
+                      const product = getProduct(catalogId);
                       if (!product) return;
                       const room = roomAtPoint(project.rooms, point.xM, point.yM);
                       const item = buildPlacement(product, room, point);
                       edit({ ...project, equipment: [...project.equipment, item] });
                       setSelection({ kind: 'equipment', id: item.id });
-                    setTool({ kind: 'select' });
-                  }}
+                      setTool({ kind: 'select' });
+                    }}
                   onContextMenu={openMenu}
                 />
                 </div>
@@ -857,6 +851,171 @@ export function Studio({
   );
 }
 
+const TREE_CATALOG_KEY = 'hvac-tree-catalog';
+
+function readExpanded(storageKey: string): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((item): item is string => typeof item === 'string'));
+  } catch {
+    return new Set();
+  }
+}
+
+function writeExpanded(storageKey: string, keys: Set<string>) {
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify([...keys]));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+function TreeNode({
+  active = false,
+  collapsed,
+  title,
+  toggleLabel,
+  onToggle,
+  onSelect,
+  onMenu,
+  dragId,
+  content,
+  children,
+}: {
+  active?: boolean;
+  collapsed?: boolean;
+  title?: string;
+  toggleLabel?: string;
+  onToggle?: () => void;
+  onSelect: () => void;
+  onMenu?: (event: ReactMouseEvent) => void;
+  dragId?: string;
+  content: ReactNode;
+  children?: ReactNode;
+}) {
+  const dragged = useRef(false);
+  return (
+    <li>
+      <div className={`tree-row${onToggle ? ' branch' : ''}${active ? ' active' : ''}`}>
+        {onToggle ? (
+          <button type="button" className="tree-exp" aria-expanded={!collapsed} aria-label={toggleLabel} onClick={event => { event.stopPropagation(); onToggle(); }}>
+            {collapsed ? '+' : '−'}
+          </button>
+        ) : (
+          <span className="tree-exp leaf" aria-hidden="true" />
+        )}
+        <div
+          role="button"
+          tabIndex={0}
+          className={`tree-item${dragId ? ' draggable' : ''}`}
+          title={title}
+          draggable={dragId != null}
+          onDragStart={event => {
+            if (!dragId) return;
+            dragged.current = true;
+            event.dataTransfer.setData(CATALOG_MIME, dragId);
+            event.dataTransfer.effectAllowed = 'copy';
+          }}
+          onDragEnd={() => {
+            window.setTimeout(() => {
+              dragged.current = false;
+            }, 50);
+          }}
+          onClick={event => {
+            if (dragged.current) return;
+            if (event.button !== 0) return;
+            onSelect();
+          }}
+          onKeyDown={event => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            onSelect();
+          }}
+          onContextMenu={event => {
+            event.preventDefault();
+            event.stopPropagation();
+            onMenu?.(event);
+          }}
+        >
+          {content}
+        </div>
+      </div>
+      {onToggle && !collapsed ? <ul>{children}</ul> : null}
+    </li>
+  );
+}
+
+function CatalogTree({
+  query,
+  category,
+  armedId,
+  onArm,
+}: {
+  query: string;
+  category: EquipmentCategory | 'all';
+  armedId: string | null;
+  onArm: (catalogId: string) => void;
+}) {
+  const [expanded, setExpanded] = useState<Set<string>>(() => readExpanded(TREE_CATALOG_KEY));
+  const closed = (key: string) => !expanded.has(key);
+  const toggle = (key: string) =>
+    setExpanded(current => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      writeExpanded(TREE_CATALOG_KEY, next);
+      return next;
+    });
+  const needle = query.trim().toLowerCase();
+  const groups = CATEGORY_ORDER.filter(item => category === 'all' || item === category)
+    .map(item => ({
+      id: item,
+      label: CATEGORY_LABEL[item],
+      products: CATALOG.filter(product => product.category === item && `${product.name} ${product.manufacturer} ${product.model} ${product.supplier}`.toLowerCase().includes(needle)),
+    }))
+    .filter(group => group.products.length > 0);
+  return (
+    <ul className="tn-tree">
+      <TreeNode
+        collapsed={closed('equipment')}
+        toggleLabel="Equipment"
+        onToggle={() => toggle('equipment')}
+        onSelect={() => toggle('equipment')}
+        content={<span className="tree-label">Equipment</span>}
+      >
+        {groups.length === 0 && <li className="tree-empty">No products match.</li>}
+        {groups.map(group => (
+          <TreeNode
+            key={group.id}
+            collapsed={closed(group.id)}
+            toggleLabel={group.label}
+            onToggle={() => toggle(group.id)}
+            onSelect={() => toggle(group.id)}
+            content={<><EquipmentIcon name={categoryIcon(group.id)} /><span className="tree-label">{group.label}</span><span className="tree-meta">{group.products.length}</span></>}
+          >
+            {group.products.map(product => {
+              const spec = [product.airflow?.stated, product.cooling?.stated, product.heating?.stated].filter(Boolean).join(' · ');
+              return (
+                <TreeNode
+                  key={product.id}
+                  active={armedId === product.id}
+                  dragId={product.id}
+                  title={product.model}
+                  onSelect={() => onArm(product.id)}
+                  content={<><EquipmentIcon name={equipmentIconFor(product)} /><span className="tree-label">{product.name}</span>{spec ? <span className="tree-meta">{spec}</span> : null}</>}
+                />
+              );
+            })}
+          </TreeNode>
+        ))}
+      </TreeNode>
+    </ul>
+  );
+}
+
 function ProjectTree({
   project,
   selection,
@@ -870,21 +1029,35 @@ function ProjectTree({
   onContextMenu: (selection: Selection, x: number, y: number) => void;
   onAddSystem: (x: number, y: number) => void;
 }) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-  const closed = (key: string) => collapsed.has(key);
+  const storageKey = `hvac-tree-project:${project.id}`;
+  const [expanded, setExpanded] = useState<Set<string>>(() => readExpanded(storageKey));
+  const [expandedFor, setExpandedFor] = useState(project.id);
+  if (expandedFor !== project.id) {
+    setExpandedFor(project.id);
+    setExpanded(readExpanded(storageKey));
+  }
+  const closed = (key: string) => !expanded.has(key);
   const toggle = (key: string) =>
-    setCollapsed(current => {
+    setExpanded(current => {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
       else next.add(key);
+      writeExpanded(storageKey, next);
       return next;
     });
+  const opened = useRef(false);
   useEffect(() => {
-    setCollapsed(current => {
+    if (!opened.current) {
+      opened.current = true;
+      return;
+    }
+    setExpanded(current => {
       const next = new Set(current);
       let changed = false;
       const open = (key: string) => {
-        if (next.delete(key)) changed = true;
+        if (next.has(key)) return;
+        next.add(key);
+        changed = true;
       };
       if (selection.kind === 'room' || selection.kind === 'surface' || selection.kind === 'opening') {
         const roomId = selection.kind === 'room' ? selection.id : selection.roomId;
@@ -912,9 +1085,11 @@ function ProjectTree({
         const item = project.equipment.find(entry => entry.id === selection.id);
         if (item?.systemId) open(`system:${item.systemId}`);
       }
-      return changed ? next : current;
+      if (!changed) return current;
+      writeExpanded(storageKey, next);
+      return next;
     });
-  }, [selection, project.rooms, project.equipment]);
+  }, [selection, project.rooms, project.equipment, storageKey]);
   const selected = (kind: Selection['kind'], id?: string) => selection.kind === kind && ('id' in selection ? selection.id === id : true);
   const unit = lengthUnit(project.units);
   const targets = interfaceTargets(project.rooms);
@@ -927,58 +1102,57 @@ function ProjectTree({
       });
   const unassigned = project.equipment.filter(item => !item.systemId);
   return (
-    <div className="tree">
-      <button
-        type="button"
-        className={selected('project') ? 'tree-project active' : 'tree-project'}
-        onClick={() => onSelect({ kind: 'project' })}
-        onContextMenu={event => {
-          event.preventDefault();
-          onContextMenu({ kind: 'project' }, event.clientX, event.clientY);
-        }}
+    <ul className="tn-tree">
+      <TreeNode
+        active={selected('project')}
+        collapsed={closed('project')}
+        toggleLabel={project.name || 'Project'}
+        onToggle={() => toggle('project')}
+        onSelect={() => onSelect({ kind: 'project' })}
+        onMenu={event => onContextMenu({ kind: 'project' }, event.clientX, event.clientY)}
+        content={<><strong>{project.name || 'Untitled project'}</strong>{project.location ? <span className="tree-meta">{project.location}</span> : null}</>}
       >
-        <strong>{project.name || 'Untitled project'}</strong>
-        {project.location ? <span>· {project.location}</span> : null}
-      </button>
-      <div className="tree-rule" />
-      <TreeHeading label="Spaces" count={project.rooms.length} />
+      <TreeNode
+        collapsed={closed('spaces')}
+        toggleLabel="Spaces"
+        onToggle={() => toggle('spaces')}
+        onSelect={() => toggle('spaces')}
+        content={<><span className="tree-label">Spaces</span><span className="tree-meta">{project.rooms.length}</span></>}
+      >
       {project.rooms.map(room => {
         const roomKey = `room:${room.id}`;
         const roomClosed = closed(roomKey);
         return (
-          <div key={room.id}>
-            <TreeRow
-              level={0}
-              branch
-              active={selected('room', room.id)}
-              collapsed={roomClosed}
-              toggleLabel={`${roomClosed ? 'Expand' : 'Collapse'} ${room.name}`}
-              onToggle={() => toggle(roomKey)}
-              onSelect={() => onSelect({ kind: 'room', id: room.id })}
-              onMenu={event => onContextMenu({ kind: 'room', id: room.id }, event.clientX, event.clientY)}
-            >
-              <strong>
-                <i className="room-dot" style={{ background: roomFill(room.use) }} />
-                <span>{room.name}</span>
-                {room.assumption && <i className="dot" title="Assumption" />}
-              </strong>
-              <span className="tree-meta">
-                {room.outline && room.outline.length >= 3
-                  ? `· ${formatArea(polygonArea(room.outline), project.units)}`
-                  : `· ${formatNumber(mToLength(room.lengthM, project.units), 1)} × ${formatNumber(mToLength(room.widthM, project.units), 1)} ${unit}`}
-              </span>
-            </TreeRow>
-            {!roomClosed && (
+          <TreeNode
+            key={room.id}
+            active={selected('room', room.id)}
+            collapsed={roomClosed}
+            toggleLabel={`${roomClosed ? 'Expand' : 'Collapse'} ${room.name}`}
+            onToggle={() => toggle(roomKey)}
+            onSelect={() => onSelect({ kind: 'room', id: room.id })}
+            onMenu={event => onContextMenu({ kind: 'room', id: room.id }, event.clientX, event.clientY)}
+            content={
               <>
+                <strong>
+                  <i className="room-dot" style={{ background: roomFill(room.use) }} />
+                  <span>{room.name}</span>
+                  {room.assumption && <i className="dot" title="Assumption" />}
+                </strong>
+                <span className="tree-meta">
+                  {room.outline && room.outline.length >= 3
+                    ? formatArea(polygonArea(room.outline), project.units)
+                    : `${formatNumber(mToLength(room.lengthM, project.units), 1)} × ${formatNumber(mToLength(room.widthM, project.units), 1)} ${unit}`}
+                </span>
+              </>
+            }
+          >
                 {SURFACE_FACES.filter(face => face.id !== 'walls').map(face => (
-                  <TreeRow
+                  <TreeNode
                     key={face.id}
-                    level={1}
                     active={selection.kind === 'surface' && selection.roomId === room.id && selection.face === face.id}
                     onSelect={() => onSelect({ kind: 'surface', roomId: room.id, face: face.id })}
-                  >
-                    {face.label}
-                  </TreeRow>
+                    content={face.label}
+                  />
                 ))}
                 {room.outline && room.outline.length >= 3 && room.outline.map((point, index) => {
                   const next = room.outline![(index + 1) % room.outline!.length];
@@ -989,33 +1163,27 @@ function ProjectTree({
                   const wallClosed = closed(wallKey);
                   const soleKey = interfaces.length === 1 ? interfaces[0].key : null;
                   return (
-                    <div key={`edge-${index}`}>
-                      <TreeRow
-                        level={1}
-                        active={
-                          (selection.kind === 'surface' && selection.roomId === room.id && selection.face === 'walls' && selection.edge === index) ||
-                          (selection.kind === 'interface' && selection.key === soleKey)
-                        }
-                        title={portionSummary(edgePortions(room, index, project.rooms))}
-                        collapsed={shown.length > 0 ? wallClosed : undefined}
-                        toggleLabel={shown.length > 0 ? `${wallClosed ? 'Expand' : 'Collapse'} Wall ${index + 1}` : undefined}
-                        onToggle={shown.length > 0 ? () => toggle(wallKey) : undefined}
-                        onSelect={() => onSelect({ kind: 'surface', roomId: room.id, face: 'walls', edge: index })}
-                      >
-                        <span className="tree-label">Wall {index + 1}</span>
-                        <span className="tree-meta">· {formatLength(length, project.units, 2)}</span>
-                      </TreeRow>
-                      {shown.length > 0 && !wallClosed && shown.map(target => {
+                    <TreeNode
+                      key={`edge-${index}`}
+                      active={
+                        (selection.kind === 'surface' && selection.roomId === room.id && selection.face === 'walls' && selection.edge === index) ||
+                        (selection.kind === 'interface' && selection.key === soleKey)
+                      }
+                      title={portionSummary(edgePortions(room, index, project.rooms))}
+                      collapsed={shown.length > 0 ? wallClosed : undefined}
+                      toggleLabel={shown.length > 0 ? `${wallClosed ? 'Expand' : 'Collapse'} Wall ${index + 1}` : undefined}
+                      onToggle={shown.length > 0 ? () => toggle(wallKey) : undefined}
+                      onSelect={() => onSelect({ kind: 'surface', roomId: room.id, face: 'walls', edge: index })}
+                      content={<><span className="tree-label">Wall {index + 1}</span><span className="tree-meta">{formatLength(length, project.units, 2)}</span></>}
+                    >
+                      {shown.map(target => {
                         const role = wallRoleLabel(project.interfaceWalls?.[target.key]?.constructionId);
                         const other = interfacePartyName(target.sides, room.id);
                         return (
-                          <TreeRow key={target.key} level={2} active={selection.kind === 'interface' && selection.key === target.key} onSelect={() => onSelect({ kind: 'interface', key: target.key })}>
-                            <span className="tree-label">Interface · {other}</span>
-                            <span className="tree-meta">· {formatLength(target.lengthM, project.units, 2)}{role !== 'Unassigned' ? ` · ${role}` : ''}</span>
-                          </TreeRow>
+                          <TreeNode key={target.key} active={selection.kind === 'interface' && selection.key === target.key} onSelect={() => onSelect({ kind: 'interface', key: target.key })} content={<><span className="tree-label">Interface · {other}</span><span className="tree-meta">{formatLength(target.lengthM, project.units, 2)}{role !== 'Unassigned' ? ` · ${role}` : ''}</span></>} />
                         );
                       })}
-                    </div>
+                    </TreeNode>
                   );
                 })}
                 {!(room.outline && room.outline.length >= 3) && WALL_FACES.map(face => {
@@ -1031,21 +1199,18 @@ function ProjectTree({
                     (selection.kind === 'interface' && selection.key === soleKey);
                   const role = wallRoleLabel(interfaces.length === 1 ? project.interfaceWalls?.[interfaces[0].key]?.constructionId : room.surfaces.walls[face.id].constructionId);
                   return (
-                    <div key={face.id}>
-                      <TreeRow
-                        level={1}
-                        active={wallActive}
-                        title={`${wallPlaceLabel(room, face.id, project.rooms)} · ${role}`}
-                        collapsed={children > 0 ? wallClosed : undefined}
-                        toggleLabel={children > 0 ? `${wallClosed ? 'Expand' : 'Collapse'} ${face.label}` : undefined}
-                        onToggle={children > 0 ? () => toggle(wallKey) : undefined}
-                        onSelect={() => onSelect({ kind: 'surface', roomId: room.id, face: 'walls', wallFace: face.id })}
-                        onMenu={event => onContextMenu({ kind: 'surface', roomId: room.id, face: 'walls', wallFace: face.id }, event.clientX, event.clientY)}
-                      >
-                        <span className="tree-label">{PLAN_SIDES[face.id].title} wall</span>
-                        {role !== 'Unassigned' && <span className="tree-meta">· {role}</span>}
-                      </TreeRow>
-                      {shown.length > 0 && !wallClosed && shown.map(target => {
+                    <TreeNode
+                      key={face.id}
+                      active={wallActive}
+                      title={`${wallPlaceLabel(room, face.id, project.rooms)} · ${role}`}
+                      collapsed={children > 0 ? wallClosed : undefined}
+                      toggleLabel={children > 0 ? `${wallClosed ? 'Expand' : 'Collapse'} ${face.label}` : undefined}
+                      onToggle={children > 0 ? () => toggle(wallKey) : undefined}
+                      onSelect={() => onSelect({ kind: 'surface', roomId: room.id, face: 'walls', wallFace: face.id })}
+                      onMenu={event => onContextMenu({ kind: 'surface', roomId: room.id, face: 'walls', wallFace: face.id }, event.clientX, event.clientY)}
+                      content={<><span className="tree-label">{PLAN_SIDES[face.id].title} wall</span>{role !== 'Unassigned' && <span className="tree-meta">{role}</span>}</>}
+                    >
+                      {shown.map(target => {
                         const interfaceRole = wallRoleLabel(project.interfaceWalls?.[target.key]?.constructionId);
                         const other = interfacePartyName(target.sides, room.id);
                         const side = target.sides.find(item => item.roomId === room.id && item.anchor === `f:${face.id}`);
@@ -1053,110 +1218,99 @@ function ProjectTree({
                         const interfaceKey = `interface:${target.key}`;
                         const interfaceClosed = closed(interfaceKey);
                         return (
-                          <div key={target.key}>
-                            <TreeRow
-                              level={2}
-                              active={selection.kind === 'interface' && selection.key === target.key}
-                              collapsed={nested.length > 0 ? interfaceClosed : undefined}
-                              toggleLabel={nested.length > 0 ? `${interfaceClosed ? 'Expand' : 'Collapse'} Interface · ${other}` : undefined}
-                              onToggle={nested.length > 0 ? () => toggle(interfaceKey) : undefined}
-                              onSelect={() => onSelect({ kind: 'interface', key: target.key })}
-                            >
-                              <span className="tree-label">Interface · {other}</span>
-                              <span className="tree-meta">· {formatLength(target.lengthM, project.units, 2)}{interfaceRole !== 'Unassigned' ? ` · ${interfaceRole}` : ''}</span>
-                            </TreeRow>
-                            {nested.length > 0 && !interfaceClosed && nested.map(opening => (
-                              <TreeRow
+                          <TreeNode
+                            key={target.key}
+                            active={selection.kind === 'interface' && selection.key === target.key}
+                            collapsed={nested.length > 0 ? interfaceClosed : undefined}
+                            toggleLabel={nested.length > 0 ? `${interfaceClosed ? 'Expand' : 'Collapse'} Interface · ${other}` : undefined}
+                            onToggle={nested.length > 0 ? () => toggle(interfaceKey) : undefined}
+                            onSelect={() => onSelect({ kind: 'interface', key: target.key })}
+                            content={<><span className="tree-label">Interface · {other}</span><span className="tree-meta">{formatLength(target.lengthM, project.units, 2)}{interfaceRole !== 'Unassigned' ? ` · ${interfaceRole}` : ''}</span></>}
+                          >
+                            {nested.map(opening => (
+                              <TreeNode
                                 key={opening.id}
-                                level={3}
                                 active={selection.kind === 'opening' && selection.id === opening.id}
                                 onSelect={() => onSelect({ kind: 'opening', roomId: room.id, id: opening.id })}
                                 onMenu={event => onContextMenu({ kind: 'opening', roomId: room.id, id: opening.id }, event.clientX, event.clientY)}
-                              >
-                                <span className="tree-label">{opening.kind === 'door' ? 'Door' : opening.kind === 'window' ? 'Window' : 'Opening'}</span>
-                                <span className="tree-meta">· {formatLength(opening.widthM, project.units, 2)}</span>
-                              </TreeRow>
+                                content={<><span className="tree-label">{opening.kind === 'door' ? 'Door' : opening.kind === 'window' ? 'Window' : 'Opening'}</span><span className="tree-meta">{formatLength(opening.widthM, project.units, 2)}</span></>}
+                              />
                             ))}
-                          </div>
+                          </TreeNode>
                         );
                       })}
-                      {openings.length > 0 &&
-                        !wallClosed &&
-                        openings.filter(opening => !shown.some(target => {
-                          const side = target.sides.find(item => item.roomId === room.id && item.anchor === `f:${face.id}`);
-                          return side ? openingInside(opening, side.startM, side.endM) : false;
-                        })).map(opening => (
-                          <TreeRow
-                            key={opening.id}
-                            level={2}
-                            active={selection.kind === 'opening' && selection.id === opening.id}
-                            onSelect={() => onSelect({ kind: 'opening', roomId: room.id, id: opening.id })}
-                            onMenu={event => onContextMenu({ kind: 'opening', roomId: room.id, id: opening.id }, event.clientX, event.clientY)}
-                          >
-                            <span className="tree-label">{opening.kind === 'door' ? 'Door' : opening.kind === 'window' ? 'Window' : 'Opening'}</span>
-                            <span className="tree-meta">· {formatLength(opening.widthM, project.units, 2)}</span>
-                          </TreeRow>
-                        ))}
-                    </div>
+                      {openings.filter(opening => !shown.some(target => {
+                        const side = target.sides.find(item => item.roomId === room.id && item.anchor === `f:${face.id}`);
+                        return side ? openingInside(opening, side.startM, side.endM) : false;
+                      })).map(opening => (
+                        <TreeNode
+                          key={opening.id}
+                          active={selection.kind === 'opening' && selection.id === opening.id}
+                          onSelect={() => onSelect({ kind: 'opening', roomId: room.id, id: opening.id })}
+                          onMenu={event => onContextMenu({ kind: 'opening', roomId: room.id, id: opening.id }, event.clientX, event.clientY)}
+                          content={<><span className="tree-label">{opening.kind === 'door' ? 'Door' : opening.kind === 'window' ? 'Window' : 'Opening'}</span><span className="tree-meta">{formatLength(opening.widthM, project.units, 2)}</span></>}
+                        />
+                      ))}
+                    </TreeNode>
                   );
                 })}
-              </>
-            )}
-          </div>
+          </TreeNode>
         );
       })}
-      <TreeHeading label="Systems" count={project.systems.length} onMenu={event => onAddSystem(event.clientX, event.clientY)} />
+      </TreeNode>
+      <TreeNode
+        collapsed={closed('systems')}
+        toggleLabel="Systems"
+        onToggle={() => toggle('systems')}
+        onSelect={() => toggle('systems')}
+        onMenu={event => onAddSystem(event.clientX, event.clientY)}
+        content={<><span className="tree-label">Systems</span><span className="tree-meta">{project.systems.length}</span></>}
+      >
       {project.systems.map(system => {
         const systemKey = `system:${system.id}`;
         const systemClosed = closed(systemKey);
         const members = project.equipment.filter(item => item.systemId === system.id);
         return (
-          <div key={system.id}>
-            <TreeRow
-              level={0}
-              branch
-              active={selected('system', system.id)}
-              collapsed={members.length > 0 ? systemClosed : undefined}
-              toggleLabel={members.length > 0 ? `${systemClosed ? 'Expand' : 'Collapse'} ${system.name}` : undefined}
-              onToggle={members.length > 0 ? () => toggle(systemKey) : undefined}
-              onSelect={() => onSelect({ kind: 'system', id: system.id })}
-              onMenu={event => onContextMenu({ kind: 'system', id: system.id }, event.clientX, event.clientY)}
-            >
-              <strong><span>{system.name}</span></strong>
-              {members.length > 0 && <span className="tree-meta">· {members.length}</span>}
-            </TreeRow>
-            {members.length > 0 &&
-              !systemClosed &&
-              members.map(item => {
-                const product = getProduct(item.catalogId);
-                return (
-                  <TreeRow key={item.id} level={1} active={selected('equipment', item.id)} onSelect={() => onSelect({ kind: 'equipment', id: item.id })} onMenu={event => onContextMenu({ kind: 'equipment', id: item.id }, event.clientX, event.clientY)}>
-                    <span className="tree-label">{product ? product.model : item.catalogId}</span>
-                    {item.quantity > 1 && <span className="tree-meta">· × {item.quantity}</span>}
-                  </TreeRow>
-                );
-              })}
-          </div>
+          <TreeNode
+            key={system.id}
+            active={selected('system', system.id)}
+            collapsed={members.length > 0 ? systemClosed : undefined}
+            toggleLabel={members.length > 0 ? `${systemClosed ? 'Expand' : 'Collapse'} ${system.name}` : undefined}
+            onToggle={members.length > 0 ? () => toggle(systemKey) : undefined}
+            onSelect={() => onSelect({ kind: 'system', id: system.id })}
+            onMenu={event => onContextMenu({ kind: 'system', id: system.id }, event.clientX, event.clientY)}
+            content={<><strong><span>{system.name}</span></strong>{members.length > 0 && <span className="tree-meta">{members.length}</span>}</>}
+          >
+            {members.map(item => {
+              const product = getProduct(item.catalogId);
+              return (
+                <TreeNode key={item.id} active={selected('equipment', item.id)} onSelect={() => onSelect({ kind: 'equipment', id: item.id })} onMenu={event => onContextMenu({ kind: 'equipment', id: item.id }, event.clientX, event.clientY)} content={<>{product ? <EquipmentIcon name={equipmentIconFor(product)} /> : null}<span className="tree-label">{product ? product.model : item.catalogId}</span>{item.quantity > 1 && <span className="tree-meta">× {item.quantity}</span>}</>} />
+              );
+            })}
+          </TreeNode>
         );
       })}
+      </TreeNode>
       {unassigned.length > 0 && (
-        <>
-          <TreeHeading label="Unassigned" count={unassigned.length} />
+        <TreeNode
+          collapsed={closed('unassigned')}
+          toggleLabel="Unassigned"
+          onToggle={() => toggle('unassigned')}
+          onSelect={() => toggle('unassigned')}
+          content={<><span className="tree-label">Unassigned</span><span className="tree-meta">{unassigned.length}</span></>}
+        >
           {unassigned.map(item => {
             const product = getProduct(item.catalogId);
             return (
-              <TreeRow key={item.id} level={0} active={selected('equipment', item.id)} onSelect={() => onSelect({ kind: 'equipment', id: item.id })} onMenu={event => onContextMenu({ kind: 'equipment', id: item.id }, event.clientX, event.clientY)}>
-                <span className="tree-label">{product ? product.model : item.catalogId}</span>
-                {item.quantity > 1 && <span className="tree-meta">· × {item.quantity}</span>}
-              </TreeRow>
+              <TreeNode key={item.id} active={selected('equipment', item.id)} onSelect={() => onSelect({ kind: 'equipment', id: item.id })} onMenu={event => onContextMenu({ kind: 'equipment', id: item.id }, event.clientX, event.clientY)} content={<>{product ? <EquipmentIcon name={equipmentIconFor(product)} /> : null}<span className="tree-label">{product ? product.model : item.catalogId}</span>{item.quantity > 1 && <span className="tree-meta">× {item.quantity}</span>}</>} />
             );
           })}
-        </>
+        </TreeNode>
       )}
-    </div>
+      </TreeNode>
+    </ul>
   );
 }
-
 function interfacePartyName(sides: { roomId: string; name: string }[], roomId: string): string {
   const other = sides.find(side => side.roomId !== roomId);
   if (!other) return 'Outside';
@@ -1166,89 +1320,6 @@ function interfacePartyName(sides: { roomId: string; name: string }[], roomId: s
 function openingInside(opening: { offsetM: number; widthM: number }, startM: number, endM: number): boolean {
   const mid = opening.offsetM + opening.widthM / 2;
   return mid >= startM - 0.02 && mid <= endM + 0.02;
-}
-
-function TreeHeading({
-  label,
-  count,
-  onMenu,
-}: {
-  label: string;
-  count: number;
-  onMenu?: (event: ReactMouseEvent<HTMLDivElement>) => void;
-}) {
-  return (
-    <div
-      className="tree-section"
-      onContextMenu={event => {
-        event.preventDefault();
-        onMenu?.(event);
-      }}
-    >
-      <span>{label}</span>
-      <span className="tree-count">{count}</span>
-    </div>
-  );
-}
-
-function TreeRow({
-  active,
-  level,
-  branch,
-  collapsed,
-  title,
-  toggleLabel,
-  onToggle,
-  onSelect,
-  onMenu,
-  children,
-}: {
-  active: boolean;
-  level: number;
-  branch?: boolean;
-  collapsed?: boolean;
-  title?: string;
-  toggleLabel?: string;
-  onToggle?: () => void;
-  onSelect: () => void;
-  onMenu?: (event: ReactMouseEvent) => void;
-  children: ReactNode;
-}) {
-  return (
-    <div className={`tree-row${branch ? ' branch' : ''}${active ? ' active' : ''}`} style={{ paddingLeft: 4 + level * 20 }}>
-      {onToggle ? (
-        <button type="button" className="twist" aria-expanded={!collapsed} aria-label={toggleLabel} onClick={onToggle}>
-          <Chevron open={!collapsed} />
-        </button>
-      ) : (
-        <span className="twist" aria-hidden="true" />
-      )}
-      <button
-        type="button"
-        className="tree-item"
-        title={title}
-        onClick={event => {
-          if (event.button !== 0) return;
-          onSelect();
-        }}
-        onContextMenu={event => {
-          event.preventDefault();
-          event.stopPropagation();
-          onMenu?.(event);
-        }}
-      >
-        {children}
-      </button>
-    </div>
-  );
-}
-
-function Chevron({ open }: { open: boolean }) {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-      <path d={open ? 'M3 6 L8 11 L13 6' : 'M6 3 L11 8 L6 13'} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
 }
 
 function DimensionForm({

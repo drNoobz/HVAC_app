@@ -13,7 +13,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Energy Code Ace layer table, heavyweight undried aggregate concrete, 4 in, R-0.32 (layer CC14).",
-      "notes": "Layer resistance only. Heat loss from a slab-on-grade to the ground is an F-factor, not this R."
+      "notes": "Layer resistance only. Heat loss from a slab-on-grade to the ground is an F-factor, not this R.",
+      "potentialSupplier": ""
     },
     {
       "id": "floor-tile",
@@ -26,7 +27,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Building Material R-Values table, tile, R-0.05.",
-      "notes": "Finish layer only. Thickness was not stated. Add the slab row for the structure under the tile."
+      "notes": "Finish layer only. Thickness was not stated. Add the slab row for the structure under the tile.",
+      "potentialSupplier": ""
     },
     {
       "id": "floor-tile-on-4in-slab",
@@ -39,7 +41,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Sum of tile R-0.05 and 4 in heavyweight undried concrete R-0.32.",
-      "notes": "Air films, grout, and soil are not included. Tile thickness was not stated, so the stored thickness is the slab only."
+      "notes": "Air films, grout, and soil are not included. Tile thickness was not stated, so the stored thickness is the slab only.",
+      "potentialSupplier": ""
     },
     {
       "id": "floor-carpet-fibrous",
@@ -52,7 +55,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Energy Code Ace layer CP01 and the Building Material R-Values table, carpet with fibrous pad, R-2.08.",
-      "notes": "Finish layer only. Thickness was not stated."
+      "notes": "Finish layer only. Thickness was not stated.",
+      "potentialSupplier": ""
     },
     {
       "id": "floor-mass-zone5",
@@ -66,7 +70,8 @@
       "shgc": null,
       "deriveComplement": false,
       "source": "IECC commercial envelope sample, Table C402.1.4, climate zone 5 and marine 4, all other, mass floor, U-0.074.",
-      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-10 continuous insulation for that class. 1/U is not stored, because that reciprocal is not the listed R."
+      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-10 continuous insulation for that class. 1/U is not stored, because that reciprocal is not the listed R.",
+      "potentialSupplier": ""
     },
     {
       "id": "floor-joist-zone5",
@@ -80,7 +85,8 @@
       "shgc": null,
       "deriveComplement": false,
       "source": "IECC commercial envelope sample, Table C402.1.4, climate zone 5 and marine 4, all other, joist or framing floor, U-0.033.",
-      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-30 for that class."
+      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-30 for that class.",
+      "potentialSupplier": ""
     },
     {
       "id": "floor-unheated-slab-r10",
@@ -94,7 +100,8 @@
       "shgc": null,
       "deriveComplement": false,
       "source": "IECC commercial envelope sample, Table C402.1.3, climate zone 5 and marine 4, unheated slab, R-10 for 24 in below.",
-      "notes": "Code minimum insulation R, not the heat loss of the whole slab. The same sample lists a maximum F-factor of 0.54 for that unheated slab."
+      "notes": "Code minimum insulation R, not the heat loss of the whole slab. The same sample lists a maximum F-factor of 0.54 for that unheated slab.",
+      "potentialSupplier": ""
     },
     {
       "id": "floor-walkin-panel",
@@ -107,7 +114,8 @@
       "uSi": null,
       "shgc": null,
       "source": "U.S. Cooler walk-in specification, exposed prefabricated floor panels, R-28 or greater.",
-      "notes": "Published minimum. Thickness was not stated for the floor. The same sheet says freezer floors may need subfloor heat."
+      "notes": "Published minimum. Thickness was not stated for the floor. The same sheet says freezer floors may need subfloor heat.",
+      "potentialSupplier": ""
     },
     {
       "id": "wall-cmu-8",
@@ -120,7 +128,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Building Material R-Values table, concrete masonry unit, 8 in, R-1.11.",
-      "notes": "Uninsulated block. Grout, density, and interior finish are not included."
+      "notes": "Uninsulated block. Grout, density, and interior finish are not included.",
+      "potentialSupplier": ""
     },
     {
       "id": "wall-cmu-12",
@@ -133,7 +142,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Building Material R-Values table, concrete masonry unit, 12 in, R-1.28.",
-      "notes": "Uninsulated block. Grout, density, and interior finish are not included."
+      "notes": "Uninsulated block. Grout, density, and interior finish are not included.",
+      "potentialSupplier": ""
     },
     {
       "id": "wall-face-brick-4",
@@ -146,7 +156,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Building Material R-Values table, face brick, 4 in, R-0.44.",
-      "notes": "One wythe only. Backup and insulation are separate."
+      "notes": "One wythe only. Backup and insulation are separate.",
+      "potentialSupplier": ""
     },
     {
       "id": "wall-common-brick-4",
@@ -159,7 +170,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Building Material R-Values table, common brick, 4 in, R-0.80.",
-      "notes": "One wythe only."
+      "notes": "One wythe only.",
+      "potentialSupplier": ""
     },
     {
       "id": "wall-gypsum-half",
@@ -172,7 +184,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Energy Code Ace layer GP01, gypsum board, 1/2 in, R-0.45.",
-      "notes": "Finish layer only. The same row lists density 50 lb/ft³."
+      "notes": "Finish layer only. The same row lists density 50 lb/ft³.",
+      "potentialSupplier": ""
     },
     {
       "id": "wall-metal-framed-zone5",
@@ -186,7 +199,8 @@
       "shgc": null,
       "deriveComplement": false,
       "source": "IECC commercial envelope sample, Table C402.1.4, climate zone 5 and marine 4, all other, metal framed, U-0.064.",
-      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-13 plus R-7.5 continuous insulation for metal-framed walls. Other climate zones differ."
+      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-13 plus R-7.5 continuous insulation for metal-framed walls. Other climate zones differ.",
+      "potentialSupplier": ""
     },
     {
       "id": "wall-metal-building-zone5",
@@ -200,7 +214,8 @@
       "shgc": null,
       "deriveComplement": false,
       "source": "IECC commercial envelope sample, Table C402.1.4, climate zone 5 and marine 4, all other, metal building wall, U-0.052.",
-      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-13 plus R-13 continuous insulation for metal-building walls."
+      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-13 plus R-13 continuous insulation for metal-building walls.",
+      "potentialSupplier": ""
     },
     {
       "id": "wall-wood-framed-zone5",
@@ -214,7 +229,8 @@
       "shgc": null,
       "deriveComplement": false,
       "source": "IECC commercial envelope sample, Table C402.1.4, climate zone 5 and marine 4, all other, wood framed and other, U-0.064.",
-      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-13 plus R-3.8 continuous insulation, or R-20, for that class."
+      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-13 plus R-3.8 continuous insulation, or R-20, for that class.",
+      "potentialSupplier": ""
     },
     {
       "id": "wall-mass-zone5",
@@ -228,7 +244,8 @@
       "shgc": null,
       "deriveComplement": false,
       "source": "IECC commercial envelope sample, Table C402.1.4, climate zone 5 and marine 4, all other, mass wall, U-0.090.",
-      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-11.4 continuous insulation for above-grade mass walls."
+      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-11.4 continuous insulation for above-grade mass walls.",
+      "potentialSupplier": ""
     },
     {
       "id": "wall-walkin-cooler-xps",
@@ -241,7 +258,8 @@
       "uSi": null,
       "shgc": null,
       "source": "U.S. Cooler walk-in specification, cooler walls and ceiling, 4 in extruded polystyrene, minimum R-28.8.",
-      "notes": "Manufacturer minimum, about R-7.2 per inch. Freezer panels on the same sheet are listed at R-32."
+      "notes": "Manufacturer minimum, about R-7.2 per inch. Freezer panels on the same sheet are listed at R-32.",
+      "potentialSupplier": ""
     },
     {
       "id": "wall-walkin-freezer-xps",
@@ -254,7 +272,8 @@
       "uSi": null,
       "shgc": null,
       "source": "U.S. Cooler walk-in specification, freezer walls and ceiling, 4 in extruded polystyrene, minimum R-32.",
-      "notes": "Manufacturer minimum, about R-8 per inch."
+      "notes": "Manufacturer minimum, about R-8 per inch.",
+      "potentialSupplier": ""
     },
     {
       "id": "ceiling-acoustic-half",
@@ -267,7 +286,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Energy Code Ace layer AC02, 1/2 in acoustic tile, R-1.26.",
-      "notes": "Tile only. The roof or the plenum above is a separate assembly."
+      "notes": "Tile only. The roof or the plenum above is a separate assembly.",
+      "potentialSupplier": ""
     },
     {
       "id": "ceiling-walkin-cooler-xps",
@@ -280,7 +300,8 @@
       "uSi": null,
       "shgc": null,
       "source": "U.S. Cooler walk-in specification, cooler walls and ceiling, 4 in extruded polystyrene, minimum R-28.8.",
-      "notes": "Same published minimum as the cooler wall panel."
+      "notes": "Same published minimum as the cooler wall panel.",
+      "potentialSupplier": ""
     },
     {
       "id": "ceiling-walkin-freezer-xps",
@@ -293,7 +314,8 @@
       "uSi": null,
       "shgc": null,
       "source": "U.S. Cooler walk-in specification, freezer walls and ceiling, 4 in extruded polystyrene, minimum R-32.",
-      "notes": "Same published minimum as the freezer wall panel."
+      "notes": "Same published minimum as the freezer wall panel.",
+      "potentialSupplier": ""
     },
     {
       "id": "roof-above-deck-zone5",
@@ -307,7 +329,8 @@
       "shgc": null,
       "deriveComplement": false,
       "source": "IECC commercial envelope sample, Table C402.1.4, climate zone 5 and marine 4, all other, insulation entirely above deck, U-0.032.",
-      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-30 continuous insulation for that roof class."
+      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-30 continuous insulation for that roof class.",
+      "potentialSupplier": ""
     },
     {
       "id": "roof-metal-building-zone5",
@@ -321,7 +344,8 @@
       "shgc": null,
       "deriveComplement": false,
       "source": "IECC commercial envelope sample, Table C402.1.4, climate zone 5 and marine 4, all other, metal building roof, U-0.035.",
-      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-19 plus R-11 liner system."
+      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-19 plus R-11 liner system.",
+      "potentialSupplier": ""
     },
     {
       "id": "roof-attic-zone5",
@@ -335,7 +359,8 @@
       "shgc": null,
       "deriveComplement": false,
       "source": "IECC commercial envelope sample, Table C402.1.4, climate zone 5 and marine 4, all other, attic and other, U-0.027.",
-      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-38 for that class."
+      "notes": "Code maximum U-factor. The R-value table in the same sample lists R-38 for that class.",
+      "potentialSupplier": ""
     },
     {
       "id": "roof-builtup-layer",
@@ -348,7 +373,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Energy Code Ace layer BR01, built-up roofing, 3/8 in, R-0.33.",
-      "notes": "Membrane layer only. Insulation above the deck is a separate row."
+      "notes": "Membrane layer only. Insulation above the deck is a separate row.",
+      "potentialSupplier": ""
     },
     {
       "id": "window-single-metal",
@@ -361,7 +387,8 @@
       "uSi": 5.8,
       "shgc": null,
       "source": "Engineering Toolbox transmission-loss table, vertical single glazing in a metal frame, 5.8 W/(m²·K).",
-      "notes": "Whole-window coefficient from that table. SHGC was not stated. Glass thickness was not stated."
+      "notes": "Whole-window coefficient from that table. SHGC was not stated. Glass thickness was not stated.",
+      "potentialSupplier": ""
     },
     {
       "id": "window-double-sealed",
@@ -374,7 +401,8 @@
       "uSi": 3,
       "shgc": null,
       "source": "Engineering Toolbox transmission-loss table, vertical sealed double glazing, 20 mm between glasses, 3.0 W/(m²·K).",
-      "notes": "SHGC was not stated. Frame type was not stated for this row."
+      "notes": "SHGC was not stated. Frame type was not stated for this row.",
+      "potentialSupplier": ""
     },
     {
       "id": "window-double-lowe",
@@ -387,7 +415,8 @@
       "uSi": 1.8,
       "shgc": null,
       "source": "Engineering Toolbox transmission-loss table, vertical sealed double glazing with a low-E coating, U-0.32 and 1.8 W/(m²·K).",
-      "notes": "SHGC was not stated. Confirm the product label before using a solar-gain load."
+      "notes": "SHGC was not stated. Confirm the product label before using a solar-gain load.",
+      "potentialSupplier": ""
     },
     {
       "id": "window-double-lowe-gas",
@@ -400,7 +429,8 @@
       "uSi": 1.5,
       "shgc": null,
       "source": "Engineering Toolbox transmission-loss table, double glazing with a low-E coating and heavy gas fill, U-0.27 and 1.5 W/(m²·K).",
-      "notes": "SHGC was not stated."
+      "notes": "SHGC was not stated.",
+      "potentialSupplier": ""
     },
     {
       "id": "door-metal-single",
@@ -413,7 +443,8 @@
       "uSi": null,
       "shgc": null,
       "source": "ASHRAE 90.1-2007 Section A7, Energy Code Ace Table 4.5.1, uninsulated single-layer metal swinging door, U-1.45.",
-      "notes": "That row also covers uninsulated access hatches and uninsulated smoke vents. Thickness was not stated."
+      "notes": "That row also covers uninsulated access hatches and uninsulated smoke vents. Thickness was not stated.",
+      "potentialSupplier": ""
     },
     {
       "id": "door-metal-double",
@@ -426,7 +457,8 @@
       "uSi": null,
       "shgc": null,
       "source": "ASHRAE 90.1-2007 Section A7, Energy Code Ace Table 4.5.1, uninsulated double-layer metal door, U-0.70.",
-      "notes": "Thickness was not stated."
+      "notes": "Thickness was not stated.",
+      "potentialSupplier": ""
     },
     {
       "id": "door-metal-insulated",
@@ -439,7 +471,8 @@
       "uSi": null,
       "shgc": null,
       "source": "ASHRAE 90.1-2007 Section A7, Energy Code Ace Table 4.5.1, insulated metal swinging door, U-0.50.",
-      "notes": "Default coefficient, including fire-rated doors in that row. A separate published table lists a 2 in insulated metal door at R-15, which is a different claim. Use the door label when you have one."
+      "notes": "Default coefficient, including fire-rated doors in that row. A separate published table lists a 2 in insulated metal door at R-15, which is a different claim. Use the door label when you have one.",
+      "potentialSupplier": ""
     },
     {
       "id": "door-metal-r15",
@@ -452,7 +485,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Building Material R-Values table, insulated metal door, 2 in, R-15.",
-      "notes": "Much higher than the ASHRAE 90.1-2007 default U-0.50 for insulated metal swinging doors. Treat it as that table's product-style R, and prefer a tested label."
+      "notes": "Much higher than the ASHRAE 90.1-2007 default U-0.50 for insulated metal swinging doors. Treat it as that table's product-style R, and prefer a tested label.",
+      "potentialSupplier": ""
     },
     {
       "id": "door-wood-175",
@@ -465,7 +499,8 @@
       "uSi": null,
       "shgc": null,
       "source": "ASHRAE 90.1-2007 Section A7, Energy Code Ace Table 4.5.1, wood door minimum nominal 1-3/4 in, U-0.50.",
-      "notes": "That row includes solid-core flush doors, hollow-core flush doors, and panel doors with a minimum panel thickness of 1-1/8 in."
+      "notes": "That row includes solid-core flush doors, hollow-core flush doors, and panel doors with a minimum panel thickness of 1-1/8 in.",
+      "potentialSupplier": ""
     },
     {
       "id": "door-wood-solid",
@@ -478,7 +513,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Building Material R-Values table, solid-core wood, 1-3/4 in, R-2.17.",
-      "notes": "Close to, but not the same as, the ASHRAE 90.1-2007 default U-0.50 for a 1-3/4 in wood door."
+      "notes": "Close to, but not the same as, the ASHRAE 90.1-2007 default U-0.50 for a 1-3/4 in wood door.",
+      "potentialSupplier": ""
     },
     {
       "id": "door-swinging-zone5",
@@ -492,7 +528,8 @@
       "shgc": null,
       "deriveComplement": false,
       "source": "IECC commercial envelope sample, Table C402.1.4, climate zone 5 and marine 4, all other, swinging door, U-0.37.",
-      "notes": "Code maximum U-factor, not a specific door. Thickness was not stated."
+      "notes": "Code maximum U-factor, not a specific door. Thickness was not stated.",
+      "potentialSupplier": ""
     },
     {
       "id": "insulation-batt-r13",
@@ -505,7 +542,8 @@
       "uSi": null,
       "shgc": null,
       "source": "IECC commercial envelope sample names R-13 cavity insulation for the zone 5 metal-framed wall. A labeled R-13 batt is nominally 3.5 in.",
-      "notes": "Labeled batt R, not the whole-wall U-factor. The same sample lists that wall class at a maximum U-0.064 when R-13 is combined with R-7.5 continuous insulation."
+      "notes": "Labeled batt R, not the whole-wall U-factor. The same sample lists that wall class at a maximum U-0.064 when R-13 is combined with R-7.5 continuous insulation.",
+      "potentialSupplier": ""
     },
     {
       "id": "insulation-polyiso-1",
@@ -518,7 +556,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Building Material R-Values table, foil-faced polyisocyanurate, 1 in, R-7.2.",
-      "notes": "Labeled product R at 1 in. Aged R and mean temperature change it."
+      "notes": "Labeled product R at 1 in. Aged R and mean temperature change it.",
+      "potentialSupplier": ""
     },
     {
       "id": "insulation-pur-1",
@@ -531,7 +570,8 @@
       "uSi": null,
       "shgc": null,
       "source": "Building Material R-Values table, polyurethane foam foamed on site, 1 in, R-6.25.",
-      "notes": "Labeled product R at 1 in."
+      "notes": "Labeled product R at 1 in.",
+      "potentialSupplier": ""
     },
     {
       "id": "insulation-xps-cooler-1",
@@ -544,7 +584,8 @@
       "uSi": null,
       "shgc": null,
       "source": "U.S. Cooler walk-in specification, cooler extruded polystyrene, R-7.2 per inch.",
-      "notes": "The same sheet lists freezer XPS at about R-8 per inch. This row is the cooler grade."
+      "notes": "The same sheet lists freezer XPS at about R-8 per inch. This row is the cooler grade.",
+      "potentialSupplier": ""
     }
   ]
 }

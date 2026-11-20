@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { getProduct } from '@/domain/catalog';
+import { CATALOG_MIME, getProduct } from '@/domain/catalog';
 import type { EditorTool, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
 import { outlineCentroid, runGeom, solidSpans, WALL_THICK_M } from '@/domain/wallDraw';
 import { doorArc, doorHinge, doorSwingSide } from '@/domain/doorSwing';
@@ -35,7 +35,7 @@ export interface ViewportProps {
   hideRoof: boolean;
   onSelect: (selection: Selection) => void;
   onDrawRoom: (rect: { xM: number; yM: number; lengthM: number; widthM: number }) => void;
-  onPlace: (point: { xM: number; yM: number }) => void;
+  onPlace: (point: { xM: number; yM: number }, catalogId: string) => void;
   onContextMenu: (selection: Selection, x: number, y: number) => void;
 }
 
@@ -658,7 +658,7 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
         return;
       }
       if (moved < CLICK_PX && toolRef.current.kind === 'place' && point) {
-        handlersRef.current.onPlace({ xM: snap(point.x), yM: snap(point.y) });
+        handlersRef.current.onPlace({ xM: snap(point.x), yM: snap(point.y) }, toolRef.current.catalogId);
         return;
       }
       if (moved < CLICK_PX && toolRef.current.kind === 'select') {
@@ -679,6 +679,31 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
       handlersRef.current.onContextMenu(picked, event.clientX, event.clientY);
     };
 
+    const markCatalogDrop = (on: boolean) => {
+      const host = renderer.domElement.parentElement;
+      if (host) host.dataset.drop = on ? 'catalog' : '';
+    };
+    const onCatalogDragOver = (event: DragEvent) => {
+      if (![...(event.dataTransfer?.types ?? [])].includes(CATALOG_MIME)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+      markCatalogDrop(true);
+    };
+    const onCatalogDragLeave = () => markCatalogDrop(false);
+    const onCatalogDrop = (event: DragEvent) => {
+      markCatalogDrop(false);
+      const catalogId = event.dataTransfer?.getData(CATALOG_MIME);
+      if (!catalogId) return;
+      event.preventDefault();
+      if (!setPointer(event.clientX, event.clientY)) return;
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObject(ground)[0];
+      if (!hit) return;
+      handlersRef.current.onPlace({ xM: snap(hit.point.x), yM: snap(hit.point.y) }, catalogId);
+    };
+    renderer.domElement.addEventListener('dragover', onCatalogDragOver);
+    renderer.domElement.addEventListener('dragleave', onCatalogDragLeave);
+    renderer.domElement.addEventListener('drop', onCatalogDrop);
     renderer.domElement.addEventListener('pointerdown', onPointerDown, true);
     renderer.domElement.addEventListener('pointermove', onPointerMove);
     renderer.domElement.addEventListener('pointerup', onPointerUp);
@@ -711,6 +736,9 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
+      renderer.domElement.removeEventListener('dragover', onCatalogDragOver);
+      renderer.domElement.removeEventListener('dragleave', onCatalogDragLeave);
+      renderer.domElement.removeEventListener('drop', onCatalogDrop);
       renderer.domElement.removeEventListener('pointerdown', onPointerDown, true);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);

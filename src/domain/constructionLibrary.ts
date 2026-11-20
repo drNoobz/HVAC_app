@@ -33,6 +33,8 @@ export interface ConstructionMaterial {
   deriveComplement: boolean;
   source: string;
   notes: string;
+  /** Possible product supplier. Empty when none is named. */
+  potentialSupplier: string;
   origin: 'builtin' | 'manual' | 'import';
 }
 
@@ -98,6 +100,8 @@ export function parseMaterial(
   if (!source.ok) return source;
   const notes = readText(row.notes, 'Notes', 1200);
   if (!notes.ok) return notes;
+  const potentialSupplier = readText(row.potentialSupplier, 'Potential supplier', 200);
+  if (!potentialSupplier.ok) return potentialSupplier;
   const thicknessMm = readNumber(row.thicknessMm, 'Thickness', value => value > 0 && value < 10000);
   if (!thicknessMm.ok) return thicknessMm;
   const rIp = readNumber(row.rIp, 'R-value', value => value > 0 && value < 1000);
@@ -126,6 +130,7 @@ export function parseMaterial(
       deriveComplement: row.deriveComplement ?? true,
       source: source.value,
       notes: notes.value,
+      potentialSupplier: potentialSupplier.value,
       origin,
     },
   };
@@ -198,6 +203,7 @@ export function libraryDocument(materials: ConstructionMaterial[]) {
       deriveComplement: item.deriveComplement,
       source: item.source,
       notes: item.notes,
+      potentialSupplier: item.potentialSupplier,
     })),
   };
 }

@@ -23,6 +23,16 @@ export default function App() {
   const [libraryOpen, setLibraryOpen] = useState(false);
 
   useEffect(() => {
+    const block = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener('wheel', block, { capture: true, passive: false });
+    return () => window.removeEventListener('wheel', block, { capture: true });
+  }, []);
+
+  useEffect(() => {
     const loaded = loadState();
     setProjects(loaded.projects);
     setTemplates(loaded.templates);
