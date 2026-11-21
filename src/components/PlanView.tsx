@@ -2,8 +2,13 @@
 
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { CATALOG_MIME, equipmentSizeM, getProduct } from '@/domain/catalog';
+import { streamFor } from '@/domain/ductCatalog';
+import { ductCrossings, ductSizeLabel, endRise, equipmentPortHits, nearestPort, portFits, type DuctDraftPoint } from '@/domain/ducts';
 import { equipmentGlyph, equipmentIconFor } from './EquipmentIcon';
-import type { EditorTool, Opening, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
+import type { DuctService, DuctShape, EditorTool, LoadItem, Opening, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
+import type { BuildStep } from '@/domain/checks';
+import { getLoadProduct, LOAD_CATEGORY_COLOR, type LoadCategory } from '@/domain/loadCatalog';
+import { loadLabel } from '@/domain/loads';
 import { constrainEquipmentPosition, roomAtPoint } from '@/domain/projectOps';
 import { locateOpening, NO_WALL_RUNS, outlineCentroid, outlineRoomOk, pointInOutline, polygonArea, roomLoop, runGeom, runOpeningEnds, snapDrawPoint, wallAngleDeg, wallQuad, wallQuads, type DrawPoint, type OpeningSpot, type WallSnap } from '@/domain/wallDraw';
 import { METERS_PER_FOOT, formatArea, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
@@ -21,6 +26,85 @@ const SELECT = '#f6ad55';
 const SELECT_FILL = 'rgba(246,173,85,0.28)';
 const HAIR = 1.15;
 const SYSTEM_COLORS = ['#1f4e5f', '#8a3d2f', '#245c3a', '#3d4a8a', '#8a5a12', '#6b3d6e'];
+
+export interface PlanLayers {
+  spaces: boolean;
+  loads: boolean;
+  equipment: boolean;
+  ducts: boolean;
+  ductWidth: boolean;
+  clearances: boolean;
+  labels: boolean;
+}
+
+export const DEFAULT_LAYERS: PlanLayers = { spaces: true, loads: true, equipment: true, ducts: true, ductWidth: false, clearances: true, labels: true };
+
+/** Layers outside the active step stay visible and clickable but recede. */
+function stepFade(step: BuildStep): { spaces: number; loads: number; equipment: number; ducts: number } {
+  if (step === 'spaces') return { spaces: 1, loads: 0.35, equipment: 0.35, ducts: 0.25 };
+  if (step === 'loads') return { spaces: 1, loads: 1, equipment: 0.45, ducts: 0.25 };
+  if (step === 'equipment') return { spaces: 1, loads: 0.45, equipment: 1, ducts: 0.35 };
+  if (step === 'ducts') return { spaces: 0.8, loads: 0.3, equipment: 1, ducts: 1 };
+  return { spaces: 1, loads: 1, equipment: 1, ducts: 1 };
+}
+
+const LOAD_GLYPH: Record<LoadCategory, string> = {
+  people: 'P',
+  cooking: 'C',
+  warewashing: 'D',
+  refrigeration: 'R',
+  lighting: 'L',
+  plug: 'E',
+};
+
+function LoadMarks({
+  loads,
+  selection,
+  fontM,
+  labels,
+  onContextMenu,
+}: {
+  loads: readonly LoadItem[];
+  selection: Selection;
+  fontM: number;
+  labels: boolean;
+  onContextMenu: (selection: Selection, x: number, y: number) => void;
+}) {
+  const r = Math.max(fontM * 0.85, 0.16);
+  return (
+    <g>
+      {loads.map(item => {
+        const product = getLoadProduct(item.loadId);
+        const active = selection.kind === 'load' && selection.id === item.id;
+        return (
+          <g
+            key={item.id}
+            data-hit="load"
+            data-id={item.id}
+            onContextMenu={event => {
+              event.preventDefault();
+              event.stopPropagation();
+              onContextMenu({ kind: 'load', id: item.id }, event.clientX, event.clientY);
+            }}
+          >
+            {active && <circle cx={item.xM} cy={item.yM} r={r * 1.5} fill="none" stroke={SELECT} strokeWidth={2.25} vectorEffect="non-scaling-stroke" />}
+            <circle cx={item.xM} cy={item.yM} r={r} fill={product ? LOAD_CATEGORY_COLOR[product.category] : '#7a7f85'} stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+            <g transform={`translate(${item.xM} ${item.yM}) scale(1,-1)`} pointerEvents="none">
+              <text textAnchor="middle" y={fontM * 0.3} fontSize={fontM * 0.85} fontWeight={600} fill="#fff">
+                {product ? LOAD_GLYPH[product.category] : '?'}
+              </text>
+              {labels && (
+                <text textAnchor="middle" y={r + fontM * 1.05} fontSize={fontM * 0.66} fill={INK}>
+                  {loadLabel(item, product)}
+                </text>
+              )}
+            </g>
+          </g>
+        );
+      })}
+    </g>
+  );
+}
 
 type WallRole = 'hatch' | 'service' | 'partition' | 'panel' | 'glass' | 'none';
 
@@ -60,6 +144,12 @@ interface ViewBox {
 
 function snap(value: number): number {
   return Math.round(value / SNAP_M) * SNAP_M;
+}
+
+function snapDuct(x: number, y: number, project: Project, systemId: string, service: DuctService): DuctDraftPoint {
+  const port = nearestPort(project.equipment, x, y, 0.45, hit => portFits(project, hit, systemId, service));
+  if (port) return { x: Number(port.x.toFixed(3)), y: Number(port.y.toFixed(3)), equipmentId: port.equipmentId, portId: port.portId };
+  return { x: snap(x), y: snap(y) };
 }
 
 function gridStep(pxPerM: number): number {
@@ -307,6 +397,7 @@ export function PlanView({
   onSelect,
   onDrawRoom,
   onDrawWalls,
+  onDrawDuct,
   onCloseSpace,
   onPlaceOpening,
   onPlace,
@@ -316,7 +407,10 @@ export function PlanView({
   onMoveEquipment,
   onRotateEquipment,
   onNorthChange,
-  sheet,
+  onPlaceLoad,
+  onMoveLoad,
+  step,
+  layers,
 }: {
   project: Project;
   selection: Selection;
@@ -325,6 +419,15 @@ export function PlanView({
   onSelect: (selection: Selection) => void;
   onDrawRoom: (rect: { xM: number; yM: number; lengthM: number; widthM: number }) => void;
   onDrawWalls: (lines: { x0: number; y0: number; x1: number; y1: number }[]) => void;
+  onDrawDuct: (draft: {
+    points: DuctDraftPoint[];
+    catalogId: string;
+    systemId: string;
+    service: DuctService;
+    shape: DuctShape;
+    widthM: number;
+    heightM: number | null;
+  }) => void;
   onCloseSpace: (points: DrawPoint[]) => void;
   onPlaceOpening: (spot: OpeningSpot, kind: 'door' | 'window') => void;
   onPlace: (point: { xM: number; yM: number }, catalogId: string) => void;
@@ -334,8 +437,12 @@ export function PlanView({
   onMoveEquipment: (id: string, xM: number, yM: number) => void;
   onRotateEquipment: (id: string, yawDeg: number) => void;
   onNorthChange: (deg: number) => void;
-  sheet: 'all' | 'spaces' | 'systems';
+  onPlaceLoad: (point: { xM: number; yM: number }, loadId: string) => void;
+  onMoveLoad: (id: string, xM: number, yM: number) => void;
+  step: BuildStep;
+  layers: PlanLayers;
 }) {
+  const showDuctSize = layers.ductWidth;
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState<ViewBox>(() => bounds(project.rooms));
   const viewRef = useRef(view);
@@ -349,6 +456,8 @@ export function PlanView({
   const [preview, setPreview] = useState<Room[] | null>(null);
   const [movingEquipment, setMovingEquipment] = useState<{ id: string; xM: number; yM: number } | null>(null);
   const [rotatingEquipment, setRotatingEquipment] = useState<{ id: string; yawDeg: number } | null>(null);
+  const [movingLoad, setMovingLoad] = useState<{ id: string; xM: number; yM: number } | null>(null);
+  const movingLoadRef = useRef<{ id: string; xM: number; yM: number } | null>(null);
   const rotatingRef = useRef<{ id: string; yawDeg: number } | null>(null);
   const [gesture, setGesture] = useState<
     | { kind: 'wall' | 'opening'; roomId: string; face: WallFace; openingId?: string }
@@ -361,8 +470,15 @@ export function PlanView({
   const previewRef = useRef<Room[] | null>(null);
   const movingRef = useRef<{ id: string; xM: number; yM: number } | null>(null);
   const chainRef = useRef<DrawPoint[] | null>(null);
+  const [ductChain, setDuctChain] = useState<DuctDraftPoint[] | null>(null);
+  const [ductAim, setDuctAim] = useState<DuctDraftPoint | null>(null);
+  const ductChainRef = useRef<DuctDraftPoint[] | null>(null);
+  const ductSettings = useRef<Extract<EditorTool, { kind: 'duct' }> | null>(null);
+  if (tool.kind === 'duct') ductSettings.current = tool;
   const commitWalls = useRef(onDrawWalls);
   commitWalls.current = onDrawWalls;
+  const commitDuct = useRef(onDrawDuct);
+  commitDuct.current = onDrawDuct;
   const spotRef = useRef<OpeningSpot | null>(null);
   const suppressClick = useRef(false);
   const drag = useRef<
@@ -372,6 +488,7 @@ export function PlanView({
     | { kind: 'space'; id: string; base: Room[]; grabX: number; grabY: number; pointerX: number; pointerY: number; view: ViewBox; armed: boolean }
     | { kind: 'equipment'; id: string; xM: number; yM: number; grabX: number; grabY: number; pointerX: number; pointerY: number; view: ViewBox; armed: boolean }
     | { kind: 'rotate'; id: string; xM: number; yM: number; startYaw: number; startAngle: number; pointerX: number; pointerY: number; view: ViewBox }
+    | { kind: 'load'; id: string; xM: number; yM: number; grabX: number; grabY: number; pointerX: number; pointerY: number; view: ViewBox; armed: boolean }
     | null
   >(null);
   const wallRuns = project.wallRuns ?? NO_WALL_RUNS;
@@ -394,6 +511,29 @@ export function PlanView({
       if (Math.hypot(b.x - a.x, b.y - a.y) >= MIN_DRAW_M) lines.push({ x0: a.x, y0: a.y, x1: b.x, y1: b.y });
     }
     if (lines.length > 0) commitWalls.current(lines);
+  }, [tool.kind]);
+  useEffect(() => {
+    ductChainRef.current = null;
+    setDuctChain(null);
+    setDuctAim(null);
+  }, [project.id]);
+  useEffect(() => {
+    if (tool.kind === 'duct') return;
+    const points = ductChainRef.current;
+    const settings = ductSettings.current;
+    ductChainRef.current = null;
+    setDuctChain(null);
+    setDuctAim(null);
+    if (!settings?.systemId || !points || points.length < 2) return;
+    commitDuct.current({
+      points,
+      catalogId: settings.catalogId,
+      systemId: settings.systemId,
+      service: settings.service,
+      shape: settings.shape,
+      widthM: settings.widthM,
+      heightM: settings.heightM,
+    });
   }, [tool.kind]);
   const showSpot = (next: OpeningSpot | null) => {
     const prev = spotRef.current;
@@ -491,6 +631,10 @@ export function PlanView({
     movingRef.current = next;
     setMovingEquipment(next);
   };
+  const showLoad = (next: { id: string; xM: number; yM: number } | null) => {
+    movingLoadRef.current = next;
+    setMovingLoad(next);
+  };
   const showRotate = (next: { id: string; yawDeg: number } | null) => {
     rotatingRef.current = next;
     setRotatingEquipment(next);
@@ -502,8 +646,9 @@ export function PlanView({
     return normalized;
   };
   const rooms = preview ?? project.rooms;
-  const showSpaces = sheet !== 'systems';
-  const showSystems = sheet !== 'spaces';
+  const showSpaces = layers.spaces;
+  const showSystems = step !== 'spaces';
+  const fade = stepFade(step);
   const highlightedRoom =
     selection.kind === 'room'
       ? rooms.find(room => room.id === selection.id)
@@ -519,7 +664,7 @@ export function PlanView({
     selection.kind === 'room' || selection.kind === 'surface' || selection.kind === 'opening'
       ? rooms.find(room => room.id === (selection.kind === 'room' ? selection.id : selection.roomId))
       : undefined;
-  const gestureRoom = gesture ? rooms.find(room => room.id === gesture.roomId) : undefined;
+  const gestureRoom = gesture && 'roomId' in gesture ? rooms.find(room => room.id === gesture.roomId) : undefined;
   const measuredRoom = gestureRoom ?? dimRoom;
   const measuredFace = gesture?.kind === 'wall' ? gesture.face : selectedWall;
   const measuredOpening = gesture?.kind === 'opening'
@@ -547,6 +692,12 @@ export function PlanView({
     const shifted = before && after ? { ...item, xM: item.xM + (after.xM - before.xM), yM: item.yM + (after.yM - before.yM) } : item;
     return movingEquipment?.id === item.id ? { ...shifted, xM: movingEquipment.xM, yM: movingEquipment.yM } : shifted;
   });
+  const planLoads = (project.loads ?? []).map(item => {
+    const before = gesture?.kind === 'space' ? project.rooms.find(room => room.id === item.roomId) : undefined;
+    const after = before ? rooms.find(room => room.id === before.id) : undefined;
+    const shifted = before && after ? { ...item, xM: item.xM + (after.xM - before.xM), yM: item.yM + (after.yM - before.yM) } : item;
+    return movingLoad?.id === item.id ? { ...shifted, xM: movingLoad.xM, yM: movingLoad.yM } : shifted;
+  });
   const openHitMenu = (event: ReactMouseEvent, next: Selection) => {
     event.preventDefault();
     event.stopPropagation();
@@ -565,7 +716,7 @@ export function PlanView({
 
   return (
     <div
-      className={['plan-wrap', tool.kind === 'draw' ? 'is-draw' : '', tool.kind === 'place' ? 'is-place' : '', tool.kind === 'select' ? 'is-select' : '', tool.kind === 'wall' ? 'is-wall' : '', tool.kind === 'door' || tool.kind === 'window' ? 'is-opening-tool' : '', gesture ? 'is-dragging' : '', gesture?.kind === 'equipment' ? 'is-moving-equipment' : '', gesture?.kind === 'rotate' ? 'is-rotating-equipment' : '', catalogOver ? 'is-catalog-drop' : ''].filter(Boolean).join(' ')}
+      className={['plan-wrap', tool.kind === 'draw' ? 'is-draw' : '', tool.kind === 'place' || tool.kind === 'load' ? 'is-place' : '', tool.kind === 'select' ? 'is-select' : '', tool.kind === 'wall' ? 'is-wall' : '', tool.kind === 'duct' ? 'is-duct' : '', tool.kind === 'door' || tool.kind === 'window' ? 'is-opening-tool' : '', gesture ? 'is-dragging' : '', gesture?.kind === 'equipment' ? 'is-moving-equipment' : '', gesture?.kind === 'rotate' ? 'is-rotating-equipment' : '', catalogOver ? 'is-catalog-drop' : ''].filter(Boolean).join(' ')}
       onDragEnter={event => {
         if (![...event.dataTransfer.types].includes(CATALOG_MIME)) return;
         event.preventDefault();
@@ -610,7 +761,7 @@ export function PlanView({
             event.currentTarget.setPointerCapture(event.pointerId);
             return;
           }
-          if (tool.kind === 'place') {
+          if (tool.kind === 'place' || tool.kind === 'load') {
             drag.current = { kind: 'place', x: point.xM, y: point.yM, pointerX: event.clientX, pointerY: event.clientY, view };
             return;
           }
@@ -641,6 +792,41 @@ export function PlanView({
             chainRef.current = next;
             setChain(next);
             setAim(snapped);
+            return;
+          }
+          if (tool.kind === 'duct') {
+            if (!tool.systemId) return;
+            const snapped = snapDuct(point.xM, point.yM, project, tool.systemId, tool.service);
+            const points = ductChainRef.current;
+            if (!points) {
+              const next = [snapped];
+              ductChainRef.current = next;
+              setDuctChain(next);
+              setDuctAim(snapped);
+              return;
+            }
+            const last = points[points.length - 1];
+            if (Math.hypot(snapped.x - last.x, snapped.y - last.y) < 0.15) return;
+            const next = [...points, snapped];
+            const sameStart = points.length === 1 && points[0].equipmentId === snapped.equipmentId && points[0].portId === snapped.portId;
+            if (snapped.portId && !sameStart) {
+              ductChainRef.current = null;
+              setDuctChain(null);
+              setDuctAim(null);
+              onDrawDuct({
+                points: next,
+                catalogId: tool.catalogId,
+                systemId: tool.systemId,
+                service: tool.service,
+                shape: tool.shape,
+                widthM: tool.widthM,
+                heightM: tool.heightM,
+              });
+              return;
+            }
+            ductChainRef.current = next;
+            setDuctChain(next);
+            setDuctAim(snapped);
             return;
           }
           if (tool.kind === 'door' || tool.kind === 'window') {
@@ -680,6 +866,15 @@ export function PlanView({
                 };
                 setGesture({ kind: 'rotate', id: item.id });
                 onSelect({ kind: 'equipment', id: item.id });
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }
+              return;
+            }
+            if (hit.getAttribute('data-hit') === 'load') {
+              const id = hit.getAttribute('data-id');
+              const item = id ? (project.loads ?? []).find(entry => entry.id === id) : undefined;
+              if (item) {
+                drag.current = { kind: 'load', id: item.id, xM: item.xM, yM: item.yM, grabX: point.xM, grabY: point.yM, pointerX: event.clientX, pointerY: event.clientY, view, armed: false };
                 event.currentTarget.setPointerCapture(event.pointerId);
               }
               return;
@@ -773,6 +968,10 @@ export function PlanView({
               const next = snapDrawPoint(point.xM, point.yM, project.rooms, wallRuns, chainRef.current ?? [], pxPerM);
               setAim(prev => (prev && prev.x === next.x && prev.y === next.y && prev.kind === next.kind && prev.close === next.close && prev.guides.length === next.guides.length ? prev : next));
             }
+            if (tool.kind === 'duct') {
+              const next = snapDuct(point.xM, point.yM, project, tool.systemId, tool.service);
+              setDuctAim(prev => (prev && prev.x === next.x && prev.y === next.y && prev.portId === next.portId && prev.equipmentId === next.equipmentId ? prev : next));
+            }
             return;
           }
           if (!window.getSelection()?.isCollapsed) window.getSelection()?.removeAllRanges();
@@ -808,6 +1007,18 @@ export function PlanView({
               : { xM: rawX, yM: rawY };
             showEquipment({ id: current.id, xM: placed.xM, yM: placed.yM });
             setReadout({ x: placed.xM, y: placed.yM, text: `${formatDelta(placed.xM - current.xM, project.units)} · ${formatDelta(placed.yM - current.yM, project.units)}` });
+            return;
+          }
+          if (current.kind === 'load') {
+            if (!current.armed) {
+              if (Math.hypot(event.clientX - current.pointerX, event.clientY - current.pointerY) < DRAG_PX) return;
+              current.armed = true;
+              onSelect({ kind: 'load', id: current.id });
+            }
+            const xM = snap(current.xM + (point.xM - current.grabX));
+            const yM = snap(current.yM + (point.yM - current.grabY));
+            showLoad({ id: current.id, xM, yM });
+            setReadout({ x: xM, y: yM, text: `${formatDelta(xM - current.xM, project.units)} · ${formatDelta(yM - current.yM, project.units)}` });
             return;
           }
           if (current.kind === 'rotate') {
@@ -884,6 +1095,7 @@ export function PlanView({
           showLive(null);
           showEquipment(null);
           showRotate(null);
+          showLoad(null);
           setGesture(null);
           setReadout(null);
         }}
@@ -913,6 +1125,16 @@ export function PlanView({
           if (current.kind === 'place' && moved < 6) {
             const point = toWorld(event.clientX, event.clientY);
             if (tool.kind === 'place') onPlace({ xM: snap(point.xM), yM: snap(point.yM) }, tool.catalogId);
+            if (tool.kind === 'load') onPlaceLoad({ xM: snap(point.xM), yM: snap(point.yM) }, tool.loadId);
+            return;
+          }
+          if (current.kind === 'load') {
+            const next = movingLoadRef.current;
+            showLoad(null);
+            setReadout(null);
+            suppressClick.current = true;
+            onSelect({ kind: 'load', id: current.id });
+            if (current.armed && next && next.id === current.id) onMoveLoad(current.id, next.xM, next.yM);
             return;
           }
           if (current.kind === 'pan') {
@@ -987,6 +1209,7 @@ export function PlanView({
         }}
       >
         <g transform="scale(1,-1)">
+          <g opacity={fade.spaces}>
           {rooms.map(room => {
             const shaped = (room.outline?.length ?? 0) >= 3;
             const fill = showSpaces ? (room.id === highlightedRoom?.id ? SELECT_FILL : roomFill(room.use)) : 'none';
@@ -1169,7 +1392,13 @@ export function PlanView({
               );
             })
           )}
-          {showSpaces && rooms.map(room => {
+          </g>
+          {(layers.ducts || tool.kind === 'duct') && (
+            <g opacity={tool.kind === 'duct' ? 1 : fade.ducts}>
+              <DuctLayer project={project} selection={selection} tool={tool} fontM={font} showSize={showDuctSize} onSelect={onSelect} onContextMenu={onContextMenu} />
+            </g>
+          )}
+          {layers.labels && rooms.map(room => {
             const shaped = (room.outline?.length ?? 0) >= 3;
             const area = shaped ? polygonArea(room.outline ?? []) : room.lengthM * room.widthM;
             const detail = shaped
@@ -1187,8 +1416,7 @@ export function PlanView({
               </g>
             );
           })}
-          {showSystems && <SystemLinks project={project} />}
-          {planEquipment.map(item => {
+          {layers.equipment && <g opacity={fade.equipment}>{planEquipment.map(item => {
             const shown = rotatingEquipment?.id === item.id ? { ...item, yawDeg: rotatingEquipment.yawDeg } : item;
             const systemIndex = shown.systemId ? project.systems.findIndex(system => system.id === shown.systemId) : -1;
             const system = systemIndex >= 0 ? project.systems[systemIndex] : undefined;
@@ -1205,11 +1433,19 @@ export function PlanView({
                 color={showSystems && system ? SYSTEM_COLORS[systemIndex % SYSTEM_COLORS.length] : undefined}
               />
             );
-          })}
+          })}</g>}
+          {layers.loads && (
+            <g opacity={fade.loads}>
+              <LoadMarks loads={planLoads} selection={selection} fontM={font} labels={layers.labels} onContextMenu={onContextMenu} />
+            </g>
+          )}
           {draft && (
             <rect x={draft.xM} y={draft.yM} width={draft.lengthM} height={draft.widthM} fill="rgba(14,110,102,0.08)" stroke={DIM} strokeWidth={HAIR} vectorEffect="non-scaling-stroke" />
           )}
           {(chain || (aim && tool.kind === 'wall')) && <ChainPreview points={chain ?? []} aim={aim} units={project.units} fontM={font} />}
+          {tool.kind === 'duct' && (ductChain || ductAim) && (
+            <DuctDraft points={ductChain ?? []} aim={ductAim} units={project.units} fontM={font} view={view} sizeLabel={ductSizeLabel(tool, project.units)} widthM={showDuctSize ? tool.widthM : 0} color={streamFor(project.systems.find(system => system.id === tool.systemId)?.kind ?? 'other', tool.service)?.color ?? DIM} />
+          )}
           {spot && (tool.kind === 'door' || tool.kind === 'window') && <OpeningGhost spot={spot} kind={tool.kind} />}
           {highlightedRoom && ((highlightedRoom.outline?.length ?? 0) >= 3 ? (
             <polygon
@@ -1292,7 +1528,7 @@ export function PlanView({
           })()}
           {showSpaces && measuredRoom && gesture?.kind !== 'space' && (measuredRoom.outline?.length ?? 0) < 3 && <RoomDimensions room={measuredRoom} rooms={rooms} units={project.units} fontM={font} wallFace={measuredFace} />}
           {showSpaces && measuredRoom && measuredOpening && <OpeningSlideDimension room={measuredRoom} opening={measuredOpening} units={project.units} fontM={font} />}
-          {showSpaces && clearanceFoot && clearanceRoom && (
+          {layers.clearances && clearanceFoot && clearanceRoom && (
             <ClearanceDimensions foot={clearanceFoot} room={clearanceRoom} units={project.units} fontM={font} />
           )}
           {readout && <DragReadout x={readout.x} y={readout.y} text={readout.text} fontM={font} view={view} />}
@@ -1307,7 +1543,7 @@ export function PlanView({
         </div>
       </div>
       </div>
-      {showSpaces && (
+      {showSpaces && step === 'spaces' && (
       <div className="plan-foot">
       <div className="plan-legend">
             <div><i className="swatch" style={{ background: wallColor('asm-wall-dining') }} />Exterior</div>
@@ -1594,16 +1830,185 @@ function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
   return { name: 'Unit', roof };
 }
 
-function SystemLinks({ project }: { project: Project }) {
+function DuctLayer({
+  project,
+  selection,
+  tool,
+  fontM,
+  showSize,
+  onSelect,
+  onContextMenu,
+}: {
+  project: Project;
+  selection: Selection;
+  tool: EditorTool;
+  fontM: number;
+  showSize: boolean;
+  onSelect: (selection: Selection) => void;
+  onContextMenu: (selection: Selection, x: number, y: number) => void;
+}) {
+  const ports = tool.kind === 'duct'
+    ? equipmentPortHits(project.equipment).filter(hit => portFits(project, hit, tool.systemId, tool.service))
+    : [];
   return (
-    <g pointerEvents="none" fill="none" strokeWidth={HAIR} vectorEffect="non-scaling-stroke">
-      {project.systems.map((system, index) => {
-        const members = project.equipment.filter(item => item.systemId === system.id);
-        if (members.length < 2) return null;
-        const ordered = [...members].sort((a, b) => a.xM - b.xM || a.yM - b.yM);
-        const color = SYSTEM_COLORS[index % SYSTEM_COLORS.length];
-        return <polyline key={system.id} points={ordered.map(item => `${item.xM},${item.yM}`).join(' ')} stroke={color} vectorEffect="non-scaling-stroke" />;
+    <g>
+      {(project.ducts ?? []).map(run => {
+        const system = project.systems.find(item => item.id === run.systemId);
+        const color = (system && streamFor(system.kind, run.service)?.color) || '#5e6368';
+        const active = selection.kind === 'duct' && selection.id === run.id;
+        const drawn = run.points.map(point => `${point.x},${point.y}`).join(' ');
+        const crossings = ductCrossings(run.points, project.rooms, project.wallRuns ?? []);
+        const label = labelSegment(run.points);
+        const rise = [endRise(project, run, 'start'), endRise(project, run, 'end')];
+        return (
+          <g key={run.id}>
+            <polyline
+              data-hit="duct"
+              data-id={run.id}
+              points={drawn}
+              fill="none"
+              stroke="transparent"
+              strokeWidth={0.4}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              onClick={event => {
+                event.stopPropagation();
+                if (tool.kind !== 'select') return;
+                onSelect({ kind: 'duct', id: run.id });
+              }}
+              onContextMenu={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                onContextMenu({ kind: 'duct', id: run.id }, event.clientX, event.clientY);
+              }}
+            />
+            {showSize && run.points.slice(1).map((point, index) => (
+              <polygon key={`${run.id}-w-${index}`} points={wallQuad(run.points[index].x, run.points[index].y, point.x, point.y, run.widthM)} fill={color} fillOpacity={0.16} stroke={color} strokeWidth={1} vectorEffect="non-scaling-stroke" pointerEvents="none" />
+            ))}
+            <polyline points={drawn} fill="none" stroke={active ? SELECT : color} strokeWidth={active ? 2.6 : 1.7} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" pointerEvents="none" />
+            {crossings.map((hit, index) => {
+              const normal = segmentNormal(run.points, hit.x, hit.y);
+              if (!normal) return null;
+              const tick = 0.16;
+              return (
+                <line
+                  key={`${run.id}-x-${index}`}
+                  x1={hit.x - normal.nx * tick}
+                  y1={hit.y - normal.ny * tick}
+                  x2={hit.x + normal.nx * tick}
+                  y2={hit.y + normal.ny * tick}
+                  stroke={color}
+                  strokeWidth={1.6}
+                  vectorEffect="non-scaling-stroke"
+                  pointerEvents="none"
+                />
+              );
+            })}
+            {label && (
+              <g transform={`translate(${label.x + label.nx * fontM * 1.15} ${label.y + label.ny * fontM * 1.15}) scale(1,-1) rotate(${label.deg})`} pointerEvents="none">
+                <text textAnchor="middle" fontSize={fontM * 0.62} fill={color} fontWeight={600}>
+                  {ductSizeLabel(run, project.units)}
+                </text>
+              </g>
+            )}
+            {rise.map((meters, end) => {
+              if (Math.abs(meters) <= 0.05) return null;
+              const point = end === 0 ? run.points[0] : run.points[run.points.length - 1];
+              if (!point) return null;
+              return <circle key={end} cx={point.x} cy={point.y} r={0.12} fill="#fff" stroke={color} strokeWidth={1.6} vectorEffect="non-scaling-stroke" pointerEvents="none"><title>{`Riser ${formatLength(Math.abs(meters), project.units, 2)}`}</title></circle>;
+            })}
+          </g>
+        );
       })}
+      {ports.map(port => (
+        <circle key={`${port.equipmentId}-${port.portId}`} cx={port.x} cy={port.y} r={0.1} fill="#fff" stroke={DIM} strokeWidth={1.6} vectorEffect="non-scaling-stroke" pointerEvents="none" />
+      ))}
+    </g>
+  );
+}
+
+function labelSegment(points: readonly { x: number; y: number }[]): { x: number; y: number; nx: number; ny: number; deg: number } | null {
+  let best = 0;
+  let found: { x: number; y: number; nx: number; ny: number; deg: number } | null = null;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const length = Math.hypot(dx, dy);
+    if (length <= best) continue;
+    best = length;
+    let deg = (Math.atan2(-dy, dx) * 180) / Math.PI;
+    if (deg > 90 || deg < -90) deg += 180;
+    found = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, nx: -dy / length, ny: dx / length, deg };
+  }
+  return found;
+}
+
+function segmentNormal(points: readonly { x: number; y: number }[], x: number, y: number): { nx: number; ny: number } | null {
+  let best = 0.35;
+  let found: { nx: number; ny: number } | null = null;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const length2 = dx * dx + dy * dy;
+    if (length2 < 1e-6) continue;
+    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / length2));
+    const distance = Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy));
+    if (distance > best) continue;
+    const length = Math.sqrt(length2);
+    best = distance;
+    found = { nx: -dy / length, ny: dx / length };
+  }
+  return found;
+}
+
+function DuctDraft({
+  points,
+  aim,
+  units,
+  fontM,
+  view,
+  sizeLabel,
+  widthM,
+  color,
+}: {
+  points: DuctDraftPoint[];
+  aim: DuctDraftPoint | null;
+  units: Project['units'];
+  fontM: number;
+  view: ViewBox;
+  sizeLabel: string;
+  widthM: number;
+  color: string;
+}) {
+  const last = points.length > 0 ? points[points.length - 1] : null;
+  const rubber = last && aim && Math.hypot(aim.x - last.x, aim.y - last.y) > 0.05 ? aim : null;
+  const mid = last && rubber ? { x: (last.x + rubber.x) / 2, y: (last.y + rubber.y) / 2 } : null;
+  const length = last && rubber ? Math.hypot(rubber.x - last.x, rubber.y - last.y) : 0;
+  return (
+    <g pointerEvents="none">
+      {widthM > 0 && points.slice(1).map((point, index) => (
+        <polygon key={`band-${index}`} points={wallQuad(points[index].x, points[index].y, point.x, point.y, widthM)} fill={color} fillOpacity={0.16} stroke={color} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+      ))}
+      {widthM > 0 && last && rubber && (
+        <polygon points={wallQuad(last.x, last.y, rubber.x, rubber.y, widthM)} fill={color} fillOpacity={0.1} stroke={color} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+      )}
+      {points.length > 1 && (
+        <polyline points={points.map(point => `${point.x},${point.y}`).join(' ')} fill="none" stroke={color} strokeWidth={1.7} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
+      )}
+      {last && rubber && (
+        <line x1={last.x} y1={last.y} x2={rubber.x} y2={rubber.y} stroke={color} strokeWidth={1.7} strokeDasharray="0.18 0.12" vectorEffect="non-scaling-stroke" />
+      )}
+      {points.map((point, index) => (
+        <circle key={index} cx={point.x} cy={point.y} r={0.08} fill={point.portId ? color : '#fff'} stroke={color} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
+      ))}
+      {aim && <circle cx={aim.x} cy={aim.y} r={0.1} fill={aim.portId ? color : '#fff'} stroke={color} strokeWidth={1.8} vectorEffect="non-scaling-stroke" />}
+      {mid && (
+        <DragReadout x={mid.x} y={mid.y} view={view} fontM={fontM * 0.92} text={`${formatLength(length, units, 1)} · ${wallAngleDeg(last!.x, last!.y, rubber!.x, rubber!.y)}° · ${sizeLabel}`} />
+      )}
     </g>
   );
 }

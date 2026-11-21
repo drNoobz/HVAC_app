@@ -31,6 +31,7 @@ import {
   type ConstructionCategory,
   type ConstructionMaterial,
 } from '@/domain/constructionLibrary';
+import { DUCT_CATALOG, roughnessLabel, sizeSummary, streamLabels, type DuctProduct } from '@/domain/ductCatalog';
 import { StackEditor } from './StackEditor';
 
 const EMPTY_DRAFT = {
@@ -48,7 +49,8 @@ const EMPTY_DRAFT = {
 };
 
 type Draft = typeof EMPTY_DRAFT;
-type LibrarySection = 'construction' | EquipmentFamily;
+type LibrarySection = 'construction' | EquipmentFamily | 'ducts';
+type DuctGroup = DuctProduct['group'] | 'all';
 type ConstructionMode = 'components' | 'layers';
 
 function draftFrom(material: ConstructionMaterial): Draft {
@@ -103,6 +105,7 @@ export function LibraryPanel({
   const [componentUse, setComponentUse] = useState('');
   const [componentError, setComponentError] = useState<string | null>(null);
   const [selectedAssemblyId, setSelectedAssemblyId] = useState<string | null>(null);
+  const [ductGroup, setDuctGroup] = useState<DuctGroup>('all');
 
   const switchSection = (next: LibrarySection) => {
     setSection(next);
@@ -112,6 +115,7 @@ export function LibraryPanel({
     setComponentOpen(false);
     setCategory('all');
     setEquipmentCategory('all');
+    setDuctGroup('all');
     setSelectedAssemblyId(null);
   };
 
@@ -126,7 +130,7 @@ export function LibraryPanel({
     return haystack.includes(query.trim().toLowerCase());
   });
 
-  const equipmentFamily = section === 'construction' ? null : section;
+  const equipmentFamily = section === 'space' || section === 'system' ? section : null;
   const familyCategories = equipmentFamily ? FAMILY_CATEGORIES[equipmentFamily] : [];
   const familyProducts = useMemo(() => {
     if (!equipmentFamily) return [];
@@ -255,11 +259,24 @@ export function LibraryPanel({
     reader.readAsText(file);
   };
 
-  const navCategory = section === 'construction' ? category : equipmentCategory;
-  const navCounts = section === 'construction' ? constructionCounts : equipmentCounts;
+  const ductGroups = ['Round metal', 'Rectangular', 'Flexible', 'Phenolic', 'Fabric', 'Grease'] as const;
+  const ductCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: DUCT_CATALOG.length };
+    for (const item of DUCT_CATALOG) counts[item.group] = (counts[item.group] ?? 0) + 1;
+    return counts;
+  }, []);
+  const visibleDucts = DUCT_CATALOG.filter(item => {
+    if (ductGroup !== 'all' && item.group !== ductGroup) return false;
+    const haystack = `${item.name} ${item.manufacturer} ${item.model} ${item.supplier} ${item.material}`.toLowerCase();
+    return haystack.includes(query.trim().toLowerCase());
+  });
+  const navCategory = section === 'construction' ? category : section === 'ducts' ? ductGroup : equipmentCategory;
+  const navCounts = section === 'construction' ? constructionCounts : section === 'ducts' ? ductCounts : equipmentCounts;
   const navItems = section === 'construction'
     ? (constructionMode === 'components' ? ASSEMBLY_CATEGORIES : CONSTRUCTION_CATEGORIES)
-    : familyCategories;
+    : section === 'ducts'
+      ? ductGroups
+      : familyCategories;
   const selectedAssembly = visibleAssemblies.find(item => item.id === selectedAssemblyId) ?? null;
 
   return (
@@ -271,10 +288,13 @@ export function LibraryPanel({
         <button type="button" className={section === 'space' ? 'active' : ''} onClick={() => switchSection('space')}>
           Space equipment
         </button>
-        <button type="button" className={section === 'system' ? 'active' : ''} onClick={() => switchSection('system')}>
-          System equipment
-        </button>
-      </nav>
+          <button type="button" className={section === 'system' ? 'active' : ''} onClick={() => switchSection('system')}>
+            System equipment
+          </button>
+          <button type="button" className={section === 'ducts' ? 'active' : ''} onClick={() => switchSection('ducts')}>
+            Ducts
+          </button>
+        </nav>
 
       <div className="library-toolbar">
         <label className="library-search">
@@ -358,7 +378,7 @@ export function LibraryPanel({
               <button
                 type="button"
                 className={navCategory === 'all' ? 'active' : ''}
-                onClick={() => (section === 'construction' ? setCategory('all') : setEquipmentCategory('all'))}
+                onClick={() => (section === 'construction' ? setCategory('all') : section === 'ducts' ? setDuctGroup('all') : setEquipmentCategory('all'))}
               >
                 <span>All</span>
                 <span className="tree-meta">{navCounts.all ?? 0}</span>
@@ -372,13 +392,17 @@ export function LibraryPanel({
                   onClick={() =>
                     section === 'construction'
                       ? setCategory(item as ConstructionCategory)
-                      : setEquipmentCategory(item as EquipmentCategory)
+                      : section === 'ducts'
+                        ? setDuctGroup(item as DuctGroup)
+                        : setEquipmentCategory(item as EquipmentCategory)
                   }
                 >
                   <span>
                     {section === 'construction'
                       ? constructionCategoryLabel[item as ConstructionCategory]
-                      : CATEGORY_LABEL[item as EquipmentCategory]}
+                      : section === 'ducts'
+                        ? item
+                        : CATEGORY_LABEL[item as EquipmentCategory]}
                   </span>
                   <span className="tree-meta">{navCounts[item] ?? 0}</span>
                 </button>
@@ -656,7 +680,57 @@ export function LibraryPanel({
             </div>
           )}
 
-          {section !== 'construction' && (
+          {section === 'ducts' && (
+            <div className="table-wrap library-table">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Supplier</th>
+                    <th>Section</th>
+                    <th>Sizes</th>
+                    <th>Roughness</th>
+                    <th>Pressure</th>
+                    <th>Streams</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleDucts.map(item => (
+                    <tr key={item.id}>
+                      <td>
+                        <strong>{item.name}</strong>
+                        <div className="cell-sub">{item.manufacturer} · {item.model}</div>
+                        <div className="cell-sub">{item.material}</div>
+                      </td>
+                      <td>{item.supplier}</td>
+                      <td>{item.shape === 'round' ? 'Round' : 'Rectangular'}</td>
+                      <td>{sizeSummary(item)}</td>
+                      <td>
+                        {roughnessLabel(item)}
+                        <div className="cell-sub">{item.roughnessNote}</div>
+                      </td>
+                      <td>{item.pressure}</td>
+                      <td>
+                        {streamLabels(item)}
+                        {item.documentUrl && (
+                          <div className="cell-sub">
+                            <a href={item.documentUrl} target="_blank" rel="noreferrer">Source</a>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {visibleDucts.length === 0 && (
+                    <tr>
+                      <td colSpan={7}>No ducts match.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {(section === 'space' || section === 'system') && (
             <div className="table-wrap library-table">
               <table className="data-table">
                 <thead>

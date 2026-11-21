@@ -1,8 +1,10 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { planningIssues } from '@/domain/issues';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { buildChecks, stepForSelection, type BuildStep, type CheckIssue } from '@/domain/checks';
+import { getLoadProduct, LOAD_CATALOG, LOAD_CATEGORY_COLOR, LOAD_CATEGORY_LABEL, LOAD_CATEGORY_ORDER, loadGroups, type LoadCategory } from '@/domain/loadCatalog';
+import { addLoad, loadLabel, loadSpec, removeLoad, roomLoads, sumLoads, updateLoad } from '@/domain/loads';
 import {
   CATALOG_MIME,
   CATEGORY_LABEL,
@@ -16,6 +18,7 @@ import {
 } from '@/domain/catalog';
 import { downloadText, fileSlug } from '@/domain/download';
 import {
+  addDuct,
   addOpening,
   addSystem,
   addWallRun,
@@ -25,6 +28,7 @@ import {
   buildOutlineRoom,
   buildPlacement,
   placeOpeningOnRoom,
+  removeDuct,
   removeEquipment,
   removeRoom,
   removeSystem,
@@ -34,6 +38,7 @@ import {
   setEdgeAssembly,
   setInterfaceAssembly,
   setWallAssembly,
+  syncDuctPorts,
   translateRoom,
   updateEquipment,
   updateRoom,
@@ -41,11 +46,13 @@ import {
   placementZ,
 } from '@/domain/projectOps';
 import { buildBom, buildConstructionBom, buildConstructionSchedule, buildSchedule, projectSummary, scheduleCsv } from '@/domain/schedule';
-import { SURFACE_FACES, SYSTEM_KINDS, WALL_FACES, type EditorTool, type Project, type Selection, type StoredTemplate, type WallFace } from '@/domain/types';
+import { DUCT_CATALOG, DUCT_STREAMS, ductPairAllowed, getDuctProduct, servicesFor, streamFor, systemsForProduct } from '@/domain/ductCatalog';
+import { ductSizeLabel, DUCT_SERVICES, DUCT_SERVICE_LABEL, openPorts } from '@/domain/ducts';
+import { SURFACE_FACES, SYSTEM_KINDS, WALL_FACES, type DuctService, type EditorTool, type Project, type Selection, type StoredTemplate, type WallFace } from '@/domain/types';
 import { NO_WALL_RUNS, polygonArea } from '@/domain/wallDraw';
-import { PLAN_SIDES, WALL_TYPES, edgePortions, findInterface, interfaceForOpening, interfaceTargets, portionSummary, roomFill, wallPlaceLabel, wallRoleLabel } from '@/domain/walls';
-import { PlanView } from './PlanView';
-import { formatArea, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
+import { PLAN_SIDES, WALL_TYPES, edgePortions, findInterface, interfaceForOpening, interfaceTargets, portionSummary, roomFill, wallColor, wallPlaceLabel, wallRoleLabel } from '@/domain/walls';
+import { DEFAULT_LAYERS, PlanView, type PlanLayers } from './PlanView';
+import { formatArea, formatLength, formatNumber, formatPower, lengthToM, lengthUnit, mToLength } from '@/domain/units';
 import { projectToBuildingModel, validateModel } from '@/thermonode/localAdapter';
 import { mergeAssemblies, mergeLibrary, type ConstructionAssembly, type ConstructionMaterial } from '@/domain/constructionLibrary';
 import { BoundaryPanel } from './BoundaryPanel';
@@ -62,12 +69,58 @@ const Viewport = dynamic(() => import('./Viewport'), {
 type CenterView = 'model' | 'schedule' | 'library' | 'boundary';
 
 const CENTER_VIEWS: { id: CenterView; label: string }[] = [
-  { id: 'model', label: 'Model' },
+  { id: 'model', label: 'Build' },
   { id: 'schedule', label: 'Schedule' },
   { id: 'library', label: 'Library' },
   { id: 'boundary', label: 'Thermonode' },
 ];
-type SideTab = 'project' | 'catalog';
+
+const STEPS: { id: BuildStep; label: string }[] = [
+  { id: 'spaces', label: 'Spaces' },
+  { id: 'loads', label: 'Loads' },
+  { id: 'equipment', label: 'Equipment' },
+  { id: 'ducts', label: 'Ducts' },
+  { id: 'check', label: 'Check' },
+];
+
+type ToolKind = 'select' | 'wall' | 'draw' | 'door' | 'window' | 'load' | 'place' | 'duct';
+
+const STEP_TOOLS: Record<BuildStep, ToolKind[]> = {
+  spaces: ['select', 'wall', 'draw', 'door', 'window'],
+  loads: ['select', 'load'],
+  equipment: ['select', 'place'],
+  ducts: ['select', 'duct'],
+  check: ['select'],
+};
+
+const TOOL_LABEL: Record<ToolKind, string> = {
+  select: 'Select',
+  wall: 'Wall',
+  draw: 'Room',
+  door: 'Door',
+  window: 'Window',
+  load: 'Place load',
+  place: 'Place',
+  duct: 'Draw duct',
+};
+
+/** Selections that keep the current step. Others switch to their own step. */
+const STEP_SELECTIONS: Record<BuildStep, Selection['kind'][]> = {
+  spaces: ['room', 'surface', 'interface', 'opening', 'wallRun', 'wallOpening'],
+  loads: ['load', 'room'],
+  equipment: ['equipment', 'system'],
+  ducts: ['duct', 'equipment', 'system'],
+  check: [],
+};
+
+function toolStep(tool: EditorTool): BuildStep | null {
+  if (tool.kind === 'wall' || tool.kind === 'draw' || tool.kind === 'door' || tool.kind === 'window') return 'spaces';
+  if (tool.kind === 'load') return 'loads';
+  if (tool.kind === 'place') return 'equipment';
+  if (tool.kind === 'duct') return 'ducts';
+  return null;
+}
+
 type MenuEntry = { id: string; label: string; danger?: boolean; run: () => void };
 
 function selectionForSubject(project: Project, subjectId: string | undefined): Selection | null {
@@ -108,28 +161,33 @@ export function Studio({
   const [selection, setSelection] = useState<Selection>({ kind: 'project' });
   const [tool, setTool] = useState<EditorTool>({ kind: 'select' });
   const [view, setView] = useState<CenterView>('model');
-  const [side, setSide] = useState<SideTab>('project');
+  const [step, setStep] = useState<BuildStep>('spaces');
+  const [layers, setLayers] = useState<PlanLayers>(DEFAULT_LAYERS);
+  const [layersOpen, setLayersOpen] = useState(false);
   const [fitToken, setFitToken] = useState(0);
   const [query, setQuery] = useState('');
   const [catalogFamily, setCatalogFamily] = useState<EquipmentFamily | 'all'>('all');
-  const [category, setCategory] = useState<EquipmentCategory | 'all'>('all');
+  const [lastProductId, setLastProductId] = useState<string | null>(null);
+  const [targetSystemId, setTargetSystemId] = useState('');
+  const [loadId, setLoadId] = useState(LOAD_CATALOG[0].id);
+  const [loadQuery, setLoadQuery] = useState('');
+  const [loadCategory, setLoadCategory] = useState<LoadCategory | 'all'>('all');
+  const [checkFilter, setCheckFilter] = useState<Exclude<BuildStep, 'check'> | 'all'>('all');
+  const [checkIndex, setCheckIndex] = useState(0);
   const [showDimensions, setShowDimensions] = useState(false);
   const [hideRoof, setHideRoof] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [templateName, setTemplateName] = useState(`${project.name} template`);
   const [wallTypeId, setWallTypeId] = useState<string | null>(null);
   const [scene, setScene] = useState<'plan' | '3d'>('plan');
-  const [sheet, setSheet] = useState<'all' | 'spaces' | 'systems'>('spaces');
   const [cameraPose, setCameraPose] = useState<'orbit' | 'top'>('top');
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
   const [nameFocus, setNameFocus] = useState(0);
   const past = useRef<Project[]>([]);
   const future = useRef<Project[]>([]);
   const [historyTick, setHistoryTick] = useState({ undo: false, redo: false });
-  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
-  const [diagnosticsFilter, setDiagnosticsFilter] = useState<'all' | 'errors' | 'warnings' | 'planning'>('all');
-  const [diagnosticsHeight, setDiagnosticsHeight] = useState(220);
   const edit = (next: Project) => {
     past.current = [...past.current, project].slice(-40);
     future.current = [];
@@ -155,6 +213,24 @@ export function Studio({
 
   const materials = useMemo(() => mergeLibrary(addedMaterials), [addedMaterials]);
   const assemblies = useMemo(() => mergeAssemblies(addedAssemblies), [addedAssemblies]);
+  const changeStep = (next: BuildStep) => {
+    setStep(next);
+    setView('model');
+    setLayersOpen(false);
+    if (next !== 'spaces') {
+      setWallTypeId(null);
+      setShowDimensions(false);
+    }
+    setTool(current => {
+      const owner = toolStep(current);
+      return owner && owner !== next ? { kind: 'select' } : current;
+    });
+  };
+  const select = (next: Selection) => {
+    setSelection(next);
+    const target = stepForSelection(next);
+    if (target && step !== 'check' && !STEP_SELECTIONS[step].includes(next.kind)) changeStep(target);
+  };
   const soleInterface = (roomId: string, anchor: string) => {
     const matches = interfaceTargets(project.rooms).filter(target => target.sides.some(side => side.roomId === roomId && side.anchor === anchor));
     return matches.length === 1 ? matches[0] : null;
@@ -191,42 +267,31 @@ export function Studio({
           return;
         }
       }
-      setSelection(next);
+      select(next);
       return;
     }
-    setSelection(next);
+    select(next);
   };
-  const planning = useMemo(() => planningIssues(project), [project]);
   const validation = useMemo(() => validateModel(projectToBuildingModel(project)), [project]);
-  const errors = validation.issues.filter(issue => issue.severity === 'error').length;
-  const warnings = validation.issues.filter(issue => issue.severity === 'warning').length;
-  const issueCount = planning.length + errors + warnings;
-  const diagnosticRows = useMemo(() => {
-    const planningRows = planning.map(issue => ({ id: issue.id, severity: 'planning' as const, message: issue.message, selection: issue.selection }));
-    const geometryRows = validation.issues
-      .filter(issue => issue.severity === 'error' || issue.severity === 'warning')
-      .map(issue => ({
-        id: `${issue.code}-${issue.subjectId ?? ''}-${issue.message}`,
-        severity: issue.severity,
-        message: issue.message,
-        selection: selectionForSubject(project, issue.subjectId),
-      }));
-    return [...planningRows, ...geometryRows];
-  }, [planning, project, validation]);
-  const visibleDiagnostics = diagnosticRows.filter(row => {
-    if (diagnosticsFilter === 'errors') return row.severity === 'error';
-    if (diagnosticsFilter === 'warnings') return row.severity === 'warning';
-    if (diagnosticsFilter === 'planning') return row.severity === 'planning';
-    return true;
-  });
-  useEffect(() => {
-    const saved = Number(window.localStorage.getItem('hvac-diagnostics-height'));
-    if (saved >= 120 && saved <= 600) setDiagnosticsHeight(saved);
-  }, []);
+  const checks = useMemo(() => {
+    const geometry = validation.issues.flatMap(issue =>
+      issue.severity === 'error' || issue.severity === 'warning'
+        ? [{
+            id: `${issue.code}-${issue.subjectId ?? ''}-${issue.message}`,
+            severity: issue.severity,
+            message: issue.message,
+            selection: selectionForSubject(project, issue.subjectId),
+          }]
+        : [],
+    );
+    return buildChecks(project, geometry);
+  }, [project, validation]);
+  const visibleChecks = checks.filter(issue => checkFilter === 'all' || issue.step === checkFilter);
 
   useEffect(() => {
     setSelection({ kind: 'project' });
     setTool({ kind: 'select' });
+    setStep('spaces');
     setView('model');
     setFitToken(token => token + 1);
     setTemplateName(`${project.name} template`);
@@ -252,6 +317,8 @@ export function Studio({
       const run = (project.wallRuns ?? []).find(item => item.id === selection.wallId);
       if (!run || !run.openings.some(item => item.id === selection.id)) setSelection({ kind: 'project' });
     }
+    if (selection.kind === 'duct' && !(project.ducts ?? []).some(run => run.id === selection.id)) setSelection({ kind: 'project' });
+    if (selection.kind === 'load' && !(project.loads ?? []).some(item => item.id === selection.id)) setSelection({ kind: 'project' });
   }, [project, selection]);
 
   useEffect(() => {
@@ -293,6 +360,12 @@ export function Studio({
       } else if (current.selection.kind === 'wallOpening') {
         current.onChange(removeWallRunOpening(project, current.selection.wallId, current.selection.id));
         current.setSelection({ kind: 'wallRun', id: current.selection.wallId });
+      } else if (current.selection.kind === 'duct') {
+        current.onChange(removeDuct(project, current.selection.id));
+        current.setSelection({ kind: 'project' });
+      } else if (current.selection.kind === 'load') {
+        current.onChange(removeLoad(project, current.selection.id));
+        current.setSelection({ kind: 'project' });
       }
     };
     window.addEventListener('keydown', onKey);
@@ -376,6 +449,12 @@ export function Studio({
     if (next.kind === 'wallOpening') {
       return [{ id: 'delete', label: 'Delete', danger: true, run: () => { edit(removeWallRunOpening(project, next.wallId, next.id)); setSelection({ kind: 'wallRun', id: next.wallId }); } }];
     }
+    if (next.kind === 'duct') {
+      return [{ id: 'delete', label: 'Delete', danger: true, run: () => { edit(removeDuct(project, next.id)); setSelection({ kind: 'project' }); } }];
+    }
+    if (next.kind === 'load') {
+      return [{ id: 'delete', label: 'Delete', danger: true, run: () => { edit(removeLoad(project, next.id)); setSelection({ kind: 'project' }); } }];
+    }
     if (next.kind === 'system') {
       return [
         { id: 'rename', label: 'Rename', run: () => renameSelection(next) },
@@ -388,7 +467,7 @@ export function Studio({
     if (selection.kind === 'surface' && selection.face !== 'walls') return;
     const items = menuItems(selection);
     if (items.length === 0) return;
-    setSelection(selection);
+    select(selection);
     setMenu({ x, y, items });
   };
   const addSystemOfKind = (kind: (typeof SYSTEM_KINDS)[number]['id']) => {
@@ -405,40 +484,166 @@ export function Studio({
       items: SYSTEM_KINDS.map(kind => ({ id: kind.id, label: kind.label, run: () => addSystemOfKind(kind.id) })),
     });
   };
+  const armDuct = (catalogId: string, preset?: { systemId: string; service: DuctService }) => {
+    const product = getDuctProduct(catalogId) ?? DUCT_CATALOG[0];
+    const systems = systemsForProduct(product, project.systems);
+    const currentId = preset?.systemId ?? (tool.kind === 'duct' ? tool.systemId : selection.kind === 'system' ? selection.id : '');
+    const system = systems.find(item => item.id === currentId) ?? systems[0];
+    const services = system ? servicesFor(product, system.kind) : [];
+    const keep = tool.kind === 'duct' && tool.catalogId === product.id;
+    const service = preset && services.includes(preset.service) ? preset.service : keep && services.includes(tool.service) ? tool.service : services[0] ?? 'supply';
+    const listed = product.sizes?.find(size => keep && Math.abs(size.widthM - tool.widthM) < 0.002) ?? product.sizes?.[0];
+    const widthM = listed?.widthM ?? (keep ? tool.widthM : product.defaultWidthIn * 0.0254);
+    const heightM = product.shape === 'rect' ? (keep && tool.heightM ? tool.heightM : (product.defaultHeightIn ?? 12) * 0.0254) : null;
+    setTool({ kind: 'duct', catalogId: product.id, systemId: system?.id ?? '', service, shape: product.shape, widthM, heightM });
+    setView('model');
+    if (step !== 'check') setStep('ducts');
+  };
+  const armLoad = (id: string) => {
+    setLoadId(id);
+    setTool({ kind: 'load', loadId: id });
+    setStep('loads');
+    setView('model');
+  };
+  const armProduct = (catalogId: string) => {
+    setLastProductId(catalogId);
+    setTool({ kind: 'place', catalogId });
+    setStep('equipment');
+    setView('model');
+  };
+  const pickTool = (kind: ToolKind) => {
+    if (kind === 'duct') {
+      armDuct(tool.kind === 'duct' ? tool.catalogId : DUCT_CATALOG[0].id);
+      return;
+    }
+    if (kind === 'load') {
+      armLoad(loadId);
+      return;
+    }
+    if (kind === 'place') {
+      if (lastProductId) armProduct(lastProductId);
+      return;
+    }
+    setWallTypeId(null);
+    setTool({ kind });
+  };
+  const runFix = (issue: CheckIssue) => {
+    if (issue.selection) setSelection(issue.selection);
+    if (issue.fix.kind === 'duct') {
+      armDuct(issue.fix.catalogId, { systemId: issue.fix.systemId, service: issue.fix.service });
+      setStep('ducts');
+    }
+  };
+  const placeEquipment = (point: { xM: number; yM: number }, catalogId: string) => {
+    const product = getProduct(catalogId);
+    if (!product) return;
+    const placed = constrainEquipmentPosition(project.rooms, { catalogId: product.id, yawDeg: 0, roomId: null }, point.xM, point.yM);
+    const built = buildPlacement(product, placed.room, { xM: placed.xM, yM: placed.yM });
+    const item = targetSystemId && project.systems.some(system => system.id === targetSystemId) ? { ...built, systemId: targetSystemId } : built;
+    edit({ ...project, equipment: [...project.equipment, item] });
+    setLastProductId(product.id);
+    select({ kind: 'equipment', id: item.id });
+  };
+  const placeLoad = (point: { xM: number; yM: number }, id: string) => {
+    const next = addLoad(project, id, point);
+    if (next === project) return;
+    const created = (next.loads ?? [])[(next.loads ?? []).length - 1];
+    edit(next);
+    if (created) select({ kind: 'load', id: created.id });
+  };
+  const stepCount = (id: BuildStep): string => {
+    if (id === 'spaces') return `${project.rooms.length}`;
+    if (id === 'loads') return `${(project.loads ?? []).length}`;
+    if (id === 'equipment') return `${project.equipment.length}`;
+    if (id === 'ducts') return `${(project.ducts ?? []).length}`;
+    return checks.length === 0 ? 'OK' : `${checks.length}`;
+  };
+  const toolHint = (): string => {
+    if (wallTypeId) return `Click walls to apply ${WALL_TYPES.find(item => item.id === wallTypeId)?.label ?? 'the wall type'}. Esc to stop.`;
+    if (tool.kind === 'wall') return 'Click to add wall points. Click the first point to close a space. Esc to finish.';
+    if (tool.kind === 'draw') return 'Drag to draw a rectangular space.';
+    if (tool.kind === 'door' || tool.kind === 'window') return `Click a wall to place a ${tool.kind}.`;
+    if (tool.kind === 'load') return 'Click inside a space to add. Esc to stop.';
+    if (tool.kind === 'place') return 'Click inside a space to place, or drag from the catalog. Esc to stop.';
+    if (tool.kind === 'duct') return 'Start at a port or anywhere. Click to bend. Click a matching port, or press Esc, to finish.';
+    if (step === 'spaces') return 'Select a space, wall, or opening to edit. Drag walls to resize.';
+    if (step === 'loads') return 'Pick a load on the left, then click inside a space.';
+    if (step === 'equipment') return 'Pick equipment on the left. Drag the rotate handle on a selected unit.';
+    if (step === 'ducts') return 'Pick a duct product or an open port on the left.';
+    return checks.length === 0 ? 'No issues found.' : 'Select an issue on the left to see it on the plan.';
+  };
+
+  const loadTotals = sumLoads(project, project.loads ?? []);
+  const loadProduct = getLoadProduct(loadId);
+  const lastProduct = lastProductId ? getProduct(lastProductId) : undefined;
+  const wallType = wallTypeId ? WALL_TYPES.find(item => item.id === wallTypeId) : undefined;
+  const stepLabel = STEPS.find(item => item.id === step)?.label ?? '';
+  const activeTool = (kind: ToolKind) => tool.kind === kind && !wallTypeId;
+  const ductPorts = openPorts(project).map(hit => {
+    const item = project.equipment.find(entry => entry.id === hit.equipmentId);
+    const system = item?.systemId ? project.systems.find(entry => entry.id === item.systemId) : undefined;
+    const stream = system ? streamFor(system.kind, hit.service) : null;
+    const product = system && stream ? DUCT_CATALOG.find(entry => ductPairAllowed(entry, system.kind, hit.service)) : undefined;
+    const equipment = item ? getProduct(item.catalogId) : undefined;
+    return {
+      hit,
+      name: equipment?.model ?? 'Equipment',
+      systemId: system?.id ?? '',
+      systemName: system?.name ?? null,
+      color: stream?.color ?? '#9aa6b0',
+      service: stream?.label ?? DUCT_SERVICE_LABEL[hit.service],
+      productId: product?.id ?? null,
+    };
+  });
+  const nextIssue = () => {
+    if (visibleChecks.length === 0) return;
+    const issue = visibleChecks[checkIndex % visibleChecks.length];
+    if (issue.selection) setSelection(issue.selection);
+    setCheckIndex(index => (index + 1) % visibleChecks.length);
+  };
 
   return (
     <div className="studio">
       <header className="topbar">
         <div className="brand">
-          <button type="button" className="btn" onClick={onBack}>
-            Projects
+          <button type="button" className="btn ghost" onClick={onBack}>
+            ‹ Projects
           </button>
           <span className="mark">HP</span>
-          <input
-            className="name-input"
-            aria-label="Project name"
-            value={project.name}
-            onChange={event => edit({ ...project, name: event.target.value })}
-          />
+          <input className="name-input" aria-label="Project name" value={project.name} onChange={event => edit({ ...project, name: event.target.value })} />
         </div>
-        <div className="view-tabs" role="tablist">
+        <nav className="workspace-tabs" role="tablist" aria-label="Workspace">
           {CENTER_VIEWS.map(item => (
             <button key={item.id} type="button" role="tab" aria-selected={view === item.id} className={view === item.id ? 'active' : ''} onClick={() => setView(item.id)}>
               {item.label}
             </button>
           ))}
-        </div>
+        </nav>
         <div className="top-actions">
+          <button type="button" className="btn ghost" onClick={undo} disabled={!historyTick.undo} title="Undo (Ctrl+Z)">
+            Undo
+          </button>
+          <button type="button" className="btn ghost" onClick={redo} disabled={!historyTick.redo} title="Redo (Ctrl+Shift+Z)">
+            Redo
+          </button>
           <div className="menu">
-            <button type="button" className="btn" onClick={() => setExportOpen(open => !open)}>
-              Export
+            <button
+              type="button"
+              className="btn"
+              aria-expanded={exportOpen}
+              onClick={() => {
+                setExportOpen(open => !open);
+                setMoreOpen(false);
+              }}
+            >
+              Export ▾
             </button>
             {exportOpen && (
               <div className="menu-panel">
-                <button type="button" onClick={exportSchedule}>
+                <button type="button" onClick={() => { exportSchedule(); setExportOpen(false); }}>
                   Schedule CSV
                 </button>
-                <button type="button" onClick={exportSummary}>
+                <button type="button" onClick={() => { exportSummary(); setExportOpen(false); }}>
                   Project summary JSON
                 </button>
                 <button
@@ -454,426 +659,636 @@ export function Studio({
               </div>
             )}
           </div>
-          <button type="button" className="btn" onClick={undo} disabled={!historyTick.undo}>
-            Undo
-          </button>
-          <button type="button" className="btn" onClick={redo} disabled={!historyTick.redo}>
-            Redo
-          </button>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              setTemplateName(`${project.name} template`);
-              setTemplateOpen(true);
-            }}
-          >
-            Save as template
-          </button>
-          {customTemplate && (
-            <button type="button" className="btn" onClick={onUpdateTemplate}>
-              Update template
+          <div className="menu">
+            <button
+              type="button"
+              className="btn ghost icon"
+              aria-label="More"
+              aria-expanded={moreOpen}
+              onClick={() => {
+                setMoreOpen(open => !open);
+                setExportOpen(false);
+              }}
+            >
+              ⋯
             </button>
-          )}
-        </div>
-      </header>
-      <div className="studio-body">
-        <aside className="side">
-          <div className="side-tabs">
-            <button type="button" className={side === 'project' ? 'active' : ''} onClick={() => setSide('project')}>
-              Project
-            </button>
-            <button type="button" className={side === 'catalog' ? 'active' : ''} onClick={() => setSide('catalog')}>
-              Catalog
-            </button>
-          </div>
-          <div className="side-scroll">
-          {side === 'project' ? (
-            <ProjectTree project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} onAddSystem={openSystemMenu} />
-          ) : (
-            <div className="catalog">
-              <div className="catalog-tools catalog-tools-stack">
-                <input placeholder="Search" value={query} onChange={event => setQuery(event.target.value)} aria-label="Search catalog" />
-                <div className="catalog-filters">
-                  <select
-                    aria-label="Catalog family"
-                    value={catalogFamily}
-                    onChange={event => {
-                      const next = event.target.value as EquipmentFamily | 'all';
-                      setCatalogFamily(next);
-                      setCategory('all');
+            {moreOpen && (
+              <div className="menu-panel">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelection({ kind: 'project' });
+                    setView('model');
+                    setMoreOpen(false);
+                  }}
+                >
+                  Project settings
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTemplateName(`${project.name} template`);
+                    setTemplateOpen(true);
+                    setMoreOpen(false);
+                  }}
+                >
+                  Save as template
+                </button>
+                {customTemplate && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onUpdateTemplate();
+                      setMoreOpen(false);
                     }}
                   >
-                    <option value="all">All families</option>
-                    {FAMILY_ORDER.map(item => (
-                      <option key={item} value={item}>
-                        {FAMILY_LABEL[item]}
-                      </option>
-                    ))}
-                  </select>
-                  <select aria-label="Catalog category" value={category} onChange={event => setCategory(event.target.value as EquipmentCategory | 'all')}>
-                    <option value="all">All types</option>
-                    {(catalogFamily === 'all' ? FAMILY_ORDER.flatMap(item => FAMILY_CATEGORIES[item]) : FAMILY_CATEGORIES[catalogFamily]).map(item => (
-                      <option key={item} value={item}>
-                        {CATEGORY_LABEL[item]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                    Update template
+                  </button>
+                )}
               </div>
-              <CatalogTree
-                query={query}
-                family={catalogFamily}
-                category={category}
-                armedId={tool.kind === 'place' ? tool.catalogId : null}
-                onArm={catalogId => {
-                  setTool({ kind: 'place', catalogId });
-                  setView('model');
-                }}
-              />
-            </div>
-          )}
+            )}
           </div>
-        </aside>
+        </div>
+      </header>
+      {view === 'model' && (
+        <nav className="step-bar" role="tablist" aria-label="Build steps">
+          {STEPS.map((item, index) => (
+            <Fragment key={item.id}>
+              {index > 0 && <span className="step-sep" aria-hidden="true" />}
+              <button type="button" role="tab" aria-selected={step === item.id} className={step === item.id ? 'active' : ''} onClick={() => changeStep(item.id)}>
+                <span className="step-n">{index + 1}</span>
+                <span className="step-label">{item.label}</span>
+                <span className={`step-count${item.id === 'check' ? (checks.length > 0 ? ' warn' : ' ok') : ''}`}>{stepCount(item.id)}</span>
+              </button>
+            </Fragment>
+          ))}
+        </nav>
+      )}
+      <div className={`studio-body${view === 'model' ? '' : ' is-wide'}`}>
+        {view === 'model' && (
+          <aside className="side" aria-label={`${stepLabel} panel`}>
+            <div className="side-scroll">
+              {step === 'spaces' && (
+                <>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Spaces</h3>
+                      <div className="panel-actions">
+                        <button type="button" className="panel-btn" onClick={() => pickTool('draw')}>
+                          + Draw
+                        </button>
+                        <button type="button" className={`panel-btn${showDimensions ? ' active' : ''}`} aria-pressed={showDimensions} onClick={() => setShowDimensions(value => !value)}>
+                          + By size
+                        </button>
+                      </div>
+                    </header>
+                    {showDimensions && (
+                      <DimensionForm
+                        units={project.units}
+                        onCreate={(lengthM, widthM, heightM) => {
+                          const originX = project.rooms.reduce((max, room) => Math.max(max, room.xM + room.lengthM), 0);
+                          const room = buildDimensionedRoom(project.rooms.length);
+                          edit({ ...project, rooms: [...project.rooms, { ...room, xM: project.rooms.length ? originX + 0.3 : 0, lengthM, widthM, heightM }] });
+                          setSelection({ kind: 'room', id: room.id });
+                          setShowDimensions(false);
+                          setFitToken(token => token + 1);
+                        }}
+                      />
+                    )}
+                    {project.rooms.length === 0 ? (
+                      <p className="panel-empty">Draw walls or a room on the plan, or add a space by size.</p>
+                    ) : (
+                      <ProjectTree scope="spaces" project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} />
+                    )}
+                  </section>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Wall types</h3>
+                    </header>
+                    <ul className="pick-list">
+                      {WALL_TYPES.map(type => (
+                        <li key={type.id}>
+                          <button
+                            type="button"
+                            className={wallTypeId === type.id ? 'active' : ''}
+                            aria-pressed={wallTypeId === type.id}
+                            onClick={() => {
+                              setTool({ kind: 'select' });
+                              setWallTypeId(current => (current === type.id ? null : type.id));
+                            }}
+                          >
+                            <i className="pick-swatch" style={{ background: wallColor(type.assemblyId) }} />
+                            <span>{type.label}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="panel-note">Pick a type, then click walls on the plan to apply it.</p>
+                  </section>
+                </>
+              )}
+              {step === 'loads' && (
+                <>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Loads by space</h3>
+                    </header>
+                    {project.rooms.length === 0 ? (
+                      <p className="panel-empty">Add spaces first. Each load sits inside a space.</p>
+                    ) : (
+                      <ul className="space-loads">
+                        {project.rooms.map(room => {
+                          const items = roomLoads(project, room.id);
+                          const totals = sumLoads(project, items);
+                          return (
+                            <li key={room.id}>
+                              <button type="button" className={`space-row${selection.kind === 'room' && selection.id === room.id ? ' active' : ''}`} onClick={() => setSelection({ kind: 'room', id: room.id })}>
+                                <span className="space-name">{room.name || 'Space'}</span>
+                                <span className="panel-meta">{items.length ? `${formatPower(totals.sensibleW, project.units)} S · ${formatPower(totals.latentW, project.units)} L` : 'No loads'}</span>
+                              </button>
+                              {items.length > 0 && (
+                                <ul className="load-rows">
+                                  {items.map(item => {
+                                    const product = getLoadProduct(item.loadId);
+                                    return (
+                                      <li key={item.id}>
+                                        <button
+                                          type="button"
+                                          className={selection.kind === 'load' && selection.id === item.id ? 'active' : ''}
+                                          onClick={() => setSelection({ kind: 'load', id: item.id })}
+                                          onContextMenu={event => {
+                                            event.preventDefault();
+                                            openMenu({ kind: 'load', id: item.id }, event.clientX, event.clientY);
+                                          }}
+                                        >
+                                          <i className="load-dot" style={{ background: product ? LOAD_CATEGORY_COLOR[product.category] : '#9aa6b0' }} />
+                                          <span>{loadLabel(item, product)}</span>
+                                          {item.override && <span className="pick-tag">{item.override.source === 'manufacturer' ? 'Mfr' : 'Manual'}</span>}
+                                        </button>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </section>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Load catalog</h3>
+                    </header>
+                    <input className="panel-search" placeholder="Search loads" aria-label="Search loads" value={loadQuery} onChange={event => setLoadQuery(event.target.value)} />
+                    <div className="chip-row" role="group" aria-label="Load category">
+                      {(['all', ...LOAD_CATEGORY_ORDER] as const).map(id => (
+                        <button key={id} type="button" className={loadCategory === id ? 'active' : ''} aria-pressed={loadCategory === id} onClick={() => setLoadCategory(id)}>
+                          {id === 'all' ? 'All' : LOAD_CATEGORY_LABEL[id]}
+                        </button>
+                      ))}
+                    </div>
+                    <LoadCatalogList query={loadQuery} category={loadCategory} armedId={tool.kind === 'load' ? tool.loadId : null} units={project.units} onArm={armLoad} />
+                    <p className="panel-note">Defaults from ASHRAE Handbook—Fundamentals 2025, Ch. 18. Replace them with manufacturer or manual values in the inspector.</p>
+                  </section>
+                </>
+              )}
+              {step === 'equipment' && (
+                <>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Systems</h3>
+                      <button
+                        type="button"
+                        className="panel-btn"
+                        onClick={event => {
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          openSystemMenu(rect.left, rect.bottom + 4);
+                        }}
+                      >
+                        + Add system
+                      </button>
+                    </header>
+                    {project.systems.length === 0 && project.equipment.length === 0 ? (
+                      <p className="panel-empty">Add a system, such as kitchen exhaust or make-up air, then place its equipment.</p>
+                    ) : (
+                      <ProjectTree scope="systems" project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} />
+                    )}
+                  </section>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Equipment catalog</h3>
+                    </header>
+                    <input className="panel-search" placeholder="Search equipment" aria-label="Search equipment" value={query} onChange={event => setQuery(event.target.value)} />
+                    <div className="chip-row" role="group" aria-label="Equipment family">
+                      {(['all', ...FAMILY_ORDER] as const).map(id => (
+                        <button key={id} type="button" className={catalogFamily === id ? 'active' : ''} aria-pressed={catalogFamily === id} onClick={() => setCatalogFamily(id)}>
+                          {id === 'all' ? 'All' : FAMILY_LABEL[id]}
+                        </button>
+                      ))}
+                    </div>
+                    <CatalogTree
+                      query={query}
+                      family={catalogFamily}
+                      category="all"
+                      armedId={tool.kind === 'place' ? tool.catalogId : null}
+                      showDucts={false}
+                      ductsOnly={false}
+                      onArm={armProduct}
+                      onArmDuct={catalogId => armDuct(catalogId)}
+                    />
+                  </section>
+                </>
+              )}
+              {step === 'ducts' && (
+                <>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Open ports</h3>
+                      <span className="panel-meta">{ductPorts.length}</span>
+                    </header>
+                    {ductPorts.length === 0 ? (
+                      <p className="panel-empty">No open ports. Place ducted equipment, or every port already has a duct.</p>
+                    ) : (
+                      <ul className="pick-list">
+                        {ductPorts.map(port => (
+                          <li key={`${port.hit.equipmentId}:${port.hit.portId}`}>
+                            <button
+                              type="button"
+                              title={port.productId ? 'Draw a duct from this port' : 'Assign this equipment to a system first'}
+                              onClick={() => {
+                                if (port.productId) armDuct(port.productId, { systemId: port.systemId, service: port.hit.service });
+                                else setSelection({ kind: 'equipment', id: port.hit.equipmentId });
+                              }}
+                            >
+                              <i className="pick-swatch" style={{ background: port.color }} />
+                              <span>
+                                {port.name} · {port.service}
+                              </span>
+                              <span className="pick-meta">{port.systemName ?? 'No system'}</span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Duct runs</h3>
+                      <span className="panel-meta">{(project.ducts ?? []).length}</span>
+                    </header>
+                    {(project.ducts ?? []).length === 0 ? (
+                      <p className="panel-empty">No ducts yet. Pick an open port or a duct product.</p>
+                    ) : (
+                      <ProjectTree scope="ducts" project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} />
+                    )}
+                  </section>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Duct products</h3>
+                    </header>
+                    <CatalogTree
+                      query=""
+                      family="all"
+                      category="all"
+                      armedId={tool.kind === 'duct' ? tool.catalogId : null}
+                      showDucts
+                      ductsOnly
+                      onArm={armProduct}
+                      onArmDuct={catalogId => armDuct(catalogId)}
+                    />
+                  </section>
+                </>
+              )}
+              {step === 'check' && (
+                <>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Issues</h3>
+                      <span className="panel-meta">{checks.length}</span>
+                    </header>
+                    <div className="chip-row" role="group" aria-label="Issue group">
+                      {(['all', 'spaces', 'loads', 'equipment', 'ducts'] as const).map(id => {
+                        const count = id === 'all' ? checks.length : checks.filter(issue => issue.step === id).length;
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            className={checkFilter === id ? 'active' : ''}
+                            aria-pressed={checkFilter === id}
+                            onClick={() => {
+                              setCheckFilter(id);
+                              setCheckIndex(0);
+                            }}
+                          >
+                            {id === 'all' ? 'All' : STEPS.find(item => item.id === id)?.label} {count}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {visibleChecks.length === 0 ? (
+                      <p className="panel-empty">{checks.length === 0 ? 'No issues found.' : 'No issues in this group.'}</p>
+                    ) : (
+                      <ul className="check-list">
+                        {visibleChecks.map(issue => (
+                          <li key={issue.id} className={`check-row ${issue.severity}`}>
+                            <button type="button" className="check-msg" disabled={!issue.selection} onClick={() => issue.selection && setSelection(issue.selection)}>
+                              <span className="check-sev">{issue.severity === 'planning' ? 'Planning' : issue.severity === 'error' ? 'Error' : 'Warning'}</span>
+                              <span>{issue.message}</span>
+                            </button>
+                            {issue.fix.kind === 'duct' && (
+                              <button type="button" className="panel-btn" onClick={() => runFix(issue)}>
+                                {issue.fixLabel}
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Internal loads</h3>
+                      <span className="panel-meta">{(project.loads ?? []).length} items</span>
+                    </header>
+                    <dl className="totals">
+                      <div>
+                        <dt>Sensible</dt>
+                        <dd>{formatPower(loadTotals.sensibleW, project.units)}</dd>
+                      </div>
+                      <div>
+                        <dt>Latent</dt>
+                        <dd>{formatPower(loadTotals.latentW, project.units)}</dd>
+                      </div>
+                      <div>
+                        <dt>Moisture</dt>
+                        <dd>{formatNumber(loadTotals.moistureGh / 1000, 2)} kg/h</dd>
+                      </div>
+                      <div>
+                        <dt>CO₂</dt>
+                        <dd>{formatNumber(loadTotals.co2Ls, 3)} L/s</dd>
+                      </div>
+                      <div>
+                        <dt>CO</dt>
+                        <dd>{loadTotals.coMgS == null ? 'Not entered' : `${formatNumber(loadTotals.coMgS, 2)} mg/s`}</dd>
+                      </div>
+                    </dl>
+                  </section>
+                </>
+              )}
+            </div>
+          </aside>
+        )}
         <section className="stage">
           {view === 'model' && (
             <>
-              <div className="stage-bar">
-                <button
-                  type="button"
-                  className={scene === 'plan' ? 'active' : ''}
-                  onClick={() => {
-                    if (scene === '3d') setCameraPose('top');
-                  }}
-                >
-                  Plan
-                </button>
-                <button
-                  type="button"
-                  className={scene === '3d' ? 'active' : ''}
-                  onClick={() => {
-                    setCameraPose('orbit');
-                    setScene('3d');
-                  }}
-                >
-                  3D
-                </button>
-                <div className="sheet-switch" role="group" aria-label="What the plan shows">
-                  {(['all', 'spaces', 'systems'] as const).map(id => (
-                    <button
-                      key={id}
-                      type="button"
-                      className={sheet === id ? 'active' : ''}
-                      onClick={() => {
-                        setSheet(id);
-                        if (scene === '3d') setCameraPose('top');
-                      }}
-                    >
-                      {id === 'all' ? 'All' : id === 'spaces' ? 'Spaces' : 'Systems'}
-                    </button>
-                  ))}
-                </div>
-                <button type="button" className={showDimensions ? 'active' : ''} onClick={() => setShowDimensions(value => !value)}>
-                  Enter dimensions
-                </button>
-                {scene === '3d' && (
-                  <button type="button" className={hideRoof ? 'active' : ''} aria-pressed={hideRoof} onClick={() => setHideRoof(value => !value)}>
-                    Hide roof
-                  </button>
-                )}
-                <button type="button" onClick={() => setFitToken(token => token + 1)}>
-                  Fit
-                </button>
-                <label className="paint-wall">
-                  <span>Paint wall</span>
-                  <select
-                    aria-label="Paint wall"
-                    value={wallTypeId ?? ''}
-                    onChange={event => {
-                      setTool({ kind: 'select' });
-                      setWallTypeId(event.target.value || null);
-                    }}
-                  >
-                    <option value="">Off</option>
-                    {WALL_TYPES.map(type => (
-                      <option key={type.id} value={type.id}>
-                        {type.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className={`diag-toggle${diagnosticsOpen ? ' active' : ''}`}
-                  aria-expanded={diagnosticsOpen}
-                  aria-label="Diagnostics"
-                  title="Diagnostics"
-                  onClick={() => setDiagnosticsOpen(open => !open)}
-                >
-                  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-                    <circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" strokeWidth="1.5" />
-                    <path d="M8 4.5 V9" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                    <circle cx="8" cy="11.25" r="0.8" fill="currentColor" />
-                  </svg>
-                  {issueCount > 0 && <span className="diag-badge">{issueCount > 99 ? '99+' : issueCount}</span>}
-                </button>
-              </div>
-              <div className="draw-bar" role="toolbar" aria-label="Drawing tools">
-                {DRAW_TOOLS.map(item => (
-                  <button
-                    key={item.kind}
-                    type="button"
-                    className={tool.kind === item.kind ? 'active' : ''}
-                    aria-pressed={tool.kind === item.kind}
-                    title={item.label}
-                    onClick={() => setTool({ kind: item.kind })}
-                  >
-                    <DrawIcon kind={item.kind} />
-                    <span>{item.label}</span>
-                  </button>
-                ))}
-              </div>
-              {showDimensions && (
-                <DimensionForm
-                  units={project.units}
-                  onCreate={(lengthM, widthM, heightM) => {
-                    const originX = project.rooms.reduce((max, room) => Math.max(max, room.xM + room.lengthM), 0);
-                    const room = buildDimensionedRoom(project.rooms.length);
-                    edit({
-                      ...project,
-                      rooms: [...project.rooms, { ...room, xM: project.rooms.length ? originX + 0.3 : 0, lengthM, widthM, heightM }],
-                    });
-                    setSelection({ kind: 'room', id: room.id });
-                    setShowDimensions(false);
-                    setFitToken(token => token + 1);
-                  }}
-                />
-              )}
               <div className="stage-canvas">
-              {scene === 'plan' ? (
-                <PlanView
-                  project={project}
-                  selection={selection}
-                  tool={tool}
-                  fitToken={fitToken}
-                  onSelect={chooseView}
-                  onDrawRoom={rect => {
-                    const room = buildDrawnRoom(rect, project.rooms.length);
-                    edit({ ...project, rooms: [...project.rooms, room] });
-                    setSelection({ kind: 'room', id: room.id });
-                  }}
-                  onDrawWalls={lines => {
-                    let next = project;
-                    for (const line of lines) next = addWallRun(next, line);
-                    if (next === project) return;
-                    const created = (next.wallRuns ?? [])[(next.wallRuns ?? []).length - 1];
-                    edit(next);
-                    if (created) setSelection({ kind: 'wallRun', id: created.id });
-                  }}
-                  onCloseSpace={points => {
-                    const room = buildOutlineRoom(points, project.rooms.length);
-                    if (!room) return;
-                    edit({ ...project, rooms: [...project.rooms, room] });
-                    setSelection({ kind: 'room', id: room.id });
-                    setTool({ kind: 'select' });
-                  }}
-                  onPlaceOpening={(spot, kind) => {
-                    if (spot.roomId && spot.face) {
-                      const next = placeOpeningOnRoom(project, spot.roomId, kind, spot.face, spot.offsetM);
-                      if (next === project) return;
-                      const room = next.rooms.find(item => item.id === spot.roomId);
-                      const created = room?.openings[room.openings.length - 1];
-                      edit(next);
-                      if (created) setSelection({ kind: 'opening', roomId: spot.roomId, id: created.id });
-                      return;
-                    }
-                    if (!spot.wallId) return;
-                    const next = addWallRunOpening(project, spot.wallId, kind, spot.offsetM);
-                    if (next === project) return;
-                    const run = (next.wallRuns ?? []).find(item => item.id === spot.wallId);
-                    const created = run?.openings[run.openings.length - 1];
-                    edit(next);
-                    if (created) setSelection({ kind: 'wallOpening', wallId: spot.wallId, id: created.id });
-                  }}
-                  onPlace={(point, catalogId) => {
-                    const product = getProduct(catalogId);
-                    if (!product) return;
-                    const placed = constrainEquipmentPosition(
-                      project.rooms,
-                      { catalogId: product.id, yawDeg: 0, roomId: null },
-                      point.xM,
-                      point.yM
-                    );
-                    const item = buildPlacement(product, placed.room, { xM: placed.xM, yM: placed.yM });
-                    edit({ ...project, equipment: [...project.equipment, item] });
-                    setSelection({ kind: 'equipment', id: item.id });
-                    setTool({ kind: 'select' });
-                  }}
-                  sheet={sheet}
-                  onContextMenu={openMenu}
-                  onRoomsChange={rooms => edit({ ...project, rooms })}
-                  onNorthChange={deg => edit({ ...project, northDeg: deg === 0 ? undefined : deg })}
-                  onMoveSpace={(roomId, dx, dy) => {
-                    edit({
-                      ...project,
-                      rooms: project.rooms.map(room => (room.id === roomId ? translateRoom(room, dx, dy) : room)),
-                      equipment: project.equipment.map(item => (item.roomId === roomId ? { ...item, xM: Number((item.xM + dx).toFixed(3)), yM: Number((item.yM + dy).toFixed(3)) } : item)),
-                    });
-                  }}
-                  onMoveEquipment={(id, xM, yM) => {
-                    const item = project.equipment.find(entry => entry.id === id);
-                    const product = item ? getProduct(item.catalogId) : undefined;
-                    if (!item || !product) return;
-                    const placed = constrainEquipmentPosition(project.rooms, item, xM, yM);
-                    if (Math.abs(placed.xM - item.xM) < 1e-6 && Math.abs(placed.yM - item.yM) < 1e-6 && (placed.room?.id ?? null) === item.roomId) return;
-                    edit(updateEquipment(project, id, { xM: placed.xM, yM: placed.yM, roomId: placed.room?.id ?? null, zM: placementZ(placed.room, product) }));
-                    setSelection({ kind: 'equipment', id });
-                  }}
-                  onRotateEquipment={(id, yawDeg) => {
-                    const item = project.equipment.find(entry => entry.id === id);
-                    const product = item ? getProduct(item.catalogId) : undefined;
-                    if (!item || !product) return;
-                    const placed = constrainEquipmentPosition(project.rooms, { ...item, yawDeg }, item.xM, item.yM);
-                    edit(
-                      updateEquipment(project, id, {
-                        yawDeg,
-                        xM: placed.xM,
-                        yM: placed.yM,
-                        roomId: placed.room?.id ?? null,
-                        zM: placementZ(placed.room, product),
-                      })
-                    );
-                    setSelection({ kind: 'equipment', id });
-                  }}
-                />
-              ) : (
-                <div className="viewport">
-                  <Viewport
-                    rooms={project.rooms}
-                    equipment={project.equipment}
-                    wallRuns={project.wallRuns ?? NO_WALL_RUNS}
-                    interfaceWalls={project.interfaceWalls}
+                {scene === 'plan' ? (
+                  <PlanView
+                    project={project}
                     selection={selection}
                     tool={tool}
                     fitToken={fitToken}
-                    hideRoof={hideRoof}
-                    cameraPose={cameraPose}
-                    onCameraSettled={pose => {
-                      if (pose === 'top') setScene('plan');
-                    }}
+                    step={step}
+                    layers={layers}
                     onSelect={chooseView}
                     onDrawRoom={rect => {
                       const room = buildDrawnRoom(rect, project.rooms.length);
                       edit({ ...project, rooms: [...project.rooms, room] });
-                      setSelection({ kind: 'room', id: room.id });
+                      select({ kind: 'room', id: room.id });
                     }}
-                    onPlace={(point, catalogId) => {
-                      const product = getProduct(catalogId);
-                      if (!product) return;
-                      const placed = constrainEquipmentPosition(
-                        project.rooms,
-                        { catalogId: product.id, yawDeg: 0, roomId: null },
-                        point.xM,
-                        point.yM
-                      );
-                      const item = buildPlacement(product, placed.room, { xM: placed.xM, yM: placed.yM });
-                      edit({ ...project, equipment: [...project.equipment, item] });
-                      setSelection({ kind: 'equipment', id: item.id });
+                    onDrawWalls={lines => {
+                      let next = project;
+                      for (const line of lines) next = addWallRun(next, line);
+                      if (next === project) return;
+                      const created = (next.wallRuns ?? [])[(next.wallRuns ?? []).length - 1];
+                      edit(next);
+                      if (created) select({ kind: 'wallRun', id: created.id });
+                    }}
+                    onDrawDuct={draft => {
+                      const next = addDuct(project, draft);
+                      if (next === project) return;
+                      const created = (next.ducts ?? [])[(next.ducts ?? []).length - 1];
+                      edit(next);
+                      if (created) select({ kind: 'duct', id: created.id });
+                    }}
+                    onCloseSpace={points => {
+                      const room = buildOutlineRoom(points, project.rooms.length);
+                      if (!room) return;
+                      edit({ ...project, rooms: [...project.rooms, room] });
+                      select({ kind: 'room', id: room.id });
                       setTool({ kind: 'select' });
                     }}
-                  onContextMenu={openMenu}
-                />
-                </div>
-              )}
-              {diagnosticsOpen && (
-                <section className="diagnostics" style={{ height: diagnosticsHeight }} aria-label="Diagnostics">
-                  <div
-                    className="diagnostics-resize"
-                    onMouseDown={event => {
-                      event.preventDefault();
-                      const startY = event.clientY;
-                      const startHeight = diagnosticsHeight;
-                      let height = startHeight;
-                      const onMove = (ev: MouseEvent) => {
-                        height = Math.max(120, Math.min(600, startHeight + (startY - ev.clientY)));
-                        setDiagnosticsHeight(height);
-                      };
-                      const onUp = () => {
-                        document.removeEventListener('mousemove', onMove);
-                        document.removeEventListener('mouseup', onUp);
-                        document.body.style.cursor = '';
-                        document.body.style.userSelect = '';
-                        window.localStorage.setItem('hvac-diagnostics-height', String(height));
-                      };
-                      document.addEventListener('mousemove', onMove);
-                      document.addEventListener('mouseup', onUp);
-                      document.body.style.cursor = 'ns-resize';
-                      document.body.style.userSelect = 'none';
+                    onPlaceOpening={(spot, kind) => {
+                      if (spot.roomId && spot.face) {
+                        const next = placeOpeningOnRoom(project, spot.roomId, kind, spot.face, spot.offsetM);
+                        if (next === project) return;
+                        const room = next.rooms.find(item => item.id === spot.roomId);
+                        const created = room?.openings[room.openings.length - 1];
+                        edit(next);
+                        if (created) select({ kind: 'opening', roomId: spot.roomId, id: created.id });
+                        return;
+                      }
+                      if (!spot.wallId) return;
+                      const next = addWallRunOpening(project, spot.wallId, kind, spot.offsetM);
+                      if (next === project) return;
+                      const run = (next.wallRuns ?? []).find(item => item.id === spot.wallId);
+                      const created = run?.openings[run.openings.length - 1];
+                      edit(next);
+                      if (created) select({ kind: 'wallOpening', wallId: spot.wallId, id: created.id });
+                    }}
+                    onPlace={placeEquipment}
+                    onPlaceLoad={placeLoad}
+                    onMoveLoad={(id, xM, yM) => edit(updateLoad(project, id, { xM, yM }))}
+                    onContextMenu={openMenu}
+                    onRoomsChange={rooms => edit({ ...project, rooms })}
+                    onNorthChange={deg => edit({ ...project, northDeg: deg === 0 ? undefined : deg })}
+                    onMoveSpace={(roomId, dx, dy) => {
+                      const shift = <T extends { xM: number; yM: number }>(item: T): T => ({ ...item, xM: Number((item.xM + dx).toFixed(3)), yM: Number((item.yM + dy).toFixed(3)) });
+                      edit(
+                        syncDuctPorts({
+                          ...project,
+                          rooms: project.rooms.map(room => (room.id === roomId ? translateRoom(room, dx, dy) : room)),
+                          equipment: project.equipment.map(item => (item.roomId === roomId ? shift(item) : item)),
+                          loads: (project.loads ?? []).map(item => (item.roomId === roomId ? shift(item) : item)),
+                        })
+                      );
+                    }}
+                    onMoveEquipment={(id, xM, yM) => {
+                      const item = project.equipment.find(entry => entry.id === id);
+                      const product = item ? getProduct(item.catalogId) : undefined;
+                      if (!item || !product) return;
+                      const placed = constrainEquipmentPosition(project.rooms, item, xM, yM);
+                      if (Math.abs(placed.xM - item.xM) < 1e-6 && Math.abs(placed.yM - item.yM) < 1e-6 && (placed.room?.id ?? null) === item.roomId) return;
+                      edit(syncDuctPorts(updateEquipment(project, id, { xM: placed.xM, yM: placed.yM, roomId: placed.room?.id ?? null, zM: placementZ(placed.room, product) })));
+                      select({ kind: 'equipment', id });
+                    }}
+                    onRotateEquipment={(id, yawDeg) => {
+                      const item = project.equipment.find(entry => entry.id === id);
+                      const product = item ? getProduct(item.catalogId) : undefined;
+                      if (!item || !product) return;
+                      const placed = constrainEquipmentPosition(project.rooms, { ...item, yawDeg }, item.xM, item.yM);
+                      edit(
+                        syncDuctPorts(
+                          updateEquipment(project, id, {
+                            yawDeg,
+                            xM: placed.xM,
+                            yM: placed.yM,
+                            roomId: placed.room?.id ?? null,
+                            zM: placementZ(placed.room, product),
+                          })
+                        )
+                      );
+                      select({ kind: 'equipment', id });
                     }}
                   />
-                  <header className="diagnostics-head">
-                    <strong>Diagnostics</strong>
-                    {issueCount > 0 && <span className="diag-count">{issueCount}</span>}
-                    <div className="diagnostics-filters">
-                      {([
-                        ['all', 'All', issueCount],
-                        ['errors', 'Errors', errors],
-                        ['warnings', 'Warnings', warnings],
-                        ['planning', 'Planning', planning.length],
-                      ] as const).map(([id, label, count]) => (
-                        <button key={id} type="button" className={diagnosticsFilter === id ? 'active' : ''} onClick={() => setDiagnosticsFilter(id)}>
-                          {label} {count}
-                        </button>
-                      ))}
-                    </div>
-                    <button type="button" className="diagnostics-close" aria-label="Close diagnostics" onClick={() => setDiagnosticsOpen(false)}>
+                ) : (
+                  <div className="viewport">
+                    <Viewport
+                      rooms={project.rooms}
+                      equipment={project.equipment}
+                      wallRuns={project.wallRuns ?? NO_WALL_RUNS}
+                      interfaceWalls={project.interfaceWalls}
+                      selection={selection}
+                      tool={tool}
+                      fitToken={fitToken}
+                      hideRoof={hideRoof}
+                      cameraPose={cameraPose}
+                      onCameraSettled={pose => {
+                        if (pose === 'top') setScene('plan');
+                      }}
+                      onSelect={chooseView}
+                      onDrawRoom={rect => {
+                        const room = buildDrawnRoom(rect, project.rooms.length);
+                        edit({ ...project, rooms: [...project.rooms, room] });
+                        select({ kind: 'room', id: room.id });
+                      }}
+                      onPlace={placeEquipment}
+                      onContextMenu={openMenu}
+                    />
+                  </div>
+                )}
+                <div className="canvas-float canvas-tools" role="toolbar" aria-label={`${stepLabel} tools`}>
+                  {STEP_TOOLS[step].map(kind => (
+                    <button
+                      key={kind}
+                      type="button"
+                      className={activeTool(kind) ? 'active' : ''}
+                      aria-pressed={activeTool(kind)}
+                      disabled={kind === 'place' && !lastProductId}
+                      title={kind === 'place' && !lastProductId ? 'Pick equipment in the catalog first' : TOOL_LABEL[kind]}
+                      onClick={() => pickTool(kind)}
+                    >
+                      <DrawIcon kind={kind} />
+                      <span>{TOOL_LABEL[kind]}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="canvas-float canvas-view">
+                  <div className="seg" role="group" aria-label="View">
+                    <button
+                      type="button"
+                      className={scene === 'plan' ? 'active' : ''}
+                      onClick={() => {
+                        if (scene === '3d') setCameraPose('top');
+                      }}
+                    >
+                      Plan
+                    </button>
+                    <button
+                      type="button"
+                      className={scene === '3d' ? 'active' : ''}
+                      onClick={() => {
+                        setCameraPose('orbit');
+                        setScene('3d');
+                      }}
+                    >
+                      3D
+                    </button>
+                  </div>
+                  <button type="button" data-layers-toggle className={layersOpen ? 'active' : ''} aria-expanded={layersOpen} onClick={() => setLayersOpen(open => !open)}>
+                    Layers ▾
+                  </button>
+                  <button type="button" onClick={() => setFitToken(token => token + 1)}>
+                    Fit
+                  </button>
+                </div>
+                {layersOpen && <LayersMenu layers={layers} scene={scene} hideRoof={hideRoof} onChange={setLayers} onHideRoof={setHideRoof} onClose={() => setLayersOpen(false)} />}
+              </div>
+              <div className="options-strip" aria-label={`${stepLabel} options`}>
+                {step === 'spaces' && wallType && (
+                  <span className="opt-chip">
+                    <i className="pick-swatch" style={{ background: wallColor(wallType.assemblyId) }} />
+                    Painting {wallType.label}
+                    <button type="button" aria-label="Stop painting walls" onClick={() => setWallTypeId(null)}>
                       ×
                     </button>
-                  </header>
-                  <div className="diagnostics-list">
-                    {visibleDiagnostics.length === 0 ? (
-                      <p className="muted">No issues found</p>
-                    ) : (
-                      visibleDiagnostics.map(row => (
-                        <button
-                          key={row.id}
-                          type="button"
-                          className={`diagnostics-row ${row.severity}`}
-                          disabled={!row.selection}
-                          onClick={() => row.selection && setSelection(row.selection)}
-                        >
-                          <span>{row.message}</span>
-                          <span className="diagnostics-source">{row.severity === 'planning' ? 'Planning' : 'Geometry'}</span>
-                        </button>
-                      ))
+                  </span>
+                )}
+                {step === 'loads' && (
+                  <>
+                    <label className="opt">
+                      <span>Load</span>
+                      <select value={loadId} onChange={event => armLoad(event.target.value)}>
+                        {LOAD_CATEGORY_ORDER.map(category => (
+                          <optgroup key={category} label={LOAD_CATEGORY_LABEL[category]}>
+                            {LOAD_CATALOG.filter(item => item.category === category).map(item => (
+                              <option key={item.id} value={item.id}>
+                                {item.group} · {item.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </label>
+                    {loadProduct && <span className="opt-spec">{loadSpec(loadProduct, project.units)}</span>}
+                  </>
+                )}
+                {step === 'equipment' && (
+                  <>
+                    <label className="opt">
+                      <span>Place into</span>
+                      <select value={targetSystemId} onChange={event => setTargetSystemId(event.target.value)}>
+                        <option value="">No system</option>
+                        {project.systems.map(system => (
+                          <option key={system.id} value={system.id}>
+                            {system.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {lastProduct && (
+                      <span className="opt-spec">
+                        {lastProduct.manufacturer} {lastProduct.model}
+                      </span>
                     )}
-                  </div>
-                </section>
-              )}
+                  </>
+                )}
+                {step === 'ducts' &&
+                  (tool.kind === 'duct' ? (
+                    <DuctBar project={project} tool={tool} showSize={layers.ductWidth} onShowSize={show => setLayers(current => ({ ...current, ductWidth: show }))} onChange={setTool} />
+                  ) : (
+                    <DuctLegend />
+                  ))}
+                {step === 'check' && (
+                  <>
+                    <button type="button" className="btn" onClick={nextIssue} disabled={visibleChecks.length === 0}>
+                      Next issue
+                    </button>
+                    <DuctLegend />
+                  </>
+                )}
+                <span className="opt-hint">{toolHint()}</span>
               </div>
             </>
           )}
           {view === 'schedule' && <SchedulePanel project={project} assemblies={assemblies} materials={materials} />}
-          {view === 'library' && (
-            <LibraryPanel
-              added={addedMaterials}
-              onChange={onLibraryChange}
-              addedAssemblies={addedAssemblies}
-              onAssembliesChange={onAssembliesChange}
-            />
-          )}
+          {view === 'library' && <LibraryPanel added={addedMaterials} onChange={onLibraryChange} addedAssemblies={addedAssemblies} onAssembliesChange={onAssembliesChange} />}
           {view === 'boundary' && <BoundaryPanel project={project} />}
         </section>
-        <Inspector
-          project={project}
-          selection={selection}
-          materials={materials}
-          assemblies={assemblies}
-          onChange={edit}
-          onSelect={setSelection}
-          onDeleteProject={onDeleteProject}
-          nameFocus={nameFocus}
-        />
+        {view === 'model' && (
+          <Inspector project={project} selection={selection} materials={materials} assemblies={assemblies} onChange={edit} onSelect={select} onDeleteProject={onDeleteProject} nameFocus={nameFocus} />
+        )}
       </div>
       <footer className="statusbar">
         <span>{project.buildingType}{project.subtype ? ` · ${project.subtype}` : ''}</span>
@@ -1014,13 +1429,19 @@ function CatalogTree({
   family,
   category,
   armedId,
+  showDucts,
+  ductsOnly,
   onArm,
+  onArmDuct,
 }: {
   query: string;
-  family: EquipmentFamily | 'all';
+  family: EquipmentFamily | 'ducts' | 'all';
   category: EquipmentCategory | 'all';
   armedId: string | null;
+  showDucts: boolean;
+  ductsOnly: boolean;
   onArm: (catalogId: string) => void;
+  onArmDuct: (catalogId: string) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => readExpanded(TREE_CATALOG_KEY));
   const closed = (key: string) => !expanded.has(key);
@@ -1033,9 +1454,31 @@ function CatalogTree({
       return next;
     });
   const needle = query.trim().toLowerCase();
-  const families = FAMILY_ORDER.filter(item => family === 'all' || item === family);
+  const families = ductsOnly ? [] : FAMILY_ORDER.filter(item => family === 'all' || item === family);
+  const ductNeedle = query.trim().toLowerCase();
+  const ductProducts = DUCT_CATALOG.filter(product => `${product.name} ${product.manufacturer} ${product.model} ${product.supplier} ${product.group}`.toLowerCase().includes(ductNeedle));
   return (
     <ul className="tn-tree">
+      {showDucts && (
+        <TreeNode
+          collapsed={closed('ducts')}
+          toggleLabel="Ducts"
+          onToggle={() => toggle('ducts')}
+          onSelect={() => toggle('ducts')}
+          content={<><span className="tree-label">Ducts</span><span className="tree-meta">{ductProducts.length}</span></>}
+        >
+          {ductProducts.length === 0 && <li className="tree-empty">No ducts match.</li>}
+          {ductProducts.map(product => (
+            <TreeNode
+              key={product.id}
+              active={armedId === product.id}
+              title={product.model}
+              onSelect={() => onArmDuct(product.id)}
+              content={<><span className="tree-label">{product.name}</span><span className="tree-meta">{product.manufacturer}</span></>}
+            />
+          ))}
+        </TreeNode>
+      )}
       {families.map(familyId => {
         const groups = FAMILY_CATEGORIES[familyId]
           .filter(item => category === 'all' || item === category)
@@ -1115,13 +1558,13 @@ function ProjectTree({
   selection,
   onSelect,
   onContextMenu,
-  onAddSystem,
+  scope,
 }: {
   project: Project;
   selection: Selection;
   onSelect: (selection: Selection) => void;
   onContextMenu: (selection: Selection, x: number, y: number) => void;
-  onAddSystem: (x: number, y: number) => void;
+  scope: 'spaces' | 'systems' | 'ducts';
 }) {
   const storageKey = `hvac-tree-project:${project.id}`;
   const [expanded, setExpanded] = useState<Set<string>>(() => readExpanded(storageKey));
@@ -1175,13 +1618,20 @@ function ProjectTree({
         });
       }
       if (selection.kind === 'system') open(`system:${selection.id}`);
+      if (selection.kind === 'duct') {
+        const run = (project.ducts ?? []).find(item => item.id === selection.id);
+        if (run) {
+          open('systems');
+          open(`system:${run.systemId}`);
+        }
+      }
       if (selection.kind === 'equipment') {
         const item = project.equipment.find(entry => entry.id === selection.id);
         if (item?.systemId) {
           open('systems');
           open(`system:${item.systemId}`);
         } else if (item?.roomId) {
-          open('spaces');
+          open('unassigned');
           open(`room:${item.roomId}`);
         } else {
           open('unassigned');
@@ -1191,7 +1641,7 @@ function ProjectTree({
       writeExpanded(storageKey, next);
       return next;
     });
-  }, [selection, project.rooms, project.equipment, storageKey]);
+  }, [selection, project.rooms, project.equipment, project.ducts, storageKey]);
   const selected = (kind: Selection['kind'], id?: string) => selection.kind === kind && ('id' in selection ? selection.id === id : true);
   const unit = lengthUnit(project.units);
   const targets = interfaceTargets(project.rooms);
@@ -1202,26 +1652,8 @@ function ProjectTree({
         const startOf = (target: (typeof targets)[number]) => target.sides.find(side => side.roomId === roomId && side.anchor === anchor)?.startM ?? 0;
         return startOf(a) - startOf(b);
       });
-  const unassigned = project.equipment.filter(item => !item.systemId && !item.roomId);
-  return (
-    <ul className="tn-tree">
-      <TreeNode
-        active={selected('project')}
-        collapsed={closed('project')}
-        toggleLabel={project.name || 'Project'}
-        onToggle={() => toggle('project')}
-        onSelect={() => onSelect({ kind: 'project' })}
-        onMenu={event => onContextMenu({ kind: 'project' }, event.clientX, event.clientY)}
-        content={<><strong>{project.name || 'Untitled project'}</strong>{project.location ? <span className="tree-meta">{project.location}</span> : null}</>}
-      >
-      <TreeNode
-        collapsed={closed('spaces')}
-        toggleLabel="Spaces"
-        onToggle={() => toggle('spaces')}
-        onSelect={() => toggle('spaces')}
-        content={<><span className="tree-label">Spaces</span><span className="tree-meta">{project.rooms.length}</span></>}
-      >
-      {project.rooms.map(room => {
+  const unassigned = project.equipment.filter(item => !item.systemId);
+  const roomNodes = project.rooms.map(room => {
         const roomKey = `room:${room.id}`;
         const roomClosed = closed(roomKey);
         const hosted = project.equipment.filter(item => item.roomId === room.id && !item.systemId);
@@ -1378,30 +1810,24 @@ function ProjectTree({
                 })}
           </TreeNode>
         );
-      })}
-      </TreeNode>
-      <TreeNode
-        collapsed={closed('systems')}
-        toggleLabel="Systems"
-        onToggle={() => toggle('systems')}
-        onSelect={() => toggle('systems')}
-        onMenu={event => onAddSystem(event.clientX, event.clientY)}
-        content={<><span className="tree-label">Systems</span><span className="tree-meta">{project.systems.length}</span></>}
-      >
-      {project.systems.map(system => {
+      });
+  const systemNodes = project.systems.map(system => {
         const systemKey = `system:${system.id}`;
         const systemClosed = closed(systemKey);
-        const members = project.equipment.filter(item => item.systemId === system.id);
+        const members = scope === 'ducts' ? [] : project.equipment.filter(item => item.systemId === system.id);
+        const ducts = (project.ducts ?? []).filter(run => run.systemId === system.id);
+        if (scope === 'ducts' && ducts.length === 0) return null;
+        const childCount = members.length + ducts.length;
         return (
           <TreeNode
             key={system.id}
             active={selected('system', system.id)}
-            collapsed={members.length > 0 ? systemClosed : undefined}
-            toggleLabel={members.length > 0 ? `${systemClosed ? 'Expand' : 'Collapse'} ${system.name}` : undefined}
-            onToggle={members.length > 0 ? () => toggle(systemKey) : undefined}
+            collapsed={childCount > 0 ? systemClosed : undefined}
+            toggleLabel={childCount > 0 ? `${systemClosed ? 'Expand' : 'Collapse'} ${system.name}` : undefined}
+            onToggle={childCount > 0 ? () => toggle(systemKey) : undefined}
             onSelect={() => onSelect({ kind: 'system', id: system.id })}
             onMenu={event => onContextMenu({ kind: 'system', id: system.id }, event.clientX, event.clientY)}
-            content={<><strong><span>{system.name}</span></strong>{members.length > 0 && <span className="tree-meta">{members.length}</span>}</>}
+            content={<><strong><span>{system.name}</span></strong>{childCount > 0 && <span className="tree-meta">{childCount}</span>}</>}
           >
             {members.map(item => {
               const product = getProduct(item.catalogId);
@@ -1409,17 +1835,30 @@ function ProjectTree({
                 <TreeNode key={item.id} active={selected('equipment', item.id)} onSelect={() => onSelect({ kind: 'equipment', id: item.id })} onMenu={event => onContextMenu({ kind: 'equipment', id: item.id }, event.clientX, event.clientY)} content={<>{product ? <EquipmentIcon name={equipmentIconFor(product)} /> : null}<span className="tree-label">{product ? product.model : item.catalogId}</span>{item.quantity > 1 && <span className="tree-meta">× {item.quantity}</span>}</>} />
               );
             })}
+            {ducts.map(run => (
+              <TreeNode
+                key={run.id}
+                active={selected('duct', run.id)}
+                onSelect={() => onSelect({ kind: 'duct', id: run.id })}
+                onMenu={event => onContextMenu({ kind: 'duct', id: run.id }, event.clientX, event.clientY)}
+                content={<><span className="tree-label">{DUCT_SERVICES.find(item => item.id === run.service)?.label ?? 'Duct'}</span><span className="tree-meta">{ductSizeLabel(run, project.units)}</span></>}
+              />
+            ))}
           </TreeNode>
         );
-      })}
-      </TreeNode>
+      });
+  if (scope === 'spaces') return <ul className="tn-tree">{roomNodes}</ul>;
+  if (scope === 'ducts') return <ul className="tn-tree">{systemNodes}</ul>;
+  return (
+    <ul className="tn-tree">
+      {systemNodes}
       {unassigned.length > 0 && (
         <TreeNode
           collapsed={closed('unassigned')}
-          toggleLabel="Unassigned"
+          toggleLabel="No system"
           onToggle={() => toggle('unassigned')}
           onSelect={() => toggle('unassigned')}
-          content={<><span className="tree-label">Unassigned</span><span className="tree-meta">{unassigned.length}</span></>}
+          content={<><span className="tree-label">No system</span><span className="tree-meta">{unassigned.length}</span></>}
         >
           {unassigned.map(item => {
             const product = getProduct(item.catalogId);
@@ -1429,7 +1868,6 @@ function ProjectTree({
           })}
         </TreeNode>
       )}
-      </TreeNode>
     </ul>
   );
 }
@@ -1544,19 +1982,291 @@ function ContextMenu({
   );
 }
 
-const DRAW_TOOLS: { kind: 'select' | 'wall' | 'draw' | 'door' | 'window'; label: string }[] = [
-  { kind: 'select', label: 'Select' },
-  { kind: 'wall', label: 'Wall' },
-  { kind: 'draw', label: 'Room' },
-  { kind: 'door', label: 'Door' },
-  { kind: 'window', label: 'Window' },
-];
-
-function DrawIcon({ kind }: { kind: (typeof DRAW_TOOLS)[number]['kind'] }) {
+function DrawIcon({ kind }: { kind: ToolKind }) {
   const props = { width: 22, height: 22, viewBox: '0 0 22 22', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
   if (kind === 'select') return <svg {...props}><path d="M6 3.5 10.2 17.5 12.3 12.3 17.5 10.2Z" /></svg>;
   if (kind === 'wall') return <svg {...props}><path d="M3.5 8h15M3.5 14h15" /></svg>;
   if (kind === 'draw') return <svg {...props}><rect x="4" y="5" width="14" height="12" rx="1" /></svg>;
   if (kind === 'door') return <svg {...props}><path d="M7 18V5h8v13" /><path d="M7 18a8 8 0 0 0 8-8" /></svg>;
+  if (kind === 'duct') return <svg {...props}><path d="M4 15h6l3-8h5" /><circle cx="4" cy="15" r="1.2" /><circle cx="18" cy="7" r="1.2" /></svg>;
+  if (kind === 'load') return <svg {...props}><circle cx="11" cy="11" r="6.5" /><path d="M11 7.5v7M7.5 11h7" /></svg>;
+  if (kind === 'place') return <svg {...props}><rect x="4.5" y="7" width="13" height="9" rx="1" /><path d="M8 7V5h6v2" /></svg>;
   return <svg {...props}><rect x="5" y="4" width="12" height="14" /><path d="M5 11h12M11 4v14" /></svg>;
+}
+
+function DuctLegend({ currentId }: { currentId?: string }) {
+  return (
+    <div className="duct-legend" aria-label="Duct colors">
+      {DUCT_STREAMS.map(item => (
+        <span key={item.id} className={currentId === item.id ? 'is-current' : ''}>
+          <i style={{ background: item.color }} />
+          {item.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function LayersMenu({
+  layers,
+  scene,
+  hideRoof,
+  onChange,
+  onHideRoof,
+  onClose,
+}: {
+  layers: PlanLayers;
+  scene: 'plan' | '3d';
+  hideRoof: boolean;
+  onChange: (layers: PlanLayers) => void;
+  onHideRoof: (hide: boolean) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (ref.current?.contains(target) || target?.closest('[data-layers-toggle]')) return;
+      close.current();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close.current();
+    };
+    window.addEventListener('pointerdown', onPointer, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onPointer, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
+  const row = (key: keyof PlanLayers, label: string) => (
+    <label key={key}>
+      <input type="checkbox" checked={layers[key]} onChange={event => onChange({ ...layers, [key]: event.target.checked })} />
+      {label}
+    </label>
+  );
+  return (
+    <div ref={ref} className="layers-menu" role="dialog" aria-label="Layers">
+      <p className="layers-title">Show on plan</p>
+      {row('spaces', 'Spaces and walls')}
+      {row('loads', 'Loads')}
+      {row('equipment', 'Equipment')}
+      {row('ducts', 'Ducts')}
+      <p className="layers-title">Detail</p>
+      {row('ductWidth', 'Duct widths')}
+      {row('clearances', 'Clearances')}
+      {row('labels', 'Labels')}
+      {scene === '3d' && (
+        <>
+          <p className="layers-title">3D</p>
+          <label>
+            <input type="checkbox" checked={hideRoof} onChange={event => onHideRoof(event.target.checked)} />
+            Hide roof
+          </label>
+        </>
+      )}
+    </div>
+  );
+}
+
+function LoadCatalogList({
+  query,
+  category,
+  armedId,
+  units,
+  onArm,
+}: {
+  query: string;
+  category: LoadCategory | 'all';
+  armedId: string | null;
+  units: Project['units'];
+  onArm: (id: string) => void;
+}) {
+  const needle = query.trim().toLowerCase();
+  const categories = category === 'all' ? LOAD_CATEGORY_ORDER : [category];
+  const sections = categories
+    .map(id => ({
+      id,
+      groups: loadGroups(id)
+        .map(group => ({ ...group, items: group.items.filter(item => !needle || `${item.name} ${item.group}`.toLowerCase().includes(needle)) }))
+        .filter(group => group.items.length > 0),
+    }))
+    .filter(section => section.groups.length > 0);
+  if (sections.length === 0) return <p className="panel-empty">No loads match.</p>;
+  return (
+    <div className="load-catalog">
+      {sections.map(section => (
+        <section key={section.id}>
+          {category === 'all' && (
+            <h4 className="load-cat">
+              <i className="load-dot" style={{ background: LOAD_CATEGORY_COLOR[section.id] }} />
+              {LOAD_CATEGORY_LABEL[section.id]}
+            </h4>
+          )}
+          {section.groups.map(group => (
+            <div key={group.group} className="load-group">
+              <p className="load-group-title">{group.group}</p>
+              <ul className="pick-list">
+                {group.items.map(item => (
+                  <li key={item.id}>
+                    <button type="button" className={armedId === item.id ? 'active' : ''} aria-pressed={armedId === item.id} title={item.source} onClick={() => onArm(item.id)}>
+                      <span>{item.name}</span>
+                      <span className="pick-meta">{loadSpec(item, units)}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function DuctBar({
+  project,
+  tool,
+  showSize,
+  onShowSize,
+  onChange,
+}: {
+  project: Project;
+  tool: Extract<EditorTool, { kind: 'duct' }>;
+  showSize: boolean;
+  onShowSize: (show: boolean) => void;
+  onChange: (tool: EditorTool) => void;
+}) {
+  const product = getDuctProduct(tool.catalogId) ?? DUCT_CATALOG[0];
+  const systems = systemsForProduct(product, project.systems);
+  const system = systems.find(item => item.id === tool.systemId);
+  const services = system ? servicesFor(product, system.kind) : [];
+  const stream = system ? DUCT_STREAMS.find(item => item.kind === system.kind && item.service === tool.service) : undefined;
+  const unit = lengthUnit(project.units);
+  const pickProduct = (catalogId: string) => {
+    const next = getDuctProduct(catalogId);
+    if (!next) return;
+    const nextSystems = systemsForProduct(next, project.systems);
+    const nextSystem = nextSystems.find(item => item.id === tool.systemId) ?? nextSystems[0];
+    const nextServices = nextSystem ? servicesFor(next, nextSystem.kind) : [];
+    const size = next.sizes?.[0];
+    onChange({
+      kind: 'duct',
+      catalogId: next.id,
+      systemId: nextSystem?.id ?? '',
+      service: nextServices[0] ?? 'supply',
+      shape: next.shape,
+      widthM: size?.widthM ?? next.defaultWidthIn * 0.0254,
+      heightM: next.shape === 'rect' ? (next.defaultHeightIn ?? 12) * 0.0254 : null,
+    });
+  };
+  return (
+    <div className="duct-toolbar">
+      <div className="duct-toolbar-row">
+        <label>
+          Duct
+          <select aria-label="Duct product" value={product.id} onChange={event => pickProduct(event.target.value)}>
+            {DUCT_CATALOG.map(item => (
+              <option key={item.id} value={item.id}>
+                {item.manufacturer} {item.model}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          System
+          <select
+            aria-label="Duct system"
+            value={system?.id ?? ''}
+            onChange={event => {
+              const nextSystem = systems.find(item => item.id === event.target.value);
+              const nextServices = nextSystem ? servicesFor(product, nextSystem.kind) : [];
+              onChange({ ...tool, systemId: nextSystem?.id ?? '', service: nextServices[0] ?? tool.service });
+            }}
+          >
+            {systems.length === 0 && <option value="">No matching system</option>}
+            {systems.map(item => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Stream
+          <select
+            aria-label="Duct stream"
+            value={services.includes(tool.service) ? tool.service : services[0] ?? ''}
+            onChange={event => onChange({ ...tool, service: event.target.value as DuctService })}
+          >
+            {services.map(service => {
+              const item = system ? DUCT_STREAMS.find(entry => entry.kind === system.kind && entry.service === service) : undefined;
+              return (
+                <option key={service} value={service}>
+                  {item?.label ?? DUCT_SERVICES.find(entry => entry.id === service)?.label ?? service}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+        {product.sizes ? (
+          <label>
+            Diameter
+            <select
+              aria-label="Duct diameter"
+              value={product.sizes.find(size => Math.abs(size.widthM - tool.widthM) < 0.002)?.id ?? product.sizes[0]?.id}
+              onChange={event => {
+                const size = product.sizes?.find(item => item.id === event.target.value);
+                if (size) onChange({ ...tool, shape: 'round', widthM: size.widthM, heightM: null });
+              }}
+            >
+              {product.sizes.map(size => (
+                <option key={size.id} value={size.id}>
+                  {size.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <>
+            <label>
+              Width ({unit})
+              <input
+                key={`duct-w-${tool.widthM}`}
+                aria-label="Duct width"
+                defaultValue={formatNumber(mToLength(tool.widthM, project.units), 2)}
+                inputMode="decimal"
+                onBlur={event => {
+                  const meters = lengthToM(Number(event.target.value), project.units);
+                  if (meters > 0.05) onChange({ ...tool, widthM: meters });
+                }}
+              />
+            </label>
+            <label>
+              Height ({unit})
+              <input
+                key={`duct-h-${tool.heightM}`}
+                aria-label="Duct height"
+                defaultValue={formatNumber(mToLength(tool.heightM ?? tool.widthM, project.units), 2)}
+                inputMode="decimal"
+                onBlur={event => {
+                  const meters = lengthToM(Number(event.target.value), project.units);
+                  if (meters > 0.05) onChange({ ...tool, heightM: meters });
+                }}
+              />
+            </label>
+          </>
+        )}
+        <label className="duct-check">
+          <input type="checkbox" checked={showSize} onChange={event => onShowSize(event.target.checked)} />
+          Show duct width
+        </label>
+        {stream && <span className="duct-swatch" style={{ background: stream.color }} title={stream.label} />}
+      </div>
+      <DuctLegend currentId={stream?.id} />
+      {systems.length === 0 && <p className="muted">Add a {product.systemKinds.join(', ')} system before drawing this duct.</p>}
+    </div>
+  );
 }

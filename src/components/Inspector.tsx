@@ -6,6 +6,7 @@ import {
   assignEquipmentRoom,
   duplicateEquipment,
   duplicateRoom,
+  removeDuct,
   removeEquipment,
   removeRoom,
   removeSystem,
@@ -16,10 +17,13 @@ import {
   setWallAssembly,
   updateInterfaceAssignment,
   UNASSIGNED_SURFACE,
+  updateDuct,
   updateEquipment,
   updateRoom,
   updateSystem,
 } from '@/domain/projectOps';
+import { getDuctProduct, roughnessLabel, servicesFor, streamFor, systemsForProduct } from '@/domain/ductCatalog';
+import { ductCrossings, ductSizeLabel, DUCT_SERVICES, endRise, linkedPort, polylineLength } from '@/domain/ducts';
 import { doorDirection, hingeEnds, setDoorDirection, type DoorHinge } from '@/domain/doorSwing';
 import { placeBeside, resizeSpan, slideOpeningOffset } from '@/domain/spanFit';
 import {
@@ -28,6 +32,8 @@ import {
   SURFACE_FACES,
   SYSTEM_KINDS,
   WALL_FACES,
+  type DuctService,
+  type LoadOverride,
   type OpeningKind,
   type Project,
   type Room,
@@ -35,7 +41,9 @@ import {
   type SurfaceFace,
   type WallFace,
 } from '@/domain/types';
-import { formatArea, formatFlow, formatLength, formatPower, lengthToM, lengthUnit, mToLength } from '@/domain/units';
+import { formatArea, formatFlow, formatLength, formatNumber, formatPower, lengthToM, lengthUnit, mToLength } from '@/domain/units';
+import { basisLabel, getLoadProduct, LOAD_CATEGORY_LABEL, loadGroups } from '@/domain/loadCatalog';
+import { blankOverride, gainUnit, hoodOver, LOAD_METHOD_NOTES, loadGains, loadLabel, removeLoad, roomAreaM2, roomLoads, sumLoads, updateLoad, type LoadTotals } from '@/domain/loads';
 import { polygonArea } from '@/domain/wallDraw';
 import {
   assemblyCategoriesForFace,
@@ -114,9 +122,11 @@ export function Inspector({
         <EquipmentFields project={project} equipmentId={selection.id} onChange={onChange} onSelect={onSelect} />
       )}
       {selection.kind === 'wallRun' && <WallRunFields project={project} wallId={selection.id} onChange={onChange} onSelect={onSelect} />}
+      {selection.kind === 'duct' && <DuctFields project={project} ductId={selection.id} onChange={onChange} onSelect={onSelect} />}
       {selection.kind === 'wallOpening' && (
         <WallOpeningFields project={project} wallId={selection.wallId} openingId={selection.id} onChange={onChange} onSelect={onSelect} />
       )}
+      {selection.kind === 'load' && <LoadFields project={project} loadId={selection.id} onChange={onChange} onSelect={onSelect} />}
     </aside>
   );
 }
@@ -132,9 +142,21 @@ function ProjectFields({
   onDeleteProject: () => void;
   nameFocus: number;
 }) {
+  const loads = project.loads ?? [];
   return (
-    <div className="stack">
-      <h2>Project</h2>
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">Project</p>
+        <h2>{project.name || 'Untitled project'}</h2>
+      </header>
+      <div className="stat-row">
+        <span>{project.rooms.length} spaces</span>
+        <span>{loads.length} loads</span>
+        <span>{project.equipment.length} equipment</span>
+        <span>{(project.ducts ?? []).length} ducts</span>
+      </div>
+      <section className="prop-block">
+      <p className="prop-section">General</p>
       <TextField label="Name" value={project.name} focusToken={nameFocus} onCommit={name => onChange({ ...project, name })} />
       <TextField label="Location" value={project.location} onCommit={location => onChange({ ...project, location })} />
       <label className="field">
@@ -148,6 +170,9 @@ function ProjectFields({
         </select>
       </label>
       <TextField label="Subtype" value={project.subtype} onCommit={subtype => onChange({ ...project, subtype })} />
+      </section>
+      <section className="prop-block">
+      <p className="prop-section">Settings</p>
       <label className="field">
         <span>Display units</span>
         <select value={project.units} onChange={event => onChange({ ...project, units: event.target.value as Project['units'] })}>
@@ -165,10 +190,19 @@ function ProjectFields({
           onChange({ ...project, northDeg: next === 0 ? undefined : next });
         }}
       />
+      </section>
+      {loads.length > 0 && (
+        <section className="prop-block">
+          <p className="prop-section">Internal loads</p>
+          <LoadTotalsList totals={sumLoads(project, loads)} units={project.units} />
+        </section>
+      )}
       <TextField label="Details" value={project.details} multiline onCommit={details => onChange({ ...project, details })} />
-      <button type="button" className="btn danger" onClick={onDeleteProject}>
-        Delete project
-      </button>
+      <div className="button-row">
+        <button type="button" className="btn danger" onClick={onDeleteProject}>
+          Delete project
+        </button>
+      </div>
     </div>
   );
 }
@@ -886,6 +920,7 @@ function RoomFields({
         );
       })}
       </section>
+      <RoomLoadsBlock project={project} roomId={room.id} onSelect={onSelect} />
       <div className="button-row">
         <button type="button" className="btn" onClick={() => onChange(duplicateRoom(project, room.id))}>
           Duplicate
@@ -1293,6 +1328,167 @@ function EquipmentFields({
   );
 }
 
+function DuctFields({
+  project,
+  ductId,
+  onChange,
+  onSelect,
+}: {
+  project: Project;
+  ductId: string;
+  onChange: (project: Project) => void;
+  onSelect: (selection: Selection) => void;
+}) {
+  const run = (project.ducts ?? []).find(item => item.id === ductId);
+  if (!run) return <p className="muted">Duct not found.</p>;
+  const ductProduct = getDuctProduct(run.catalogId);
+  const allowedSystems = ductProduct ? systemsForProduct(ductProduct, project.systems) : project.systems;
+  const systems = allowedSystems.some(item => item.id === run.systemId) ? allowedSystems : project.systems.filter(item => item.id === run.systemId || allowedSystems.includes(item));
+  const system = project.systems.find(item => item.id === run.systemId);
+  const services = ductProduct && system ? servicesFor(ductProduct, system.kind) : DUCT_SERVICES.map(item => item.id);
+  const stream = system ? streamFor(system.kind, run.service) : null;
+  const unit = lengthUnit(project.units);
+  const start = linkedPort(project, run.start);
+  const end = linkedPort(project, run.end);
+  const crossings = ductCrossings(run.points, project.rooms, project.wallRuns ?? []).length;
+  const endLabel = (which: 'start' | 'end') => {
+    const link = which === 'start' ? start : end;
+    if (!link) return 'Open end';
+    const item = project.equipment.find(entry => entry.id === link.equipmentId);
+    const product = item ? getProduct(item.catalogId) : undefined;
+    const rise = endRise(project, run, which);
+    const riser = Math.abs(rise) > 0.05 ? ` · riser ${formatLength(Math.abs(rise), project.units, 2)}` : '';
+    return `${product?.model ?? 'Equipment'} ${link.portId}${riser}`;
+  };
+  const setWidth = (text: string) => {
+    const meters = lengthToM(Number(text), project.units);
+    if (meters > 0.05) onChange(updateDuct(project, run.id, { widthM: meters }));
+  };
+  const setHeight = (text: string) => {
+    const meters = lengthToM(Number(text), project.units);
+    if (meters > 0.05) onChange(updateDuct(project, run.id, { heightM: meters }));
+  };
+  return (
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">
+          {stream && <span className="duct-swatch" style={{ background: stream.color }} />}
+          {stream?.label ?? 'Duct'}
+        </p>
+        <h2>{ductProduct ? `${ductProduct.manufacturer} ${ductProduct.model}` : 'Uncatalogued duct'}</h2>
+      </header>
+      <div className="stat-row">
+        <span>{formatLength(polylineLength(run.points), project.units, 2)}</span>
+        <span>{ductSizeLabel(run, project.units)}</span>
+        <span>
+          {crossings} wall crossing{crossings === 1 ? '' : 's'}
+        </span>
+      </div>
+      <section className="prop-block">
+      <p className="prop-section">Routing</p>
+      <label className="field">
+        <span>System</span>
+        <select
+          value={run.systemId}
+          onChange={event => {
+            const next = project.systems.find(item => item.id === event.target.value);
+            const nextService = ductProduct && next ? servicesFor(ductProduct, next.kind)[0] : undefined;
+            onChange(updateDuct(project, run.id, { systemId: event.target.value, ...(nextService ? { service: nextService } : {}) }));
+          }}
+        >
+          {systems.map(item => (
+            <option key={item.id} value={item.id}>{item.name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span>Stream</span>
+        <select value={run.service} onChange={event => onChange(updateDuct(project, run.id, { service: event.target.value as DuctService }))}>
+          {services.map(service => (
+            <option key={service} value={service}>{system ? streamFor(system.kind, service)?.label ?? service : service}</option>
+          ))}
+        </select>
+      </label>
+      </section>
+      <section className="prop-block">
+      <p className="prop-section">Size and elevation</p>
+      {ductProduct?.sizes ? (
+        <label className="field">
+          <span>Diameter</span>
+          <select
+            value={ductProduct.sizes.find(size => Math.abs(size.widthM - run.widthM) < 0.002)?.id ?? ductProduct.sizes[0]?.id}
+            onChange={event => {
+              const size = ductProduct.sizes?.find(item => item.id === event.target.value);
+              if (size) onChange(updateDuct(project, run.id, { shape: 'round', widthM: size.widthM, heightM: null }));
+            }}
+          >
+            {ductProduct.sizes.map(size => (
+              <option key={size.id} value={size.id}>{size.label}</option>
+            ))}
+          </select>
+        </label>
+      ) : (
+      <label className="field">
+        <span>{run.shape === 'round' ? 'Diameter' : 'Width'} ({unit})</span>
+        <input key={`w-${run.widthM}`} defaultValue={formatNumber(mToLength(run.widthM, project.units), 2)} inputMode="decimal" onBlur={event => setWidth(event.target.value)} />
+      </label>
+      )}
+      {run.shape === 'rect' && !ductProduct?.sizes && (
+        <label className="field">
+          <span>Height ({unit})</span>
+          <input key={`h-${run.heightM}`} defaultValue={formatNumber(mToLength(run.heightM ?? run.widthM, project.units), 2)} inputMode="decimal" onBlur={event => setHeight(event.target.value)} />
+        </label>
+      )}
+      <label className="field">
+        <span>Elevation ({unit})</span>
+        <input
+          key={`z-${run.zM}`}
+          defaultValue={formatNumber(mToLength(run.zM, project.units), 2)}
+          inputMode="decimal"
+          onBlur={event => {
+            const meters = lengthToM(Number(event.target.value), project.units);
+            if (Number.isFinite(meters)) onChange(updateDuct(project, run.id, { zM: meters }));
+          }}
+        />
+      </label>
+      </section>
+      <section className="prop-block">
+        <p className="prop-section">Connections</p>
+        <dl className="spec-list">
+          <div>
+            <dt>Start</dt>
+            <dd>{endLabel('start')}</dd>
+          </div>
+          <div>
+            <dt>End</dt>
+            <dd>{endLabel('end')}</dd>
+          </div>
+          {ductProduct && (
+            <div>
+              <dt>Roughness</dt>
+              <dd>
+                {roughnessLabel(ductProduct)}. {ductProduct.roughnessNote}
+              </dd>
+            </div>
+          )}
+        </dl>
+      </section>
+      <div className="button-row">
+        <button
+          type="button"
+          className="btn danger"
+          onClick={() => {
+            onChange(removeDuct(project, run.id));
+            onSelect({ kind: 'project' });
+          }}
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function WallRunFields({
   project,
   wallId,
@@ -1308,19 +1504,30 @@ function WallRunFields({
   if (!run) return <p className="muted">Wall not found.</p>;
   const length = Math.hypot(run.x1 - run.x0, run.y1 - run.y0);
   return (
-    <div className="stack">
-      <h2>Wall</h2>
-      <p className="muted">{formatLength(length, project.units, 2)}</p>
-      <button
-        type="button"
-        className="btn danger"
-        onClick={() => {
-          onChange(removeWallRun(project, run.id));
-          onSelect({ kind: 'project' });
-        }}
-      >
-        Delete
-      </button>
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">Wall</p>
+        <h2>Wall run</h2>
+      </header>
+      <div className="stat-row">
+        <span>{formatLength(length, project.units, 2)}</span>
+        <span>
+          {run.openings.length} opening{run.openings.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <p className="muted">To make a space, draw walls with the Wall tool and click the first point to close the loop.</p>
+      <div className="button-row">
+        <button
+          type="button"
+          className="btn danger"
+          onClick={() => {
+            onChange(removeWallRun(project, run.id));
+            onSelect({ kind: 'project' });
+          }}
+        >
+          Delete
+        </button>
+      </div>
     </div>
   );
 }
@@ -1342,19 +1549,370 @@ function WallOpeningFields({
   const opening = run?.openings.find(item => item.id === openingId);
   if (!run || !opening) return <p className="muted">Opening not found.</p>;
   return (
-    <div className="stack">
-      <h2>{opening.kind === 'door' ? 'Door' : 'Window'}</h2>
-      <p className="muted">{formatLength(opening.widthM, project.units, 2)}</p>
-      <button
-        type="button"
-        className="btn danger"
-        onClick={() => {
-          onChange(removeWallRunOpening(project, run.id, opening.id));
-          onSelect({ kind: 'wallRun', id: run.id });
-        }}
-      >
-        Delete
-      </button>
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">Wall opening</p>
+        <h2>{opening.kind === 'door' ? 'Door' : 'Window'}</h2>
+      </header>
+      <div className="stat-row">
+        <span>{formatLength(opening.widthM, project.units, 2)} wide</span>
+        <span>{formatLength(opening.offsetM, project.units, 2)} from start</span>
+      </div>
+      <div className="button-row">
+        <button type="button" className="btn" onClick={() => onSelect({ kind: 'wallRun', id: run.id })}>
+          Select wall
+        </button>
+        <button
+          type="button"
+          className="btn danger"
+          onClick={() => {
+            onChange(removeWallRunOpening(project, run.id, opening.id));
+            onSelect({ kind: 'wallRun', id: run.id });
+          }}
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const LOAD_SOURCE_LABEL: Record<'ashrae' | LoadOverride['source'], string> = {
+  ashrae: 'ASHRAE default',
+  manufacturer: 'Manufacturer',
+  manual: 'Manual',
+};
+
+function OverrideField({
+  label,
+  unit,
+  value,
+  fallback,
+  onCommit,
+}: {
+  label: string;
+  unit: string;
+  value: number | null;
+  fallback: string;
+  onCommit: (value: number | null) => void;
+}) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <span className="unit-input">
+        <input
+          key={`${label}-${value}`}
+          inputMode="decimal"
+          defaultValue={value == null ? '' : formatNumber(value, 4)}
+          placeholder={fallback}
+          onBlur={event => {
+            const text = event.currentTarget.value.trim();
+            if (text === '') {
+              if (value != null) onCommit(null);
+              return;
+            }
+            const next = Number(text);
+            if (Number.isFinite(next) && next >= 0) onCommit(next);
+            else event.currentTarget.value = value == null ? '' : formatNumber(value, 4);
+          }}
+          onKeyDown={event => {
+            if (event.key === 'Enter') event.currentTarget.blur();
+          }}
+        />
+        <em>{unit}</em>
+      </span>
+    </label>
+  );
+}
+
+function LoadTotalsList({ totals, units }: { totals: Omit<LoadTotals, 'count'>; units: Project['units'] }) {
+  return (
+    <dl className="spec-list">
+      <div>
+        <dt>Sensible</dt>
+        <dd>{formatPower(totals.sensibleW, units)}</dd>
+      </div>
+      <div>
+        <dt>Latent</dt>
+        <dd>{formatPower(totals.latentW, units)}</dd>
+      </div>
+      <div>
+        <dt>Moisture</dt>
+        <dd>{formatNumber(totals.moistureGh / 1000, 3)} kg/h</dd>
+      </div>
+      <div>
+        <dt>CO₂</dt>
+        <dd>{formatNumber(totals.co2Ls, 4)} L/s</dd>
+      </div>
+      <div>
+        <dt>CO</dt>
+        <dd>{totals.coMgS == null ? 'Not entered' : `${formatNumber(totals.coMgS, 3)} mg/s`}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function RoomLoadsBlock({ project, roomId, onSelect }: { project: Project; roomId: string; onSelect: (selection: Selection) => void }) {
+  const items = roomLoads(project, roomId);
+  return (
+    <section className="prop-block">
+      <p className="prop-section">Internal loads</p>
+      {items.length === 0 ? (
+        <p className="muted">No loads yet. Add people, appliances, lighting, and plug loads in the Loads step.</p>
+      ) : (
+        <>
+          <LoadTotalsList totals={sumLoads(project, items)} units={project.units} />
+          <ul className="prop-links">
+            {items.map(item => {
+              const gains = loadGains(project, item);
+              return (
+                <li key={item.id}>
+                  <button type="button" onClick={() => onSelect({ kind: 'load', id: item.id })}>
+                    <span>{loadLabel(item, getLoadProduct(item.loadId))}</span>
+                    <span className="muted">{gains ? formatPower(gains.sensibleW + gains.latentW, project.units) : 'Missing'}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+function LoadFields({
+  project,
+  loadId,
+  onChange,
+  onSelect,
+}: {
+  project: Project;
+  loadId: string;
+  onChange: (project: Project) => void;
+  onSelect: (selection: Selection) => void;
+}) {
+  const item = (project.loads ?? []).find(entry => entry.id === loadId);
+  if (!item) return <p className="muted">Load not found.</p>;
+  const product = getLoadProduct(item.loadId);
+  const gains = loadGains(project, item);
+  const room = project.rooms.find(entry => entry.id === item.roomId);
+  const remove = () => {
+    onChange(removeLoad(project, item.id));
+    onSelect(room ? { kind: 'room', id: room.id } : { kind: 'project' });
+  };
+  if (!product || !gains) {
+    return (
+      <div className="stack props">
+        <header className="prop-head">
+          <p className="prop-kicker">Load</p>
+          <h2>Missing catalog item</h2>
+        </header>
+        <p className="muted">{item.loadId} is no longer in the load catalog.</p>
+        <div className="button-row">
+          <button type="button" className="btn danger" onClick={remove}>
+            Delete
+          </button>
+        </div>
+      </div>
+    );
+  }
+  const units = project.units;
+  const gain = gainUnit(product.basis, units);
+  const show = (watts: number) => formatNumber(watts * gain.factor, 1);
+  const override = item.override;
+  const patchOverride = (patch: Partial<LoadOverride>) =>
+    onChange(updateLoad(project, item.id, { override: { ...(override ?? blankOverride('manual')), ...patch } }));
+  const setSource = (source: 'ashrae' | LoadOverride['source']) => {
+    if (source === 'ashrae') onChange(updateLoad(project, item.id, { override: null }));
+    else patchOverride({ source });
+  };
+  const hood = product.category === 'cooking' && product.hooded ? hoodOver(project, item) : null;
+  const hoodProduct = hood ? getProduct(hood.catalogId) : undefined;
+  const defaultCo2 = gains.multiplier > 0 && override?.co2Ls == null ? gains.co2Ls / gains.multiplier : null;
+  const per = basisLabel(product.basis);
+  return (
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">{LOAD_CATEGORY_LABEL[product.category]} load</p>
+        <h2>{loadLabel(item, product)}</h2>
+      </header>
+      <div className="stat-row">
+        <span>{formatPower(gains.sensibleW, units)} sensible</span>
+        <span>{formatPower(gains.latentW, units)} latent</span>
+        <span>{LOAD_SOURCE_LABEL[gains.source]}</span>
+      </div>
+      <section className="prop-block">
+        <p className="prop-section">Item</p>
+        <label className="field">
+          <span>Type</span>
+          <select value={product.id} onChange={event => onChange(updateLoad(project, item.id, { loadId: event.target.value, override: null }))}>
+            {loadGroups(product.category).map(group => (
+              <optgroup key={group.group} label={group.group}>
+                {group.items.map(entry => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.name}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+        {product.basis === 'area' ? (
+          <p className="muted">Applies to the whole space{room ? `: ${formatArea(roomAreaM2(room), units)}` : ''}.</p>
+        ) : (
+          <label className="field">
+            <span>{product.basis === 'person' ? 'People' : 'Quantity'}</span>
+            <input
+              key={`${item.id}-${item.quantity}`}
+              inputMode="numeric"
+              defaultValue={item.quantity}
+              onBlur={event => {
+                const quantity = Number(event.target.value);
+                if (Number.isInteger(quantity) && quantity >= 1) onChange(updateLoad(project, item.id, { quantity }));
+                else event.target.value = String(item.quantity);
+              }}
+            />
+          </label>
+        )}
+        <p className="muted">
+          {room ? (
+            <>
+              In{' '}
+              <button type="button" className="link-btn" onClick={() => onSelect({ kind: 'room', id: room.id })}>
+                {room.name || 'Space'}
+              </button>
+              . Drag the marker on the plan to move it.
+            </>
+          ) : (
+            'Outside every space. Drag it into a space.'
+          )}
+        </p>
+      </section>
+      <section className="prop-block">
+        <p className="prop-section">Values {per}</p>
+        <div className="seg-row" role="radiogroup" aria-label="Value source">
+          {(['ashrae', 'manufacturer', 'manual'] as const).map(source => {
+            const on = (override?.source ?? 'ashrae') === source;
+            return (
+              <button key={source} type="button" role="radio" aria-checked={on} className={on ? 'active' : ''} onClick={() => setSource(source)}>
+                {LOAD_SOURCE_LABEL[source]}
+              </button>
+            );
+          })}
+        </div>
+        {override ? (
+          <>
+            <div className="field-grid">
+              <OverrideField label="Sensible" unit={gain.label} value={override.sensibleW == null ? null : override.sensibleW * gain.factor} fallback={show(product.sensibleW)} onCommit={value => patchOverride({ sensibleW: value == null ? null : value / gain.factor })} />
+              <OverrideField label="Latent" unit={gain.label} value={override.latentW == null ? null : override.latentW * gain.factor} fallback={show(product.latentW)} onCommit={value => patchOverride({ latentW: value == null ? null : value / gain.factor })} />
+              <OverrideField label="CO₂" unit="L/s" value={override.co2Ls} fallback={defaultCo2 == null ? '' : formatNumber(defaultCo2, 4)} onCommit={value => patchOverride({ co2Ls: value })} />
+              <OverrideField label="CO" unit="mg/s" value={override.coMgS} fallback="none" onCommit={value => patchOverride({ coMgS: value })} />
+            </div>
+            <TextField
+              label={override.source === 'manufacturer' ? 'Manufacturer, model, and data sheet' : 'Basis for these values'}
+              value={override.note}
+              onCommit={note => patchOverride({ note })}
+            />
+            <p className="muted">Empty fields use the ASHRAE default shown in grey.</p>
+          </>
+        ) : (
+          <dl className="spec-list">
+            <div>
+              <dt>Sensible</dt>
+              <dd>
+                {show(product.sensibleW)} {gain.label}
+                {product.radiantW != null ? ` (radiant ${show(product.radiantW)})` : ''}
+              </dd>
+            </div>
+            <div>
+              <dt>Latent</dt>
+              <dd>
+                {show(product.latentW)} {gain.label}
+              </dd>
+            </div>
+            {product.ratedW != null && (
+              <div>
+                <dt>Rated input</dt>
+                <dd>{formatPower(product.ratedW, units)}</dd>
+              </div>
+            )}
+            {product.standbyW != null && (
+              <div>
+                <dt>Idle input</dt>
+                <dd>{formatPower(product.standbyW, units)}</dd>
+              </div>
+            )}
+            <div>
+              <dt>Source</dt>
+              <dd>{product.source}</dd>
+            </div>
+            {product.note && (
+              <div>
+                <dt>Note</dt>
+                <dd>{product.note}</dd>
+              </div>
+            )}
+          </dl>
+        )}
+      </section>
+      {product.category === 'cooking' && product.hooded != null && (
+        <section className="prop-block">
+          <p className="prop-section">Hood</p>
+          {product.hooded ? (
+            hood ? (
+              <p className="muted">
+                Under{' '}
+                <button type="button" className="link-btn" onClick={() => onSelect({ kind: 'equipment', id: hood.id })}>
+                  {hoodProduct?.model ?? 'hood'}
+                </button>
+                . Convective heat and combustion products go to the exhaust.
+              </p>
+            ) : (
+              <p className="callout warn">Not under a hood. These values assume a hood captures the plume. Place a hood over it, or pick the unhooded type.</p>
+            )
+          ) : (
+            <p className="muted">Unhooded values. All heat and moisture go to the space.</p>
+          )}
+        </section>
+      )}
+      {gains.combustion && (
+        <section className="prop-block">
+          <p className="prop-section">Combustion products at idle</p>
+          <dl className="spec-list">
+            <div>
+              <dt>CO₂</dt>
+              <dd>{formatNumber(gains.combustion.co2Ls, 4)} L/s</dd>
+            </div>
+            <div>
+              <dt>Water vapor</dt>
+              <dd>{formatNumber(gains.combustion.waterGh / 1000, 3)} kg/h</dd>
+            </div>
+            <div>
+              <dt>Goes to</dt>
+              <dd>{gains.combustion.captured ? 'Hood exhaust' : 'The space'}</dd>
+            </div>
+          </dl>
+        </section>
+      )}
+      <section className="prop-block">
+        <p className="prop-section">Total for this item</p>
+        <LoadTotalsList totals={gains} units={units} />
+        <details className="prop-details">
+          <summary>Method</summary>
+          <ul>
+            {LOAD_METHOD_NOTES.map(note => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        </details>
+      </section>
+      <TextField label="Notes" value={item.notes} multiline onCommit={notes => onChange(updateLoad(project, item.id, { notes }))} />
+      <div className="button-row">
+        <button type="button" className="btn danger" onClick={remove}>
+          Delete
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,3 +1,5 @@
+import type { DuctService } from './types';
+
 export type EquipmentCategory =
   | 'kitchen-hood'
   | 'exhaust-fan'
@@ -11,6 +13,14 @@ export type EquipmentCategory =
 export type EquipmentFamily = 'space' | 'system';
 
 export type EquipmentMount = 'ceiling' | 'roof' | 'grade';
+
+/** Connection on the plan footprint. u and v are -1 to 1 across length and width from the center. */
+export interface CatalogPort {
+  id: string;
+  service: DuctService;
+  u: number;
+  v: number;
+}
 
 export interface StatedQuantity {
   /** Public catalog / listing text used for planning. Confirm on a current submittal. */
@@ -384,6 +394,39 @@ export const FALLBACK_EQUIPMENT_SIZE_M = { lengthM: 0.6, widthM: 0.6, heightM: 0
 
 export function getProduct(id: string): CatalogProduct | undefined {
   return BY_ID.get(id);
+}
+
+/** Plan connection points. Fractions sit on the real footprint, so they follow the stated size. */
+export function catalogPorts(product: CatalogProduct): CatalogPort[] {
+  const name = `${product.name} ${product.model}`;
+  if (/condens/i.test(name)) return [];
+  if (product.category === 'kitchen-hood') return [{ id: 'exhaust', service: 'exhaust', u: 0, v: 0 }];
+  if (product.category === 'bathroom-exhaust') return [{ id: 'exhaust', service: 'exhaust', u: 0, v: 0 }];
+  if (product.category === 'exhaust-fan') {
+    if (/inline|mixed-flow|\bSQ\b/i.test(name)) {
+      return [
+        { id: 'in', service: 'exhaust', u: -1, v: 0 },
+        { id: 'out', service: 'exhaust', u: 1, v: 0 },
+      ];
+    }
+    return [{ id: 'in', service: 'exhaust', u: 0, v: 0 }];
+  }
+  if (product.category === 'makeup-air') return [{ id: 'supply', service: 'supply', u: 1, v: 0 }];
+  if (/recovery|HE1X|ERV/i.test(name) || product.category === 'energy-recovery') {
+    return [
+      { id: 'sa', service: 'supply', u: 1, v: 0.55 },
+      { id: 'ra', service: 'return', u: 1, v: -0.55 },
+      { id: 'oa', service: 'outdoor', u: -1, v: 0.55 },
+      { id: 'ea', service: 'exhaust', u: -1, v: -0.55 },
+    ];
+  }
+  if (product.category === 'heating-cooling' || product.category === 'system-equipment') {
+    return [
+      { id: 'supply', service: 'supply', u: 1, v: 0 },
+      { id: 'return', service: 'return', u: -1, v: 0 },
+    ];
+  }
+  return [];
 }
 
 /** Plan/model footprint size from catalog specs, or the 0.6 m marker when not stated. */

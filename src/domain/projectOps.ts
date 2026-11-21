@@ -1,7 +1,13 @@
 import { equipmentSizeM, getProduct, type CatalogProduct } from './catalog';
 import { builtinAssembly, cloneLayers, findAssembly, type ConstructionAssembly } from './constructionLibrary';
+import { ductPairAllowed, getDuctProduct } from './ductCatalog';
+import { ductElevation, linkedPort, polylineLength, sealDuct } from './ducts';
 import { createId, nowIso } from './ids';
 import type {
+  DuctEnd,
+  DuctRun,
+  DuctService,
+  DuctShape,
   HvacSystem,
   Opening,
   OpeningKind,
@@ -105,6 +111,8 @@ export function createBlankProject(): Project {
     systems: [],
     equipment: [],
     wallRuns: [],
+    ducts: [],
+    loads: [],
     preliminary: true,
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -138,12 +146,49 @@ export function cloneProject(source: Project, overrides?: Partial<Project>): Pro
     systemIds.set(system.id, id);
     return { ...system, id };
   });
-  const equipment = source.equipment.map(item => ({
-    ...item,
-    id: createId('eq'),
-    roomId: item.roomId ? (roomIds.get(item.roomId) ?? null) : null,
-    systemId: item.systemId ? (systemIds.get(item.systemId) ?? null) : null,
-  }));
+  const equipmentIds = new Map<string, string>();
+  const equipment = source.equipment.map(item => {
+    const id = createId('eq');
+    equipmentIds.set(item.id, id);
+    return {
+      ...item,
+      id,
+      roomId: item.roomId ? (roomIds.get(item.roomId) ?? null) : null,
+      systemId: item.systemId ? (systemIds.get(item.systemId) ?? null) : null,
+    };
+  });
+  const remapEnd = (end: DuctEnd): DuctEnd => ({
+    equipmentId: end.equipmentId ? (equipmentIds.get(end.equipmentId) ?? null) : null,
+    portId: end.equipmentId && equipmentIds.has(end.equipmentId) ? end.portId : null,
+  });
+  const wallIds = new Map<string, string>();
+  const wallRuns = (source.wallRuns ?? []).map(run => {
+    const id = createId('wall');
+    wallIds.set(run.id, id);
+    return {
+      ...run,
+      id,
+      openings: run.openings.map(opening => ({ ...opening, id: createId('open') })),
+    };
+  });
+  const ducts = (source.ducts ?? []).flatMap(run => {
+    const systemId = systemIds.get(run.systemId);
+    if (!systemId) return [];
+    return [{
+      ...run,
+      id: createId('duct'),
+      systemId,
+      start: remapEnd(run.start),
+      end: remapEnd(run.end),
+      penetrations: (run.penetrations ?? []).flatMap(item => {
+        const wallRunId = item.wallRunId ? wallIds.get(item.wallRunId) : undefined;
+        const roomId = item.roomId ? roomIds.get(item.roomId) : undefined;
+        if (item.wallRunId && !wallRunId) return [];
+        if (item.roomId && !roomId) return [];
+        return [{ ...item, wallRunId, roomId }];
+      }),
+    }];
+  });
   const timestamp = nowIso();
   return {
     ...source,
@@ -152,11 +197,13 @@ export function cloneProject(source: Project, overrides?: Partial<Project>): Pro
     rooms,
     systems,
     equipment,
-    wallRuns: (source.wallRuns ?? []).map(run => ({
-      ...run,
-      id: createId('wall'),
-      openings: run.openings.map(opening => ({ ...opening, id: createId('open') })),
-    })),
+    wallRuns,
+    ducts,
+    loads: (source.loads ?? []).flatMap(item => {
+      const roomId = item.roomId ? roomIds.get(item.roomId) : undefined;
+      if (!roomId) return [];
+      return [{ ...item, id: createId('load'), roomId, override: item.override ? { ...item.override } : null }];
+    }),
     interfaceWalls: source.interfaceWalls
       ? Object.fromEntries(
           Object.entries(source.interfaceWalls).flatMap(([key, assignment]) => {
@@ -345,6 +392,7 @@ export function removeRoom(project: Project, roomId: string): Project {
     ...project,
     rooms: project.rooms.filter(room => room.id !== roomId),
     equipment: project.equipment.map(item => (item.roomId === roomId ? { ...item, roomId: null } : item)),
+    loads: (project.loads ?? []).filter(item => item.roomId !== roomId),
   };
 }
 
@@ -436,7 +484,94 @@ export function duplicateEquipment(project: Project, id: string): Project {
 }
 
 export function removeEquipment(project: Project, id: string): Project {
-  return { ...project, equipment: project.equipment.filter(item => item.id !== id) };
+  const open = (end: DuctEnd): DuctEnd => (end.equipmentId === id ? { equipmentId: null, portId: null } : end);
+  return {
+    ...project,
+    equipment: project.equipment.filter(item => item.id !== id),
+    ducts: (project.ducts ?? []).map(run => sealDuct({ ...run, start: open(run.start), end: open(run.end) }, project)),
+  };
+}
+
+export function addDuct(
+  project: Project,
+  input: {
+    catalogId: string;
+    systemId: string;
+    service: DuctService;
+    shape: DuctShape;
+    widthM: number;
+    heightM: number | null;
+    points: { x: number; y: number; equipmentId?: string; portId?: string }[];
+  },
+): Project {
+  const system = project.systems.find(item => item.id === input.systemId);
+  const product = getDuctProduct(input.catalogId);
+  if (!system || !product || !ductPairAllowed(product, system.kind, input.service)) return project;
+  if (product.sizes && !product.sizes.some(size => Math.abs(size.widthM - input.widthM) < 0.002)) return project;
+  if (input.points.length < 2 || polylineLength(input.points) < 0.2) return project;
+  if (!(input.widthM > 0.05)) return project;
+  const start = input.points[0];
+  const end = input.points[input.points.length - 1];
+  const ends = {
+    start: start.equipmentId && start.portId ? { equipmentId: start.equipmentId, portId: start.portId } : { equipmentId: null, portId: null },
+    end: end.equipmentId && end.portId ? { equipmentId: end.equipmentId, portId: end.portId } : { equipmentId: null, portId: null },
+  };
+  const run: DuctRun = sealDuct(
+    {
+      id: createId('duct'),
+      catalogId: product.id,
+      systemId: input.systemId,
+      service: input.service,
+      shape: input.shape,
+      widthM: input.widthM,
+      heightM: input.shape === 'round' ? null : input.heightM && input.heightM > 0.05 ? input.heightM : input.widthM * 0.67,
+      zM: ductElevation(project, ends.start, ends.end),
+      points: input.points.map(point => ({ x: Number(point.x.toFixed(3)), y: Number(point.y.toFixed(3)) })),
+      ...ends,
+      penetrations: [],
+    },
+    project,
+  );
+  const claimed = new Set([ends.start.equipmentId, ends.end.equipmentId].filter((id): id is string => !!id));
+  return {
+    ...project,
+    ducts: [...(project.ducts ?? []), run],
+    equipment: project.equipment.map(item => (claimed.has(item.id) && !item.systemId ? { ...item, systemId: input.systemId } : item)),
+  };
+}
+
+export function updateDuct(project: Project, id: string, patch: Partial<Pick<DuctRun, 'systemId' | 'service' | 'shape' | 'widthM' | 'heightM' | 'zM'>>): Project {
+  return {
+    ...project,
+    ducts: (project.ducts ?? []).map(run => {
+      if (run.id !== id) return run;
+      const next = { ...run, ...patch };
+      const product = getDuctProduct(next.catalogId);
+      const system = project.systems.find(item => item.id === next.systemId);
+      if (product && system && !ductPairAllowed(product, system.kind, next.service)) return run;
+      if (next.shape === 'round') next.heightM = null;
+      else if (!(next.heightM && next.heightM > 0.05)) next.heightM = next.widthM * 0.67;
+      return sealDuct(next, project);
+    }),
+  };
+}
+
+export function removeDuct(project: Project, id: string): Project {
+  return { ...project, ducts: (project.ducts ?? []).filter(run => run.id !== id) };
+}
+
+/** Pull port ends onto the equipment they are connected to. */
+export function syncDuctPorts(project: Project): Project {
+  const ducts = (project.ducts ?? []).map(run => {
+    if (run.points.length < 2) return run;
+    const points = run.points.map(point => ({ ...point }));
+    const start = linkedPort(project, run.start);
+    const end = linkedPort(project, run.end);
+    if (start) points[0] = { x: Number(start.x.toFixed(3)), y: Number(start.y.toFixed(3)) };
+    if (end) points[points.length - 1] = { x: Number(end.x.toFixed(3)), y: Number(end.y.toFixed(3)) };
+    return sealDuct({ ...run, points }, project);
+  });
+  return { ...project, ducts };
 }
 
 export function addSystem(project: Project, kind: SystemKind = 'other'): Project {
@@ -456,6 +591,7 @@ export function removeSystem(project: Project, id: string): Project {
     ...project,
     systems: project.systems.filter(system => system.id !== id),
     equipment: project.equipment.map(item => (item.systemId === id ? { ...item, systemId: null } : item)),
+    ducts: (project.ducts ?? []).filter(run => run.systemId !== id),
   };
 }
 

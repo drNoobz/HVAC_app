@@ -89,6 +89,44 @@ export interface HvacSystem {
   notes: string;
 }
 
+export type DuctService = 'supply' | 'return' | 'exhaust' | 'outdoor' | 'relief';
+
+export type DuctShape = 'round' | 'rect';
+
+/** Open end when both ids are null. A port end names the equipment connection. */
+export interface DuctEnd {
+  equipmentId: string | null;
+  portId: string | null;
+}
+
+/** Where a duct centerline crosses a wall. Offset is meters along that wall. */
+export interface DuctPenetration {
+  wallRunId?: string;
+  roomId?: string;
+  edge?: number;
+  face?: WallFace;
+  offsetM: number;
+}
+
+export interface DuctRun {
+  id: string;
+  /** Duct catalog product. Empty on runs saved before the duct catalog. */
+  catalogId: string;
+  systemId: string;
+  service: DuctService;
+  shape: DuctShape;
+  /** Round diameter, or rectangular width, meters. */
+  widthM: number;
+  /** Rectangular height, meters. Null when the shape is round. */
+  heightM: number | null;
+  /** Elevation of the horizontal centerline, meters. */
+  zM: number;
+  points: { x: number; y: number }[];
+  start: DuctEnd;
+  end: DuctEnd;
+  penetrations: DuctPenetration[];
+}
+
 export interface PlacedEquipment {
   id: string;
   catalogId: string;
@@ -104,6 +142,34 @@ export interface PlacedEquipment {
   quantity: number;
   notes: string;
   assumption: boolean;
+}
+
+/** Where an override value came from. Missing fields fall back to the catalog default. */
+export type LoadValueSource = 'manufacturer' | 'manual';
+
+/** Per-unit replacement values. Per person, per appliance, or per m² for area loads. */
+export interface LoadOverride {
+  source: LoadValueSource;
+  sensibleW: number | null;
+  latentW: number | null;
+  co2Ls: number | null;
+  coMgS: number | null;
+  note: string;
+}
+
+/** Heat, moisture, CO2, or CO source inside a space. */
+export interface LoadItem {
+  id: string;
+  /** Load catalog id. */
+  loadId: string;
+  roomId: string | null;
+  /** Plan marker position, meters. */
+  xM: number;
+  yM: number;
+  /** People, appliances, or fixtures. Ignored for area loads. */
+  quantity: number;
+  override: LoadOverride | null;
+  notes: string;
 }
 
 export interface ProjectOrigin {
@@ -146,6 +212,8 @@ export interface Project {
   systems: HvacSystem[];
   equipment: PlacedEquipment[];
   wallRuns?: WallRun[];
+  ducts?: DuctRun[];
+  loads?: LoadItem[];
   /** One stack per interface stretch, shared or outside air. The adapter checks the envelope and does not write these stacks into GeometryDocument. */
   interfaceWalls?: Record<string, SurfaceAssignment>;
   /** Stage 1 projects stay preliminary. Solver sizing is not available. */
@@ -171,7 +239,9 @@ export type Selection =
   | { kind: 'system'; id: string }
   | { kind: 'equipment'; id: string }
   | { kind: 'wallRun'; id: string }
-  | { kind: 'wallOpening'; wallId: string; id: string };
+  | { kind: 'wallOpening'; wallId: string; id: string }
+  | { kind: 'duct'; id: string }
+  | { kind: 'load'; id: string };
 
 export type EditorTool =
   | { kind: 'select' }
@@ -179,7 +249,9 @@ export type EditorTool =
   | { kind: 'wall' }
   | { kind: 'door' }
   | { kind: 'window' }
-  | { kind: 'place'; catalogId: string };
+  | { kind: 'duct'; catalogId: string; systemId: string; service: DuctService; shape: DuctShape; widthM: number; heightM: number | null }
+  | { kind: 'place'; catalogId: string }
+  | { kind: 'load'; loadId: string };
 
 export const BUILDING_TYPES: { id: BuildingType; label: string }[] = [
   { id: 'restaurant', label: 'Restaurant' },

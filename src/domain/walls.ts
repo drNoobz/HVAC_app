@@ -1,5 +1,5 @@
 import { builtinAssembly, cloneLayers } from './constructionLibrary';
-import type { Project, Room, SurfaceAssignment, WallFace } from './types';
+import type { DuctRun, LoadItem, Project, Room, SurfaceAssignment, WallFace } from './types';
 
 export const WALL_FACE_IDS: WallFace[] = ['px', 'nx', 'py', 'ny'];
 
@@ -780,6 +780,69 @@ function cleanOutline(outline: Room['outline']): Room['outline'] | undefined {
   return points.length >= 3 ? points : undefined;
 }
 
+function normalizeDucts(value: Project['ducts']): DuctRun[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(run => {
+    if (!run || typeof run.id !== 'string' || typeof run.systemId !== 'string') return [];
+    const points = (run.points ?? [])
+      .map(point => ({ x: Number(point?.x), y: Number(point?.y) }))
+      .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+    if (points.length < 2) return [];
+    const service = run.service === 'return' || run.service === 'exhaust' || run.service === 'outdoor' || run.service === 'relief' ? run.service : 'supply';
+    const shape = run.shape === 'rect' ? 'rect' : 'round';
+    const end = (item: DuctRun['start'] | undefined): DuctRun['start'] => ({
+      equipmentId: typeof item?.equipmentId === 'string' ? item.equipmentId : null,
+      portId: typeof item?.portId === 'string' ? item.portId : null,
+    });
+    return [{
+      id: run.id,
+      catalogId: typeof run.catalogId === 'string' ? run.catalogId : '',
+      systemId: run.systemId,
+      service,
+      shape,
+      widthM: Number(run.widthM) > 0.05 ? Number(run.widthM) : 0.3,
+      heightM: shape === 'rect' && Number(run.heightM) > 0.05 ? Number(run.heightM) : null,
+      zM: Number.isFinite(run.zM) ? run.zM : 2.7,
+      points,
+      start: end(run.start),
+      end: end(run.end),
+      penetrations: Array.isArray(run.penetrations) ? run.penetrations : [],
+    }];
+  });
+}
+
+function finiteOrNull(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : Number.NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeLoads(value: Project['loads']): LoadItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(item => {
+    if (!item || typeof item.id !== 'string' || typeof item.loadId !== 'string') return [];
+    const override = item.override && typeof item.override === 'object'
+      ? {
+          source: item.override.source === 'manufacturer' ? ('manufacturer' as const) : ('manual' as const),
+          sensibleW: finiteOrNull(item.override.sensibleW),
+          latentW: finiteOrNull(item.override.latentW),
+          co2Ls: finiteOrNull(item.override.co2Ls),
+          coMgS: finiteOrNull(item.override.coMgS),
+          note: typeof item.override.note === 'string' ? item.override.note : '',
+        }
+      : null;
+    return [{
+      id: item.id,
+      loadId: item.loadId,
+      roomId: typeof item.roomId === 'string' ? item.roomId : null,
+      xM: finiteOrNull(item.xM) ?? 0,
+      yM: finiteOrNull(item.yM) ?? 0,
+      quantity: Number(item.quantity) > 0 ? Number(item.quantity) : 1,
+      override,
+      notes: typeof item.notes === 'string' ? item.notes : '',
+    }];
+  });
+}
+
 /** 0 means the top of the plan is north. The result is degrees clockwise, in 0–360. */
 export function northDegrees(value: unknown): number {
   const deg = typeof value === 'number' ? value : Number.NaN;
@@ -809,6 +872,8 @@ export function normalizeProject(project: Project, emptyNote: string): Project {
       };
     }),
     wallRuns: Array.isArray(project.wallRuns) ? project.wallRuns.map(run => ({ ...run, openings: run.openings ?? [] })) : [],
+    ducts: normalizeDucts(project.ducts),
+    loads: normalizeLoads(project.loads),
     interfaceWalls: normalizeInterfaceWalls(project.interfaceWalls),
   };
 }
