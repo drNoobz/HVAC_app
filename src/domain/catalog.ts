@@ -3,8 +3,12 @@ export type EquipmentCategory =
   | 'exhaust-fan'
   | 'makeup-air'
   | 'bathroom-exhaust'
+  | 'system-equipment'
   | 'heating-cooling'
   | 'energy-recovery';
+
+/** Top-level catalog family. Add families here when the library grows. */
+export type EquipmentFamily = 'space' | 'system';
 
 export type EquipmentMount = 'ceiling' | 'roof' | 'grade';
 
@@ -58,9 +62,30 @@ export const CATEGORY_LABEL: Record<EquipmentCategory, string> = {
   'exhaust-fan': 'Exhaust fan',
   'makeup-air': 'Make-up air',
   'bathroom-exhaust': 'Bathroom exhaust',
+  'system-equipment': 'System equipment',
   'heating-cooling': 'Heating and cooling',
   'energy-recovery': 'Energy recovery',
 };
+
+export const FAMILY_LABEL: Record<EquipmentFamily, string> = {
+  space: 'Space equipment',
+  system: 'System equipment',
+};
+
+export const FAMILY_ORDER: EquipmentFamily[] = ['space', 'system'];
+
+/** Categories under each family. Subdivide by appending here later. */
+export const FAMILY_CATEGORIES: Record<EquipmentFamily, EquipmentCategory[]> = {
+  space: ['kitchen-hood', 'exhaust-fan', 'makeup-air', 'bathroom-exhaust'],
+  system: ['system-equipment', 'heating-cooling', 'energy-recovery'],
+};
+
+export function familyForCategory(category: EquipmentCategory): EquipmentFamily {
+  for (const family of FAMILY_ORDER) {
+    if (FAMILY_CATEGORIES[family].includes(category)) return family;
+  }
+  return 'space';
+}
 
 function flow(statedCfm: number, stated?: string): FlowSpec {
   return {
@@ -259,7 +284,7 @@ export const CATALOG: CatalogProduct[] = [
     manufacturer: 'Carrier',
     model: '48FC*M14',
     name: 'WeatherMaker packaged rooftop, gas/electric',
-    category: 'heating-cooling',
+    category: 'system-equipment',
     supplier: 'Carrier Corporation (USA)',
     mount: 'roof',
     dimensions: feet(7.4, 4.9, 4.2, 'Planning envelope ~89 in × 59 in × 50 in class for 10–12.5 ton WeatherMaker'),
@@ -283,7 +308,7 @@ export const CATALOG: CatalogProduct[] = [
     manufacturer: 'Carrier',
     model: '48FC*M08',
     name: 'WeatherMaker packaged rooftop, gas/electric',
-    category: 'heating-cooling',
+    category: 'system-equipment',
     supplier: 'Carrier Corporation (USA)',
     mount: 'roof',
     dimensions: feet(7.4, 4.9, 3.8, 'Planning envelope for 7.5 ton WeatherMaker class'),
@@ -307,7 +332,7 @@ export const CATALOG: CatalogProduct[] = [
     manufacturer: 'RenewAire',
     model: 'HE1XRT',
     name: 'HE Series energy recovery ventilator, outdoor',
-    category: 'energy-recovery',
+    category: 'system-equipment',
     supplier: 'RenewAire (USA)',
     mount: 'roof',
     dimensions: inches(63, 30, 56, 'Shipping / planning envelope about 63 in × 30 in × 56 in (HE1X family)'),
@@ -331,7 +356,7 @@ export const CATALOG: CatalogProduct[] = [
     manufacturer: 'Carrier',
     model: '38AUZ07',
     name: 'Air-cooled condensing unit',
-    category: 'heating-cooling',
+    category: 'system-equipment',
     supplier: 'Carrier Corporation (USA)',
     mount: 'grade',
     dimensions: inches(45, 35, 42.4, 'About 45 in × 35 in footprint × 42-3/8 in high (38AU 07 class)'),
@@ -381,11 +406,4 @@ export function equipmentSizeM(product: CatalogProduct | undefined | null): {
 
 export const CATALOG_MIME = 'application/hvac-catalog';
 
-export const CATEGORY_ORDER: EquipmentCategory[] = [
-  'kitchen-hood',
-  'exhaust-fan',
-  'makeup-air',
-  'bathroom-exhaust',
-  'heating-cooling',
-  'energy-recovery',
-];
+export const CATEGORY_ORDER: EquipmentCategory[] = FAMILY_ORDER.flatMap(family => FAMILY_CATEGORIES[family]);

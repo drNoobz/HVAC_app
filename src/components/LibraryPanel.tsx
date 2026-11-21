@@ -1,8 +1,16 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { Fragment, useMemo, useRef, useState } from 'react';
 import { createId } from '@/domain/ids';
 import { downloadText } from '@/domain/download';
+import {
+  CATALOG,
+  CATEGORY_LABEL,
+  FAMILY_CATEGORIES,
+  type CatalogProduct,
+  type EquipmentCategory,
+  type EquipmentFamily,
+} from '@/domain/catalog';
 import {
   ASSEMBLY_CATEGORIES,
   CONSTRUCTION_CATEGORIES,
@@ -40,6 +48,8 @@ const EMPTY_DRAFT = {
 };
 
 type Draft = typeof EMPTY_DRAFT;
+type LibrarySection = 'construction' | EquipmentFamily;
+type ConstructionMode = 'components' | 'layers';
 
 function draftFrom(material: ConstructionMaterial): Draft {
   return {
@@ -57,6 +67,12 @@ function draftFrom(material: ConstructionMaterial): Draft {
   };
 }
 
+function productSpec(product: CatalogProduct): string {
+  return [product.airflow?.stated, product.cooling?.stated, product.heating?.stated, product.dimensions?.stated]
+    .filter(Boolean)
+    .join(' · ');
+}
+
 export function LibraryPanel({
   added,
   onChange,
@@ -71,19 +87,33 @@ export function LibraryPanel({
   const materials = useMemo(() => mergeLibrary(added), [added]);
   const assemblies = useMemo(() => mergeAssemblies(addedAssemblies), [addedAssemblies]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [section, setSection] = useState<LibrarySection>('construction');
+  const [constructionMode, setConstructionMode] = useState<ConstructionMode>('components');
   const [category, setCategory] = useState<ConstructionCategory | 'all'>('all');
+  const [equipmentCategory, setEquipmentCategory] = useState<EquipmentCategory | 'all'>('all');
   const [query, setQuery] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [formError, setFormError] = useState<string | null>(null);
-  const [libraryView, setLibraryView] = useState<'components' | 'layers'>('components');
   const [componentOpen, setComponentOpen] = useState(false);
   const [componentName, setComponentName] = useState('');
   const [componentCategory, setComponentCategory] = useState<AssemblyCategory>('wall');
   const [componentUse, setComponentUse] = useState('');
   const [componentError, setComponentError] = useState<string | null>(null);
+  const [selectedAssemblyId, setSelectedAssemblyId] = useState<string | null>(null);
+
+  const switchSection = (next: LibrarySection) => {
+    setSection(next);
+    setQuery('');
+    setMessage(null);
+    setFormOpen(false);
+    setComponentOpen(false);
+    setCategory('all');
+    setEquipmentCategory('all');
+    setSelectedAssemblyId(null);
+  };
 
   const visible = materials.filter(item => {
     if (category !== 'all' && item.category !== category) return false;
@@ -95,6 +125,36 @@ export function LibraryPanel({
     const haystack = `${item.name} ${item.typicalUse} ${item.notes}`.toLowerCase();
     return haystack.includes(query.trim().toLowerCase());
   });
+
+  const equipmentFamily = section === 'construction' ? null : section;
+  const familyCategories = equipmentFamily ? FAMILY_CATEGORIES[equipmentFamily] : [];
+  const familyProducts = useMemo(() => {
+    if (!equipmentFamily) return [];
+    const needle = query.trim().toLowerCase();
+    return CATALOG.filter(product => {
+      if (!FAMILY_CATEGORIES[equipmentFamily].includes(product.category)) return false;
+      if (equipmentCategory !== 'all' && product.category !== equipmentCategory) return false;
+      if (!needle) return true;
+      return `${product.name} ${product.manufacturer} ${product.model} ${product.supplier} ${CATEGORY_LABEL[product.category]}`
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [equipmentFamily, equipmentCategory, query]);
+
+  const constructionCounts = useMemo(() => {
+    const source = constructionMode === 'components' ? assemblies : materials;
+    const counts: Record<string, number> = { all: source.length };
+    for (const item of source) counts[item.category] = (counts[item.category] ?? 0) + 1;
+    return counts;
+  }, [assemblies, materials, constructionMode]);
+
+  const equipmentCounts = useMemo(() => {
+    if (!equipmentFamily) return { all: 0 } as Record<string, number>;
+    const inFamily = CATALOG.filter(product => FAMILY_CATEGORIES[equipmentFamily].includes(product.category));
+    const counts: Record<string, number> = { all: inFamily.length };
+    for (const item of familyCategories) counts[item] = inFamily.filter(product => product.category === item).length;
+    return counts;
+  }, [equipmentFamily, familyCategories]);
 
   const openAdd = () => {
     setEditingId(null);
@@ -195,309 +255,451 @@ export function LibraryPanel({
     reader.readAsText(file);
   };
 
+  const navCategory = section === 'construction' ? category : equipmentCategory;
+  const navCounts = section === 'construction' ? constructionCounts : equipmentCounts;
+  const navItems = section === 'construction'
+    ? (constructionMode === 'components' ? ASSEMBLY_CATEGORIES : CONSTRUCTION_CATEGORIES)
+    : familyCategories;
+  const selectedAssembly = visibleAssemblies.find(item => item.id === selectedAssemblyId) ?? null;
+
   return (
-    <div className="schedule">
-      <div className="schedule-head">
-        <div className="library-note">
-          <p className="kicker">Settings</p>
-          <h2>Material library</h2>
-        </div>
-        <div className="button-row">
-          <button
-            type="button"
-            className={libraryView === 'components' ? 'btn active' : 'btn'}
-            onClick={() => {
-              setLibraryView('components');
-              if (category === 'insulation') setCategory('all');
-            }}
-          >
-            Components
-          </button>
-          <button type="button" className={libraryView === 'layers' ? 'btn active' : 'btn'} onClick={() => setLibraryView('layers')}>
-            Layers
-          </button>
-          {libraryView === 'layers' ? (
-            <button type="button" className="btn primary" onClick={openAdd}>
-              Add material
-            </button>
-          ) : (
-            <button type="button" className="btn primary" onClick={() => setComponentOpen(true)}>
-              Add component
-            </button>
-          )}
-          <button type="button" className="btn" onClick={() => fileRef.current?.click()}>
-            Load database
-          </button>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => downloadText('construction-materials.json', JSON.stringify(libraryDocument(materials), null, 2), 'application/json')}
-          >
-            Download JSON
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/json,.json"
-            hidden
-            onChange={event => {
-              const file = event.target.files?.[0];
-              event.target.value = '';
-              onFile(file);
-            }}
-          />
-        </div>
-      </div>
-      {message && (
-        <p className="muted" role="status">
-          {message}
-        </p>
-      )}
-      {libraryView === 'components' && componentOpen && (
-        <form
-          className="stack"
-          onSubmit={event => {
-            event.preventDefault();
-            saveComponent();
-          }}
-        >
-          <h3>New component</h3>
-          <div className="field-grid">
-            <label className="field">
-              <span>Name</span>
-              <input value={componentName} onChange={event => setComponentName(event.target.value)} required />
-            </label>
-            <label className="field">
-              <span>Category</span>
-              <select value={componentCategory} onChange={event => setComponentCategory(event.target.value as AssemblyCategory)}>
-                {ASSEMBLY_CATEGORIES.map(item => (
-                  <option key={item} value={item}>
-                    {constructionCategoryLabel[item]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Typical use</span>
-              <input value={componentUse} onChange={event => setComponentUse(event.target.value)} />
-            </label>
-          </div>
-          {componentError && <p className="flag amber">{componentError}</p>}
-          <div className="button-row">
-            <button type="submit" className="btn primary">
-              Save component
-            </button>
-            <button type="button" className="btn" onClick={() => setComponentOpen(false)}>
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
-      {libraryView === 'layers' && formOpen && (
-        <form
-          className="stack"
-          onSubmit={event => {
-            event.preventDefault();
-            saveDraft();
-          }}
-        >
-          <h3>{editingId ? 'Edit material' : 'New material'}</h3>
-          <div className="field-grid">
-            <label className="field">
-              <span>Name</span>
-              <input value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} required />
-            </label>
-            <label className="field">
-              <span>Category</span>
-              <select
-                value={draft.category}
-                onChange={event => setDraft({ ...draft, category: event.target.value as ConstructionCategory })}
-              >
-                {CONSTRUCTION_CATEGORIES.map(item => (
-                  <option key={item} value={item}>
-                    {constructionCategoryLabel[item]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Typical use</span>
-              <input value={draft.typicalUse} onChange={event => setDraft({ ...draft, typicalUse: event.target.value })} />
-            </label>
-            <label className="field">
-              <span>Thickness (mm)</span>
-              <input value={draft.thicknessMm} inputMode="decimal" onChange={event => setDraft({ ...draft, thicknessMm: event.target.value })} />
-            </label>
-            <label className="field">
-              <span>R-value (h·ft²·°F/Btu)</span>
-              <input value={draft.rIp} inputMode="decimal" onChange={event => setDraft({ ...draft, rIp: event.target.value })} />
-            </label>
-            <label className="field">
-              <span>U-factor, IP</span>
-              <input value={draft.uIp} inputMode="decimal" onChange={event => setDraft({ ...draft, uIp: event.target.value })} />
-            </label>
-            <label className="field">
-              <span>U-factor, SI (W/(m²·K))</span>
-              <input value={draft.uSi} inputMode="decimal" onChange={event => setDraft({ ...draft, uSi: event.target.value })} />
-            </label>
-            <label className="field">
-              <span>SHGC</span>
-              <input value={draft.shgc} inputMode="decimal" onChange={event => setDraft({ ...draft, shgc: event.target.value })} />
-            </label>
-            <label className="field">
-              <span>Source</span>
-              <input value={draft.source} onChange={event => setDraft({ ...draft, source: event.target.value })} />
-            </label>
-            <label className="field">
-              <span>Potential supplier</span>
-              <input value={draft.potentialSupplier} onChange={event => setDraft({ ...draft, potentialSupplier: event.target.value })} />
-            </label>
-          </div>
-          <label className="field">
-            <span>Notes</span>
-            <textarea rows={3} value={draft.notes} onChange={event => setDraft({ ...draft, notes: event.target.value })} />
-          </label>
-          {formError && <p className="flag amber">{formError}</p>}
-          <div className="button-row">
-            <button type="submit" className="btn primary">
-              Save material
-            </button>
-            <button type="button" className="btn" onClick={() => setFormOpen(false)}>
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
-      <div className="button-row">
-        <button type="button" className={category === 'all' ? 'btn active' : 'btn'} onClick={() => setCategory('all')}>
-          All
+    <div className="library">
+      <nav className="library-sections" aria-label="Library sections">
+        <button type="button" className={section === 'construction' ? 'active' : ''} onClick={() => switchSection('construction')}>
+          Construction
         </button>
-        {(libraryView === 'components' ? ASSEMBLY_CATEGORIES : CONSTRUCTION_CATEGORIES).map(item => (
-          <button key={item} type="button" className={category === item ? 'btn active' : 'btn'} onClick={() => setCategory(item)}>
-            {constructionCategoryLabel[item]}
-          </button>
-        ))}
-        <label className="field">
-          <span>Search</span>
-          <input value={query} onChange={event => setQuery(event.target.value)} />
+        <button type="button" className={section === 'space' ? 'active' : ''} onClick={() => switchSection('space')}>
+          Space equipment
+        </button>
+        <button type="button" className={section === 'system' ? 'active' : ''} onClick={() => switchSection('system')}>
+          System equipment
+        </button>
+      </nav>
+
+      <div className="library-toolbar">
+        <label className="library-search">
+          <span className="sr-only">Search</span>
+          <input placeholder="Search" value={query} onChange={event => setQuery(event.target.value)} />
         </label>
-      </div>
-      {libraryView === 'components' && (
-        <div className="component-list">
-          {visibleAssemblies.map(assembly => (
-            <article key={assembly.id} className="stack-layer">
-              <header>
-                <div>
-                  <strong>{assembly.name}</strong>
-                  <div className="cell-sub">
-                    {constructionCategoryLabel[assembly.category]} · {assembly.orderLabel} · {assembly.origin === 'builtin' ? 'Built-in' : 'Added'}
-                  </div>
-                </div>
-                {assembly.origin !== 'builtin' && (
-                  <button
-                    type="button"
-                    className="btn danger"
-                    onClick={() => {
-                      onAssembliesChange(addedAssemblies.filter(item => item.id !== assembly.id));
-                      setMessage(`Removed ${assembly.name}. Rooms that already copied this stack keep their layers.`);
-                    }}
-                  >
-                    Remove
+        <div className="library-toolbar-rest">
+          {section === 'construction' && (
+            <div className="library-mode" role="group" aria-label="Construction records">
+              <button
+                type="button"
+                className={constructionMode === 'components' ? 'active' : ''}
+                onClick={() => {
+                  setConstructionMode('components');
+                  if (category === 'insulation') setCategory('all');
+                  setFormOpen(false);
+                }}
+              >
+                Components
+              </button>
+              <button
+                type="button"
+                className={constructionMode === 'layers' ? 'active' : ''}
+                onClick={() => {
+                  setConstructionMode('layers');
+                  setComponentOpen(false);
+                }}
+              >
+                Layers
+              </button>
+            </div>
+          )}
+          <div className="library-actions">
+            {message && (
+              <span className="library-status" role="status">
+                {message}
+              </span>
+            )}
+            {section === 'construction' && (
+              <>
+                {constructionMode === 'layers' ? (
+                  <button type="button" className="btn primary" onClick={openAdd}>
+                    Add material
+                  </button>
+                ) : (
+                  <button type="button" className="btn primary" onClick={() => setComponentOpen(true)}>
+                    Add component
                   </button>
                 )}
-              </header>
-              <p className="muted">{assembly.typicalUse}</p>
-              <StackEditor
-                layers={assembly.layers}
-                materials={materials}
-                series={assembly.series}
-                units="IP"
-                readOnly={assembly.origin === 'builtin'}
-                onChange={layers =>
-                  onAssembliesChange(addedAssemblies.map(item => (item.id === assembly.id ? { ...item, layers } : item)))
-                }
-              />
-              {assembly.notes && <p className="muted">{assembly.notes}</p>}
-            </article>
-          ))}
-          {visibleAssemblies.length === 0 && <p className="muted">No components match.</p>}
-        </div>
-      )}
-      {libraryView === 'layers' && (
-      <div className="table-wrap library-table">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Material</th>
-              <th>Category</th>
-              <th>Thickness</th>
-              <th>R</th>
-              <th>U</th>
-              <th>SHGC</th>
-              <th>Source</th>
-              <th>Potential supplier</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map(item => (
-              <tr key={item.id}>
-                <td>
-                  <strong>{item.name}</strong>
-                  <div className="cell-sub">{item.typicalUse || 'Use not stated'}</div>
-                  {item.notes && <div className="cell-sub">{item.notes}</div>}
-                </td>
-                <td>{constructionCategoryLabel[item.category]}</td>
-                <td>
-                  {formatThickness(item.thicknessMm, 'IP')}
-                  <div className="cell-sub">{formatThickness(item.thicknessMm, 'SI')}</div>
-                </td>
-                <td>
-                  {formatR(item, 'IP')}
-                  <div className="cell-sub">{formatR(item, 'SI')}</div>
-                </td>
-                <td>
-                  {formatU(item, 'IP')}
-                  <div className="cell-sub">{formatU(item, 'SI')}</div>
-                </td>
-                <td>{formatShgc(item)}</td>
-                <td>
-                  {item.source || 'Not stated'}
-                  <div className="cell-sub">{item.origin === 'builtin' ? 'Built-in' : item.origin === 'import' ? 'Imported' : 'Added'}</div>
-                </td>
-                <td>{item.potentialSupplier}</td>
-                <td>
-                  {item.origin === 'builtin' ? (
-                    <span className="muted">Built-in</span>
-                  ) : (
-                    <span className="button-row">
-                      <button type="button" className="btn" onClick={() => openEdit(item)}>
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        className="btn danger"
-                        onClick={() => {
-                          onChange(added.filter(entry => entry.id !== item.id));
-                          setMessage(`Removed ${item.name}. Projects that already use this id keep the id.`);
-                        }}
-                      >
-                        Remove
-                      </button>
-                    </span>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {visible.length === 0 && (
-              <tr>
-                <td colSpan={8}>No materials match.</td>
-              </tr>
+                <button type="button" className="btn" onClick={() => fileRef.current?.click()}>
+                  Load database
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => downloadText('construction-materials.json', JSON.stringify(libraryDocument(materials), null, 2), 'application/json')}
+                >
+                  Download JSON
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="application/json,.json"
+                  hidden
+                  onChange={event => {
+                    const file = event.target.files?.[0];
+                    event.target.value = '';
+                    onFile(file);
+                  }}
+                />
+              </>
             )}
-          </tbody>
-        </table>
+          </div>
+        </div>
       </div>
-      )}
+
+      <div className="library-body">
+        <aside className="library-nav" aria-label="Categories">
+          <ul className="library-cats">
+            <li>
+              <button
+                type="button"
+                className={navCategory === 'all' ? 'active' : ''}
+                onClick={() => (section === 'construction' ? setCategory('all') : setEquipmentCategory('all'))}
+              >
+                <span>All</span>
+                <span className="tree-meta">{navCounts.all ?? 0}</span>
+              </button>
+            </li>
+            {navItems.map(item => (
+              <li key={item}>
+                <button
+                  type="button"
+                  className={navCategory === item ? 'active' : ''}
+                  onClick={() =>
+                    section === 'construction'
+                      ? setCategory(item as ConstructionCategory)
+                      : setEquipmentCategory(item as EquipmentCategory)
+                  }
+                >
+                  <span>
+                    {section === 'construction'
+                      ? constructionCategoryLabel[item as ConstructionCategory]
+                      : CATEGORY_LABEL[item as EquipmentCategory]}
+                  </span>
+                  <span className="tree-meta">{navCounts[item] ?? 0}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </aside>
+
+        <div className="library-main">
+          {section === 'construction' && constructionMode === 'components' && componentOpen && (
+            <form
+              className="stack library-form"
+              onSubmit={event => {
+                event.preventDefault();
+                saveComponent();
+              }}
+            >
+              <h3>New component</h3>
+              <div className="field-grid">
+                <label className="field">
+                  <span>Name</span>
+                  <input value={componentName} onChange={event => setComponentName(event.target.value)} required />
+                </label>
+                <label className="field">
+                  <span>Category</span>
+                  <select value={componentCategory} onChange={event => setComponentCategory(event.target.value as AssemblyCategory)}>
+                    {ASSEMBLY_CATEGORIES.map(item => (
+                      <option key={item} value={item}>
+                        {constructionCategoryLabel[item]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Typical use</span>
+                  <input value={componentUse} onChange={event => setComponentUse(event.target.value)} />
+                </label>
+              </div>
+              {componentError && <p className="flag amber">{componentError}</p>}
+              <div className="button-row">
+                <button type="submit" className="btn primary">
+                  Save component
+                </button>
+                <button type="button" className="btn" onClick={() => setComponentOpen(false)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+
+          {section === 'construction' && constructionMode === 'layers' && formOpen && (
+            <form
+              className="stack library-form"
+              onSubmit={event => {
+                event.preventDefault();
+                saveDraft();
+              }}
+            >
+              <h3>{editingId ? 'Edit material' : 'New material'}</h3>
+              <div className="field-grid">
+                <label className="field">
+                  <span>Name</span>
+                  <input value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} required />
+                </label>
+                <label className="field">
+                  <span>Category</span>
+                  <select
+                    value={draft.category}
+                    onChange={event => setDraft({ ...draft, category: event.target.value as ConstructionCategory })}
+                  >
+                    {CONSTRUCTION_CATEGORIES.map(item => (
+                      <option key={item} value={item}>
+                        {constructionCategoryLabel[item]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Typical use</span>
+                  <input value={draft.typicalUse} onChange={event => setDraft({ ...draft, typicalUse: event.target.value })} />
+                </label>
+                <label className="field">
+                  <span>Thickness (mm)</span>
+                  <input value={draft.thicknessMm} inputMode="decimal" onChange={event => setDraft({ ...draft, thicknessMm: event.target.value })} />
+                </label>
+                <label className="field">
+                  <span>R-value (h·ft²·°F/Btu)</span>
+                  <input value={draft.rIp} inputMode="decimal" onChange={event => setDraft({ ...draft, rIp: event.target.value })} />
+                </label>
+                <label className="field">
+                  <span>U-factor, IP</span>
+                  <input value={draft.uIp} inputMode="decimal" onChange={event => setDraft({ ...draft, uIp: event.target.value })} />
+                </label>
+                <label className="field">
+                  <span>U-factor, SI (W/(m²·K))</span>
+                  <input value={draft.uSi} inputMode="decimal" onChange={event => setDraft({ ...draft, uSi: event.target.value })} />
+                </label>
+                <label className="field">
+                  <span>SHGC</span>
+                  <input value={draft.shgc} inputMode="decimal" onChange={event => setDraft({ ...draft, shgc: event.target.value })} />
+                </label>
+                <label className="field">
+                  <span>Source</span>
+                  <input value={draft.source} onChange={event => setDraft({ ...draft, source: event.target.value })} />
+                </label>
+                <label className="field">
+                  <span>Potential supplier</span>
+                  <input value={draft.potentialSupplier} onChange={event => setDraft({ ...draft, potentialSupplier: event.target.value })} />
+                </label>
+              </div>
+              <label className="field">
+                <span>Notes</span>
+                <textarea rows={3} value={draft.notes} onChange={event => setDraft({ ...draft, notes: event.target.value })} />
+              </label>
+              {formError && <p className="flag amber">{formError}</p>}
+              <div className="button-row">
+                <button type="submit" className="btn primary">
+                  Save material
+                </button>
+                <button type="button" className="btn" onClick={() => setFormOpen(false)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+
+          {section === 'construction' && constructionMode === 'components' && (
+            <div className="table-wrap library-table">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Component</th>
+                    <th>Category</th>
+                    <th>Typical use</th>
+                    <th>Layers</th>
+                    <th>Source</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleAssemblies.map(assembly => (
+                    <Fragment key={assembly.id}>
+                      <tr
+                        className={selectedAssembly?.id === assembly.id ? 'is-selected library-pick' : 'library-pick'}
+                        onClick={() => setSelectedAssemblyId(current => (current === assembly.id ? null : assembly.id))}
+                      >
+                        <td>
+                          <strong>{assembly.name}</strong>
+                          <div className="cell-sub">{assembly.origin === 'builtin' ? 'Built-in' : 'Added'}</div>
+                        </td>
+                        <td>{constructionCategoryLabel[assembly.category]}</td>
+                        <td>{assembly.typicalUse || 'Use not stated'}</td>
+                        <td>{assembly.layers.length}</td>
+                        <td>{assembly.notes || assembly.orderLabel}</td>
+                        <td>
+                          {assembly.origin !== 'builtin' && (
+                            <button
+                              type="button"
+                              className="btn danger"
+                              onClick={event => {
+                                event.stopPropagation();
+                                onAssembliesChange(addedAssemblies.filter(item => item.id !== assembly.id));
+                                if (selectedAssemblyId === assembly.id) setSelectedAssemblyId(null);
+                                setMessage(`Removed ${assembly.name}. Rooms that already copied this stack keep their layers.`);
+                              }}
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                      {selectedAssembly?.id === assembly.id && (
+                        <tr className="library-detail">
+                          <td colSpan={6}>
+                            <StackEditor
+                              layers={assembly.layers}
+                              materials={materials}
+                              series={assembly.series}
+                              units="IP"
+                              readOnly={assembly.origin === 'builtin'}
+                              onChange={layers =>
+                                onAssembliesChange(addedAssemblies.map(item => (item.id === assembly.id ? { ...item, layers } : item)))
+                              }
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                  {visibleAssemblies.length === 0 && (
+                    <tr>
+                      <td colSpan={6}>No components match.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {section === 'construction' && constructionMode === 'layers' && (
+            <div className="table-wrap library-table">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Material</th>
+                    <th>Category</th>
+                    <th>Thickness</th>
+                    <th>R</th>
+                    <th>U</th>
+                    <th>SHGC</th>
+                    <th>Source</th>
+                    <th>Potential supplier</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map(item => (
+                    <tr key={item.id}>
+                      <td>
+                        <strong>{item.name}</strong>
+                        <div className="cell-sub">{item.typicalUse || 'Use not stated'}</div>
+                        {item.notes && <div className="cell-sub">{item.notes}</div>}
+                      </td>
+                      <td>{constructionCategoryLabel[item.category]}</td>
+                      <td>
+                        {formatThickness(item.thicknessMm, 'IP')}
+                        <div className="cell-sub">{formatThickness(item.thicknessMm, 'SI')}</div>
+                      </td>
+                      <td>
+                        {formatR(item, 'IP')}
+                        <div className="cell-sub">{formatR(item, 'SI')}</div>
+                      </td>
+                      <td>
+                        {formatU(item, 'IP')}
+                        <div className="cell-sub">{formatU(item, 'SI')}</div>
+                      </td>
+                      <td>{formatShgc(item)}</td>
+                      <td>
+                        {item.source || 'Not stated'}
+                        <div className="cell-sub">
+                          {item.origin === 'builtin' ? 'Built-in' : item.origin === 'import' ? 'Imported' : 'Added'}
+                        </div>
+                      </td>
+                      <td>{item.potentialSupplier}</td>
+                      <td>
+                        {item.origin === 'builtin' ? (
+                          <span className="muted">Built-in</span>
+                        ) : (
+                          <span className="button-row">
+                            <button type="button" className="btn" onClick={() => openEdit(item)}>
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              className="btn danger"
+                              onClick={() => {
+                                onChange(added.filter(entry => entry.id !== item.id));
+                                setMessage(`Removed ${item.name}. Projects that already use this id keep the id.`);
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {visible.length === 0 && (
+                    <tr>
+                      <td colSpan={9}>No materials match.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {section !== 'construction' && (
+            <div className="table-wrap library-table">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Category</th>
+                    <th>Manufacturer</th>
+                    <th>Model</th>
+                    <th>Performance</th>
+                    <th>Supplier</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {familyProducts.map(product => (
+                    <tr key={product.id}>
+                      <td>
+                        <strong>{product.name}</strong>
+                        {product.documentUrl && (
+                          <div className="cell-sub">
+                            <a href={product.documentUrl} target="_blank" rel="noreferrer">
+                              Source
+                            </a>
+                          </div>
+                        )}
+                      </td>
+                      <td>{CATEGORY_LABEL[product.category]}</td>
+                      <td>{product.manufacturer}</td>
+                      <td>{product.model}</td>
+                      <td>{productSpec(product) || 'Not stated'}</td>
+                      <td>{product.supplier}</td>
+                    </tr>
+                  ))}
+                  {familyProducts.length === 0 && (
+                    <tr>
+                      <td colSpan={6}>No products match.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

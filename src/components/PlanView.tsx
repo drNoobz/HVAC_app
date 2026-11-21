@@ -1584,8 +1584,12 @@ function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
   const roof = product?.mount === 'roof';
   if (product?.category === 'kitchen-hood') return { name: 'Hood', roof };
   if (product?.category === 'makeup-air') return { name: 'MAU', roof };
-  if (product?.category === 'energy-recovery') return { name: 'ERV', roof };
-  if (product?.category === 'heating-cooling') return { name: roof ? 'RTU' : 'CU', roof };
+  if (product?.category === 'energy-recovery' || /ERV|recovery/i.test(product?.name ?? '')) return { name: 'ERV', roof };
+  if (product?.category === 'heating-cooling' || product?.category === 'system-equipment') {
+    if (/condens/i.test(product?.name ?? '')) return { name: 'CU', roof };
+    if (/rooftop|WeatherMaker|RTU/i.test(product?.name ?? '') || product?.mount === 'roof') return { name: 'RTU', roof };
+    return { name: 'Unit', roof };
+  }
   if (product?.category === 'exhaust-fan' || product?.category === 'bathroom-exhaust') return { name: 'Fan', roof };
   return { name: 'Unit', roof };
 }

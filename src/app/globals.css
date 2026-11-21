@@ -707,8 +707,170 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
 .schedule-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
 .summary-line { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; color: var(--muted); }
 .table-wrap { overflow: auto; border: 1px solid var(--line); max-height: 460px; }
-.library-table { max-height: calc(100vh - 280px); }
-.library-note { max-width: 760px; }
+.library-table { flex: 1; max-height: none; border: 0; }
+.library {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: white;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.library-sections {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  flex: none;
+  width: 100%;
+  border-bottom: 1px solid var(--line);
+  background: #f4f7f8;
+}
+.library-sections button {
+  height: 40px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.library-sections button:last-child { border-right: 0; }
+.library-sections button.active {
+  background: white;
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--teal);
+}
+.library-toolbar {
+  flex: none;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  height: 48px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: white;
+}
+.library-toolbar-rest {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.library-mode {
+  display: inline-flex;
+  margin-right: auto;
+  border: 1px solid var(--line);
+  background: #f4f7f8;
+}
+.library-mode button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  height: 28px;
+  padding: 0 10px;
+}
+.library-mode button.active { background: white; color: var(--ink); }
+.library-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+.library-status {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+.library-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+.library-nav {
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: #f8fafb;
+  padding: 8px;
+}
+.library-cats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.library-cats button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 7px 8px;
+}
+.library-cats button.active {
+  background: white;
+  border-color: var(--line);
+  font-weight: 600;
+}
+.library-search input {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: white;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 12px;
+}
+.library-main {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.library-form { margin: 12px; border: 1px solid var(--line); padding: 12px; background: #f8fafb; }
+.library-detail td { background: #f8fafb; }
+.data-table tr.library-pick { cursor: pointer; }
+.data-table tr.is-selected td { background: #e7f3f4; }
+.catalog-tools-stack { grid-template-columns: 1fr; }
+.catalog-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.catalog-filters select { width: 100%; max-width: none; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (max-width: 900px) {
+  .library-body { grid-template-columns: 1fr; }
+  .library-nav { position: static; }
+}
 .cell-sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
 .stack-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .stack-layer { border: 1px solid var(--line); padding: 8px; background: #f8fafb; display: grid; gap: 6px; }

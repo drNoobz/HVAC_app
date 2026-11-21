@@ -42,6 +42,9 @@ export function categoryIcon(category: string): EquipmentIconName {
       return 'mode_fan_2';
     case 'energy-recovery':
       return 'air_purifier';
+    case 'system-equipment':
+    case 'heating-cooling':
+      return 'hvac';
     case 'humidifier':
       return 'humidity_percentage';
     default:

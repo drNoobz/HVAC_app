@@ -3,7 +3,17 @@
 import dynamic from 'next/dynamic';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { planningIssues } from '@/domain/issues';
-import { CATALOG_MIME, CATEGORY_LABEL, CATEGORY_ORDER, CATALOG, getProduct, type EquipmentCategory } from '@/domain/catalog';
+import {
+  CATALOG_MIME,
+  CATEGORY_LABEL,
+  CATALOG,
+  FAMILY_CATEGORIES,
+  FAMILY_LABEL,
+  FAMILY_ORDER,
+  getProduct,
+  type EquipmentCategory,
+  type EquipmentFamily,
+} from '@/domain/catalog';
 import { downloadText, fileSlug } from '@/domain/download';
 import {
   addOpening,
@@ -101,6 +111,7 @@ export function Studio({
   const [side, setSide] = useState<SideTab>('project');
   const [fitToken, setFitToken] = useState(0);
   const [query, setQuery] = useState('');
+  const [catalogFamily, setCatalogFamily] = useState<EquipmentFamily | 'all'>('all');
   const [category, setCategory] = useState<EquipmentCategory | 'all'>('all');
   const [showDimensions, setShowDimensions] = useState(false);
   const [hideRoof, setHideRoof] = useState(false);
@@ -481,19 +492,38 @@ export function Studio({
             <ProjectTree project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} onAddSystem={openSystemMenu} />
           ) : (
             <div className="catalog">
-              <div className="catalog-tools">
+              <div className="catalog-tools catalog-tools-stack">
                 <input placeholder="Search" value={query} onChange={event => setQuery(event.target.value)} aria-label="Search catalog" />
-                <select aria-label="Catalog category" value={category} onChange={event => setCategory(event.target.value as EquipmentCategory | 'all')}>
-                  <option value="all">All</option>
-                  {CATEGORY_ORDER.map(item => (
-                    <option key={item} value={item}>
-                      {CATEGORY_LABEL[item]}
-                    </option>
-                  ))}
-                </select>
+                <div className="catalog-filters">
+                  <select
+                    aria-label="Catalog family"
+                    value={catalogFamily}
+                    onChange={event => {
+                      const next = event.target.value as EquipmentFamily | 'all';
+                      setCatalogFamily(next);
+                      setCategory('all');
+                    }}
+                  >
+                    <option value="all">All families</option>
+                    {FAMILY_ORDER.map(item => (
+                      <option key={item} value={item}>
+                        {FAMILY_LABEL[item]}
+                      </option>
+                    ))}
+                  </select>
+                  <select aria-label="Catalog category" value={category} onChange={event => setCategory(event.target.value as EquipmentCategory | 'all')}>
+                    <option value="all">All types</option>
+                    {(catalogFamily === 'all' ? FAMILY_ORDER.flatMap(item => FAMILY_CATEGORIES[item]) : FAMILY_CATEGORIES[catalogFamily]).map(item => (
+                      <option key={item} value={item}>
+                        {CATEGORY_LABEL[item]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <CatalogTree
                 query={query}
+                family={catalogFamily}
                 category={category}
                 armedId={tool.kind === 'place' ? tool.catalogId : null}
                 onArm={catalogId => {
@@ -825,7 +855,12 @@ export function Studio({
           )}
           {view === 'schedule' && <SchedulePanel project={project} assemblies={assemblies} materials={materials} />}
           {view === 'library' && (
-            <LibraryPanel added={addedMaterials} onChange={onLibraryChange} addedAssemblies={addedAssemblies} onAssembliesChange={onAssembliesChange} />
+            <LibraryPanel
+              added={addedMaterials}
+              onChange={onLibraryChange}
+              addedAssemblies={addedAssemblies}
+              onAssembliesChange={onAssembliesChange}
+            />
           )}
           {view === 'boundary' && <BoundaryPanel project={project} />}
         </section>
@@ -976,11 +1011,13 @@ function TreeNode({
 
 function CatalogTree({
   query,
+  family,
   category,
   armedId,
   onArm,
 }: {
   query: string;
+  family: EquipmentFamily | 'all';
   category: EquipmentCategory | 'all';
   armedId: string | null;
   onArm: (catalogId: string) => void;
@@ -996,48 +1033,79 @@ function CatalogTree({
       return next;
     });
   const needle = query.trim().toLowerCase();
-  const groups = CATEGORY_ORDER.filter(item => category === 'all' || item === category)
-    .map(item => ({
-      id: item,
-      label: CATEGORY_LABEL[item],
-      products: CATALOG.filter(product => product.category === item && `${product.name} ${product.manufacturer} ${product.model} ${product.supplier}`.toLowerCase().includes(needle)),
-    }))
-    .filter(group => group.products.length > 0);
+  const families = FAMILY_ORDER.filter(item => family === 'all' || item === family);
   return (
     <ul className="tn-tree">
-      <TreeNode
-        collapsed={closed('equipment')}
-        toggleLabel="Equipment"
-        onToggle={() => toggle('equipment')}
-        onSelect={() => toggle('equipment')}
-        content={<span className="tree-label">Equipment</span>}
-      >
-        {groups.length === 0 && <li className="tree-empty">No products match.</li>}
-        {groups.map(group => (
+      {families.map(familyId => {
+        const groups = FAMILY_CATEGORIES[familyId]
+          .filter(item => category === 'all' || item === category)
+          .map(item => ({
+            id: item,
+            label: CATEGORY_LABEL[item],
+            products: CATALOG.filter(
+              product =>
+                product.category === item &&
+                `${product.name} ${product.manufacturer} ${product.model} ${product.supplier}`.toLowerCase().includes(needle)
+            ),
+          }))
+          .filter(group => group.products.length > 0 || !needle);
+        const total = groups.reduce((sum, group) => sum + group.products.length, 0);
+        if (needle && total === 0) return null;
+        return (
           <TreeNode
-            key={group.id}
-            collapsed={closed(group.id)}
-            toggleLabel={group.label}
-            onToggle={() => toggle(group.id)}
-            onSelect={() => toggle(group.id)}
-            content={<><EquipmentIcon name={categoryIcon(group.id)} /><span className="tree-label">{group.label}</span><span className="tree-meta">{group.products.length}</span></>}
+            key={familyId}
+            collapsed={closed(familyId)}
+            toggleLabel={FAMILY_LABEL[familyId]}
+            onToggle={() => toggle(familyId)}
+            onSelect={() => toggle(familyId)}
+            content={
+              <>
+                <span className="tree-label">{FAMILY_LABEL[familyId]}</span>
+                <span className="tree-meta">{total}</span>
+              </>
+            }
           >
-            {group.products.map(product => {
-              const spec = [product.airflow?.stated, product.cooling?.stated, product.heating?.stated].filter(Boolean).join(' · ');
-              return (
-                <TreeNode
-                  key={product.id}
-                  active={armedId === product.id}
-                  dragId={product.id}
-                  title={product.model}
-                  onSelect={() => onArm(product.id)}
-                  content={<><EquipmentIcon name={equipmentIconFor(product)} /><span className="tree-label">{product.name}</span>{spec ? <span className="tree-meta">{spec}</span> : null}</>}
-                />
-              );
-            })}
+            {groups.length === 0 && <li className="tree-empty">No products match.</li>}
+            {groups.map(group => (
+              <TreeNode
+                key={group.id}
+                collapsed={closed(group.id)}
+                toggleLabel={group.label}
+                onToggle={() => toggle(group.id)}
+                onSelect={() => toggle(group.id)}
+                content={
+                  <>
+                    <EquipmentIcon name={categoryIcon(group.id)} />
+                    <span className="tree-label">{group.label}</span>
+                    <span className="tree-meta">{group.products.length}</span>
+                  </>
+                }
+              >
+                {group.products.length === 0 && <li className="tree-empty">None yet — ready for new types.</li>}
+                {group.products.map(product => {
+                  const spec = [product.airflow?.stated, product.cooling?.stated, product.heating?.stated].filter(Boolean).join(' · ');
+                  return (
+                    <TreeNode
+                      key={product.id}
+                      active={armedId === product.id}
+                      dragId={product.id}
+                      title={product.model}
+                      onSelect={() => onArm(product.id)}
+                      content={
+                        <>
+                          <EquipmentIcon name={equipmentIconFor(product)} />
+                          <span className="tree-label">{product.name}</span>
+                          {spec ? <span className="tree-meta">{spec}</span> : null}
+                        </>
+                      }
+                    />
+                  );
+                })}
+              </TreeNode>
+            ))}
           </TreeNode>
-        ))}
-      </TreeNode>
+        );
+      })}
     </ul>
   );
 }
