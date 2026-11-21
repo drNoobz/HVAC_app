@@ -2,8 +2,9 @@
 
 import dynamic from 'next/dynamic';
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { catalogToken } from '@/domain/catalogDrag';
 import { buildChecks, stepForSelection, type BuildStep, type CheckIssue } from '@/domain/checks';
-import { getLoadProduct, LOAD_CATALOG, LOAD_CATEGORY_COLOR, LOAD_CATEGORY_LABEL, LOAD_CATEGORY_ORDER, loadGroups, type LoadCategory } from '@/domain/loadCatalog';
+import { getLoadProduct, LOAD_CATEGORY_COLOR, LOAD_CATEGORY_LABEL, LOAD_CATEGORY_ORDER, loadGroups, type LoadCategory } from '@/domain/loadCatalog';
 import { addLoad, loadLabel, loadSpec, removeLoad, roomLoads, sumLoads, updateLoad } from '@/domain/loads';
 import {
   CATALOG_MIME,
@@ -50,7 +51,7 @@ import { DUCT_CATALOG, DUCT_STREAMS, ductPairAllowed, getDuctProduct, servicesFo
 import { ductSizeLabel, DUCT_SERVICES, DUCT_SERVICE_LABEL, openPorts } from '@/domain/ducts';
 import { SURFACE_FACES, SYSTEM_KINDS, WALL_FACES, type DuctService, type EditorTool, type Project, type Selection, type StoredTemplate, type WallFace } from '@/domain/types';
 import { NO_WALL_RUNS, polygonArea } from '@/domain/wallDraw';
-import { PLAN_SIDES, WALL_TYPES, edgePortions, findInterface, interfaceForOpening, interfaceTargets, portionSummary, roomFill, wallColor, wallPlaceLabel, wallRoleLabel } from '@/domain/walls';
+import { INTERFACE_COLOR, PLAN_SIDES, WALL_TYPES, edgePortions, findInterface, interfaceForOpening, interfaceTargets, portionSummary, roomFill, wallColor, wallPlaceLabel, wallRoleLabel } from '@/domain/walls';
 import { DEFAULT_LAYERS, PlanView, type PlanLayers } from './PlanView';
 import { formatArea, formatLength, formatNumber, formatPower, lengthToM, lengthUnit, mToLength } from '@/domain/units';
 import { projectToBuildingModel, validateModel } from '@/thermonode/localAdapter';
@@ -86,10 +87,10 @@ const STEPS: { id: BuildStep; label: string }[] = [
 type ToolKind = 'select' | 'wall' | 'draw' | 'door' | 'window' | 'load' | 'place' | 'duct';
 
 const STEP_TOOLS: Record<BuildStep, ToolKind[]> = {
-  spaces: ['select', 'wall', 'draw', 'door', 'window'],
-  loads: ['select', 'load'],
-  equipment: ['select', 'place'],
-  ducts: ['select', 'duct'],
+  spaces: ['select', 'wall', 'draw'],
+  loads: ['select'],
+  equipment: ['select'],
+  ducts: ['select'],
   check: ['select'],
 };
 
@@ -169,9 +170,11 @@ export function Studio({
   const [catalogFamily, setCatalogFamily] = useState<EquipmentFamily | 'all'>('all');
   const [lastProductId, setLastProductId] = useState<string | null>(null);
   const [targetSystemId, setTargetSystemId] = useState('');
-  const [loadId, setLoadId] = useState(LOAD_CATALOG[0].id);
   const [loadQuery, setLoadQuery] = useState('');
+  const [ductQuery, setDuctQuery] = useState('');
+  const [spaceQuery, setSpaceQuery] = useState('');
   const [loadCategory, setLoadCategory] = useState<LoadCategory | 'all'>('all');
+  const [sidePanel, setSidePanel] = useState<'project' | 'catalog'>('project');
   const [checkFilter, setCheckFilter] = useState<Exclude<BuildStep, 'check'> | 'all'>('all');
   const [checkIndex, setCheckIndex] = useState(0);
   const [showDimensions, setShowDimensions] = useState(false);
@@ -235,9 +238,10 @@ export function Studio({
     const matches = interfaceTargets(project.rooms).filter(target => target.sides.some(side => side.roomId === roomId && side.anchor === anchor));
     return matches.length === 1 ? matches[0] : null;
   };
-  const chooseView = (next: Selection) => {
-    const type = wallTypeId ? WALL_TYPES.find(item => item.id === wallTypeId) : undefined;
-    if (type && next.kind === 'surface' && next.face === 'walls') {
+  const paintWall = (next: Selection, typeId: string) => {
+    const type = WALL_TYPES.find(item => item.id === typeId);
+    if (!type) return false;
+    if (next.kind === 'surface' && next.face === 'walls') {
       if (next.wallFace) {
         const sole = soleInterface(next.roomId, `f:${next.wallFace}`);
         edit(sole ? setInterfaceAssembly(project, sole.key, type.assemblyId, assemblies) : setWallAssembly(project, next.roomId, next.wallFace, type.assemblyId, assemblies));
@@ -247,9 +251,9 @@ export function Studio({
         edit(sole ? setInterfaceAssembly(project, sole.key, type.assemblyId, assemblies) : setEdgeAssembly(project, next.roomId, next.edge, type.assemblyId, assemblies));
       }
       setSelection(next);
-      return;
+      return true;
     }
-    if (type && next.kind === 'interface') {
+    if (next.kind === 'interface') {
       const hit = findInterface(project.rooms, next.key);
       const side = hit && hit.sides.length === 1 ? hit.sides[0] : undefined;
       edit(setInterfaceAssembly(project, next.key, type.assemblyId, assemblies));
@@ -257,19 +261,23 @@ export function Studio({
         const face = side.anchor.slice(2);
         if (face === 'px' || face === 'nx' || face === 'py' || face === 'ny') {
           setSelection({ kind: 'surface', roomId: side.roomId, face: 'walls', wallFace: face });
-          return;
+          return true;
         }
       }
       if (side?.anchor.startsWith('e:')) {
         const edge = Number(side.anchor.slice(2));
         if (Number.isInteger(edge) && edge >= 0) {
           setSelection({ kind: 'surface', roomId: side.roomId, face: 'walls', edge });
-          return;
+          return true;
         }
       }
       select(next);
-      return;
+      return true;
     }
+    return false;
+  };
+  const chooseView = (next: Selection) => {
+    if (wallTypeId && paintWall(next, wallTypeId)) return;
     select(next);
   };
   const validation = useMemo(() => validateModel(projectToBuildingModel(project)), [project]);
@@ -495,44 +503,19 @@ export function Studio({
     const listed = product.sizes?.find(size => keep && Math.abs(size.widthM - tool.widthM) < 0.002) ?? product.sizes?.[0];
     const widthM = listed?.widthM ?? (keep ? tool.widthM : product.defaultWidthIn * 0.0254);
     const heightM = product.shape === 'rect' ? (keep && tool.heightM ? tool.heightM : (product.defaultHeightIn ?? 12) * 0.0254) : null;
-    setTool({ kind: 'duct', catalogId: product.id, systemId: system?.id ?? '', service, shape: product.shape, widthM, heightM });
+    const next = { kind: 'duct' as const, catalogId: product.id, systemId: system?.id ?? '', service, shape: product.shape, widthM, heightM };
+    setTool(next);
     setView('model');
     if (step !== 'check') setStep('ducts');
-  };
-  const armLoad = (id: string) => {
-    setLoadId(id);
-    setTool({ kind: 'load', loadId: id });
-    setStep('loads');
-    setView('model');
-  };
-  const armProduct = (catalogId: string) => {
-    setLastProductId(catalogId);
-    setTool({ kind: 'place', catalogId });
-    setStep('equipment');
-    setView('model');
+    return next;
   };
   const pickTool = (kind: ToolKind) => {
-    if (kind === 'duct') {
-      armDuct(tool.kind === 'duct' ? tool.catalogId : DUCT_CATALOG[0].id);
-      return;
-    }
-    if (kind === 'load') {
-      armLoad(loadId);
-      return;
-    }
-    if (kind === 'place') {
-      if (lastProductId) armProduct(lastProductId);
-      return;
-    }
+    if (kind === 'duct' || kind === 'load' || kind === 'place' || kind === 'door' || kind === 'window') return;
     setWallTypeId(null);
     setTool({ kind });
   };
   const runFix = (issue: CheckIssue) => {
-    if (issue.selection) setSelection(issue.selection);
-    if (issue.fix.kind === 'duct') {
-      armDuct(issue.fix.catalogId, { systemId: issue.fix.systemId, service: issue.fix.service });
-      setStep('ducts');
-    }
+    if (issue.selection) select(issue.selection);
   };
   const placeEquipment = (point: { xM: number; yM: number }, catalogId: string) => {
     const product = getProduct(catalogId);
@@ -559,24 +542,22 @@ export function Studio({
     return checks.length === 0 ? 'OK' : `${checks.length}`;
   };
   const toolHint = (): string => {
-    if (wallTypeId) return `Click walls to apply ${WALL_TYPES.find(item => item.id === wallTypeId)?.label ?? 'the wall type'}. Esc to stop.`;
-    if (tool.kind === 'wall') return 'Click to add wall points. Click the first point to close a space. Esc to finish.';
+    if (tool.kind === 'wall') return 'Click to add points. Click the first point to close.';
     if (tool.kind === 'draw') return 'Drag to draw a rectangular space.';
-    if (tool.kind === 'door' || tool.kind === 'window') return `Click a wall to place a ${tool.kind}.`;
-    if (tool.kind === 'load') return 'Click inside a space to add. Esc to stop.';
-    if (tool.kind === 'place') return 'Click inside a space to place, or drag from the catalog. Esc to stop.';
-    if (tool.kind === 'duct') return 'Start at a port or anywhere. Click to bend. Click a matching port, or press Esc, to finish.';
-    if (step === 'spaces') return 'Select a space, wall, or opening to edit. Drag walls to resize.';
-    if (step === 'loads') return 'Pick a load on the left, then click inside a space.';
-    if (step === 'equipment') return 'Pick equipment on the left. Drag the rotate handle on a selected unit.';
-    if (step === 'ducts') return 'Pick a duct product or an open port on the left.';
+    if (tool.kind === 'duct') return 'Click to bend the run. Esc finishes.';
+    if (step === 'spaces') return 'Drag a wall type, door, or window onto a wall.';
+    if (step === 'loads') return 'Drag a load into a space.';
+    if (step === 'equipment') return 'Drag equipment onto the plan.';
+    if (step === 'ducts') return 'Drag a duct onto the plan to start.';
     return checks.length === 0 ? 'No issues found.' : 'Select an issue on the left to see it on the plan.';
   };
 
   const loadTotals = sumLoads(project, project.loads ?? []);
-  const loadProduct = getLoadProduct(loadId);
   const lastProduct = lastProductId ? getProduct(lastProductId) : undefined;
   const wallType = wallTypeId ? WALL_TYPES.find(item => item.id === wallTypeId) : undefined;
+  const spaceNeedle = spaceQuery.trim().toLowerCase();
+  const spaceWalls = WALL_TYPES.filter(type => `${type.label} ${type.detail}`.toLowerCase().includes(spaceNeedle));
+  const spaceOpenings = (['door', 'window'] as const).filter(kind => kind.includes(spaceNeedle));
   const stepLabel = STEPS.find(item => item.id === step)?.label ?? '';
   const activeTool = (kind: ToolKind) => tool.kind === kind && !wallTypeId;
   const ductPorts = openPorts(project).map(hit => {
@@ -727,180 +708,120 @@ export function Studio({
       <div className={`studio-body${view === 'model' ? '' : ' is-wide'}`}>
         {view === 'model' && (
           <aside className="side" aria-label={`${stepLabel} panel`}>
+            <div className="side-tabs" role="tablist" aria-label="Project and catalogue">
+              <button type="button" role="tab" aria-selected={sidePanel === 'project'} className={sidePanel === 'project' ? 'active' : ''} onClick={() => setSidePanel('project')}>
+                Project
+              </button>
+              <button type="button" role="tab" aria-selected={sidePanel === 'catalog'} className={sidePanel === 'catalog' ? 'active' : ''} onClick={() => setSidePanel('catalog')}>
+                Catalogue
+              </button>
+            </div>
             <div className="side-scroll">
-              {step === 'spaces' && (
-                <>
-                  <section className="panel-section">
-                    <header className="panel-head">
-                      <h3>Spaces</h3>
-                      <div className="panel-actions">
-                        <button type="button" className="panel-btn" onClick={() => pickTool('draw')}>
-                          + Draw
-                        </button>
-                        <button type="button" className={`panel-btn${showDimensions ? ' active' : ''}`} aria-pressed={showDimensions} onClick={() => setShowDimensions(value => !value)}>
-                          + By size
-                        </button>
-                      </div>
-                    </header>
-                    {showDimensions && (
-                      <DimensionForm
-                        units={project.units}
-                        onCreate={(lengthM, widthM, heightM) => {
-                          const originX = project.rooms.reduce((max, room) => Math.max(max, room.xM + room.lengthM), 0);
-                          const room = buildDimensionedRoom(project.rooms.length);
-                          edit({ ...project, rooms: [...project.rooms, { ...room, xM: project.rooms.length ? originX + 0.3 : 0, lengthM, widthM, heightM }] });
-                          setSelection({ kind: 'room', id: room.id });
-                          setShowDimensions(false);
-                          setFitToken(token => token + 1);
-                        }}
-                      />
-                    )}
-                    {project.rooms.length === 0 ? (
-                      <p className="panel-empty">Draw walls or a room on the plan, or add a space by size.</p>
-                    ) : (
-                      <ProjectTree scope="spaces" project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} />
-                    )}
-                  </section>
-                  <section className="panel-section">
-                    <header className="panel-head">
-                      <h3>Wall types</h3>
-                    </header>
-                    <ul className="pick-list">
-                      {WALL_TYPES.map(type => (
-                        <li key={type.id}>
-                          <button
-                            type="button"
-                            className={wallTypeId === type.id ? 'active' : ''}
-                            aria-pressed={wallTypeId === type.id}
-                            onClick={() => {
-                              setTool({ kind: 'select' });
-                              setWallTypeId(current => (current === type.id ? null : type.id));
-                            }}
-                          >
-                            <i className="pick-swatch" style={{ background: wallColor(type.assemblyId) }} />
-                            <span>{type.label}</span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="panel-note">Pick a type, then click walls on the plan to apply it.</p>
-                  </section>
-                </>
-              )}
-              {step === 'loads' && (
-                <>
-                  <section className="panel-section">
-                    <header className="panel-head">
-                      <h3>Loads by space</h3>
-                    </header>
-                    {project.rooms.length === 0 ? (
-                      <p className="panel-empty">Add spaces first. Each load sits inside a space.</p>
-                    ) : (
-                      <ul className="space-loads">
-                        {project.rooms.map(room => {
-                          const items = roomLoads(project, room.id);
-                          const totals = sumLoads(project, items);
-                          return (
-                            <li key={room.id}>
-                              <button type="button" className={`space-row${selection.kind === 'room' && selection.id === room.id ? ' active' : ''}`} onClick={() => setSelection({ kind: 'room', id: room.id })}>
-                                <span className="space-name">{room.name || 'Space'}</span>
-                                <span className="panel-meta">{items.length ? `${formatPower(totals.sensibleW, project.units)} S · ${formatPower(totals.latentW, project.units)} L` : 'No loads'}</span>
-                              </button>
-                              {items.length > 0 && (
-                                <ul className="load-rows">
-                                  {items.map(item => {
-                                    const product = getLoadProduct(item.loadId);
-                                    return (
-                                      <li key={item.id}>
-                                        <button
-                                          type="button"
-                                          className={selection.kind === 'load' && selection.id === item.id ? 'active' : ''}
-                                          onClick={() => setSelection({ kind: 'load', id: item.id })}
-                                          onContextMenu={event => {
-                                            event.preventDefault();
-                                            openMenu({ kind: 'load', id: item.id }, event.clientX, event.clientY);
-                                          }}
-                                        >
-                                          <i className="load-dot" style={{ background: product ? LOAD_CATEGORY_COLOR[product.category] : '#9aa6b0' }} />
-                                          <span>{loadLabel(item, product)}</span>
-                                          {item.override && <span className="pick-tag">{item.override.source === 'manufacturer' ? 'Mfr' : 'Manual'}</span>}
-                                        </button>
-                                      </li>
-                                    );
-                                  })}
-                                </ul>
-                              )}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </section>
-                  <section className="panel-section">
-                    <header className="panel-head">
-                      <h3>Load catalog</h3>
-                    </header>
-                    <input className="panel-search" placeholder="Search loads" aria-label="Search loads" value={loadQuery} onChange={event => setLoadQuery(event.target.value)} />
-                    <div className="chip-row" role="group" aria-label="Load category">
-                      {(['all', ...LOAD_CATEGORY_ORDER] as const).map(id => (
-                        <button key={id} type="button" className={loadCategory === id ? 'active' : ''} aria-pressed={loadCategory === id} onClick={() => setLoadCategory(id)}>
-                          {id === 'all' ? 'All' : LOAD_CATEGORY_LABEL[id]}
-                        </button>
-                      ))}
-                    </div>
-                    <LoadCatalogList query={loadQuery} category={loadCategory} armedId={tool.kind === 'load' ? tool.loadId : null} units={project.units} onArm={armLoad} />
-                    <p className="panel-note">Defaults from ASHRAE Handbook—Fundamentals 2025, Ch. 18. Replace them with manufacturer or manual values in the inspector.</p>
-                  </section>
-                </>
-              )}
-              {step === 'equipment' && (
-                <>
-                  <section className="panel-section">
-                    <header className="panel-head">
-                      <h3>Systems</h3>
-                      <button
-                        type="button"
-                        className="panel-btn"
-                        onClick={event => {
-                          const rect = event.currentTarget.getBoundingClientRect();
-                          openSystemMenu(rect.left, rect.bottom + 4);
-                        }}
-                      >
-                        + Add system
+              {sidePanel === 'project' && step === 'spaces' && (
+                <section className="panel-section">
+                  <header className="panel-head">
+                    <h3>Spaces</h3>
+                    <div className="panel-actions">
+                      <button type="button" className="panel-btn" onClick={() => pickTool('draw')}>
+                        + Draw
                       </button>
-                    </header>
-                    {project.systems.length === 0 && project.equipment.length === 0 ? (
-                      <p className="panel-empty">Add a system, such as kitchen exhaust or make-up air, then place its equipment.</p>
-                    ) : (
-                      <ProjectTree scope="systems" project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} />
-                    )}
-                  </section>
-                  <section className="panel-section">
-                    <header className="panel-head">
-                      <h3>Equipment catalog</h3>
-                    </header>
-                    <input className="panel-search" placeholder="Search equipment" aria-label="Search equipment" value={query} onChange={event => setQuery(event.target.value)} />
-                    <div className="chip-row" role="group" aria-label="Equipment family">
-                      {(['all', ...FAMILY_ORDER] as const).map(id => (
-                        <button key={id} type="button" className={catalogFamily === id ? 'active' : ''} aria-pressed={catalogFamily === id} onClick={() => setCatalogFamily(id)}>
-                          {id === 'all' ? 'All' : FAMILY_LABEL[id]}
-                        </button>
-                      ))}
+                      <button type="button" className={`panel-btn${showDimensions ? ' active' : ''}`} aria-pressed={showDimensions} onClick={() => setShowDimensions(value => !value)}>
+                        + By size
+                      </button>
                     </div>
-                    <CatalogTree
-                      query={query}
-                      family={catalogFamily}
-                      category="all"
-                      armedId={tool.kind === 'place' ? tool.catalogId : null}
-                      showDucts={false}
-                      ductsOnly={false}
-                      onArm={armProduct}
-                      onArmDuct={catalogId => armDuct(catalogId)}
+                  </header>
+                  {showDimensions && (
+                    <DimensionForm
+                      units={project.units}
+                      onCreate={(lengthM, widthM, heightM) => {
+                        const originX = project.rooms.reduce((max, room) => Math.max(max, room.xM + room.lengthM), 0);
+                        const room = buildDimensionedRoom(project.rooms.length);
+                        edit({ ...project, rooms: [...project.rooms, { ...room, xM: project.rooms.length ? originX + 0.3 : 0, lengthM, widthM, heightM }] });
+                        setSelection({ kind: 'room', id: room.id });
+                        setShowDimensions(false);
+                        setFitToken(token => token + 1);
+                      }}
                     />
-                  </section>
-                </>
+                  )}
+                  {project.rooms.length === 0 ? (
+                    <p className="panel-empty">Draw walls or a room on the plan, or add a space by size.</p>
+                  ) : (
+                    <ProjectTree scope="spaces" project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} />
+                  )}
+                </section>
               )}
-              {step === 'ducts' && (
+              {sidePanel === 'project' && step === 'loads' && (
+                <section className="panel-section">
+                  <header className="panel-head">
+                    <h3>Loads by space</h3>
+                  </header>
+                  {project.rooms.length === 0 ? (
+                    <p className="panel-empty">Add spaces first. Each load sits inside a space.</p>
+                  ) : (
+                    <ul className="space-loads">
+                      {project.rooms.map(room => {
+                        const items = roomLoads(project, room.id);
+                        const totals = sumLoads(project, items);
+                        return (
+                          <li key={room.id}>
+                            <button type="button" className={`space-row${selection.kind === 'room' && selection.id === room.id ? ' active' : ''}`} onClick={() => setSelection({ kind: 'room', id: room.id })}>
+                              <span className="space-name">{room.name || 'Space'}</span>
+                              <span className="panel-meta">{items.length ? `${formatPower(totals.sensibleW, project.units)} S · ${formatPower(totals.latentW, project.units)} L` : 'No loads'}</span>
+                            </button>
+                            {items.length > 0 && (
+                              <ul className="load-rows">
+                                {items.map(item => {
+                                  const product = getLoadProduct(item.loadId);
+                                  return (
+                                    <li key={item.id}>
+                                      <button
+                                        type="button"
+                                        className={selection.kind === 'load' && selection.id === item.id ? 'active' : ''}
+                                        onClick={() => setSelection({ kind: 'load', id: item.id })}
+                                        onContextMenu={event => {
+                                          event.preventDefault();
+                                          openMenu({ kind: 'load', id: item.id }, event.clientX, event.clientY);
+                                        }}
+                                      >
+                                        <i className="load-dot" style={{ background: product ? LOAD_CATEGORY_COLOR[product.category] : '#9aa6b0' }} />
+                                        <span>{loadLabel(item, product)}</span>
+                                        {item.override && <span className="pick-tag">{item.override.source === 'manufacturer' ? 'Mfr' : 'Manual'}</span>}
+                                      </button>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </section>
+              )}
+              {sidePanel === 'project' && step === 'equipment' && (
+                <section className="panel-section">
+                  <header className="panel-head">
+                    <h3>Systems</h3>
+                    <button
+                      type="button"
+                      className="panel-btn"
+                      onClick={event => {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        openSystemMenu(rect.left, rect.bottom + 4);
+                      }}
+                    >
+                      + Add system
+                    </button>
+                  </header>
+                  {project.systems.length === 0 && project.equipment.length === 0 ? (
+                    <p className="panel-empty">Add a system, such as kitchen exhaust or make-up air, then place its equipment.</p>
+                  ) : (
+                    <ProjectTree scope="systems" project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} />
+                  )}
+                </section>
+              )}
+              {sidePanel === 'project' && step === 'ducts' && (
                 <>
                   <section className="panel-section">
                     <header className="panel-head">
@@ -915,11 +836,8 @@ export function Studio({
                           <li key={`${port.hit.equipmentId}:${port.hit.portId}`}>
                             <button
                               type="button"
-                              title={port.productId ? 'Draw a duct from this port' : 'Assign this equipment to a system first'}
-                              onClick={() => {
-                                if (port.productId) armDuct(port.productId, { systemId: port.systemId, service: port.hit.service });
-                                else setSelection({ kind: 'equipment', id: port.hit.equipmentId });
-                              }}
+                              title="Select this equipment"
+                              onClick={() => setSelection({ kind: 'equipment', id: port.hit.equipmentId })}
                             >
                               <i className="pick-swatch" style={{ background: port.color }} />
                               <span>
@@ -938,29 +856,14 @@ export function Studio({
                       <span className="panel-meta">{(project.ducts ?? []).length}</span>
                     </header>
                     {(project.ducts ?? []).length === 0 ? (
-                      <p className="panel-empty">No ducts yet. Pick an open port or a duct product.</p>
+                      <p className="panel-empty">No ducts yet. Drag a product from Catalogue onto the plan.</p>
                     ) : (
                       <ProjectTree scope="ducts" project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} />
                     )}
                   </section>
-                  <section className="panel-section">
-                    <header className="panel-head">
-                      <h3>Duct products</h3>
-                    </header>
-                    <CatalogTree
-                      query=""
-                      family="all"
-                      category="all"
-                      armedId={tool.kind === 'duct' ? tool.catalogId : null}
-                      showDucts
-                      ductsOnly
-                      onArm={armProduct}
-                      onArmDuct={catalogId => armDuct(catalogId)}
-                    />
-                  </section>
                 </>
               )}
-              {step === 'check' && (
+              {sidePanel === 'project' && step === 'check' && (
                 <>
                   <section className="panel-section">
                     <header className="panel-head">
@@ -1036,6 +939,113 @@ export function Studio({
                   </section>
                 </>
               )}
+              {sidePanel === 'catalog' && step === 'check' && (
+                <section className="panel-section">
+                  <p className="panel-empty">Nothing to place in Check. Use the Catalogue tab on Spaces, Loads, Equipment, or Ducts.</p>
+                </section>
+              )}
+              {sidePanel === 'catalog' && step === 'spaces' && (
+                <section className="panel-section">
+                  <header className="panel-head">
+                    <h3>Construction</h3>
+                  </header>
+                  <input className="panel-search" placeholder="Search construction" aria-label="Search construction" value={spaceQuery} onChange={event => setSpaceQuery(event.target.value)} />
+                  {spaceWalls.length > 0 && (
+                    <div className="load-group">
+                      <p className="load-group-title">Walls</p>
+                      <ul className="pick-list">
+                        {spaceWalls.map(type => (
+                          <li key={type.id}>
+                            <CatalogDragRow token={catalogToken({ kind: 'wall', id: type.id })} title={type.detail}>
+                              <i className="pick-swatch" style={{ background: wallColor(type.assemblyId) }} />
+                              <span>{type.label}</span>
+                            </CatalogDragRow>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {spaceOpenings.length > 0 && (
+                    <div className="load-group">
+                      <p className="load-group-title">Openings</p>
+                      <ul className="pick-list">
+                        {spaceOpenings.map(kind => (
+                          <li key={kind}>
+                            <CatalogDragRow token={catalogToken({ kind: 'opening', opening: kind })}>
+                              <DrawIcon kind={kind} />
+                              <span>{kind === 'door' ? 'Door' : 'Window'}</span>
+                            </CatalogDragRow>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {spaceWalls.length === 0 && spaceOpenings.length === 0 && <p className="panel-empty">No construction matches.</p>}
+                  <p className="panel-note">Drag a wall type, door, or window onto a wall.</p>
+                </section>
+              )}
+              {sidePanel === 'catalog' && step === 'loads' && (
+                <section className="panel-section">
+                  <header className="panel-head">
+                    <h3>Loads</h3>
+                  </header>
+                  <input className="panel-search" placeholder="Search loads" aria-label="Search loads" value={loadQuery} onChange={event => setLoadQuery(event.target.value)} />
+                  <div className="chip-row" role="group" aria-label="Load category">
+                    {(['all', ...LOAD_CATEGORY_ORDER] as const).map(id => (
+                      <button key={id} type="button" className={loadCategory === id ? 'active' : ''} aria-pressed={loadCategory === id} onClick={() => setLoadCategory(id)}>
+                        {id === 'all' ? 'All' : LOAD_CATEGORY_LABEL[id]}
+                      </button>
+                    ))}
+                  </div>
+                  <LoadCatalogList query={loadQuery} category={loadCategory} units={project.units} />
+                  <p className="panel-note">Drag a load into a space. Defaults are from ASHRAE Handbook—Fundamentals 2025, Ch. 18.</p>
+                </section>
+              )}
+              {sidePanel === 'catalog' && step === 'equipment' && (
+                <section className="panel-section">
+                  <header className="panel-head">
+                    <h3>Equipment</h3>
+                  </header>
+                  <input className="panel-search" placeholder="Search equipment" aria-label="Search equipment" value={query} onChange={event => setQuery(event.target.value)} />
+                  <div className="chip-row" role="group" aria-label="Equipment family">
+                    {(['all', ...FAMILY_ORDER] as const).map(id => (
+                      <button key={id} type="button" className={catalogFamily === id ? 'active' : ''} aria-pressed={catalogFamily === id} onClick={() => setCatalogFamily(id)}>
+                        {id === 'all' ? 'All' : FAMILY_LABEL[id]}
+                      </button>
+                    ))}
+                  </div>
+                  <CatalogTree
+                    query={query}
+                    family={catalogFamily}
+                    category="all"
+                    armedId={null}
+                    showDucts={false}
+                    ductsOnly={false}
+                    onArm={() => {}}
+                    onArmDuct={() => {}}
+                  />
+                  <p className="panel-note">Drag equipment onto the plan.</p>
+                </section>
+              )}
+              {sidePanel === 'catalog' && step === 'ducts' && (
+                <section className="panel-section">
+                  <header className="panel-head">
+                    <h3>Ducts</h3>
+                  </header>
+                  <input className="panel-search" placeholder="Search ducts" aria-label="Search ducts" value={ductQuery} onChange={event => setDuctQuery(event.target.value)} />
+                  <CatalogTree
+                    query={ductQuery}
+                    family="all"
+                    category="all"
+                    armedId={null}
+                    showDucts
+                    ductsOnly
+                    onArm={() => {}}
+                    onArmDuct={() => {}}
+                  />
+                  <p className="panel-note">Drag a duct onto the plan to start a run, then click to bend.</p>
+                </section>
+              )}
             </div>
           </aside>
         )}
@@ -1099,6 +1109,8 @@ export function Studio({
                     }}
                     onPlace={placeEquipment}
                     onPlaceLoad={placeLoad}
+                    onBeginDuct={armDuct}
+                    onPaintWall={paintWall}
                     onMoveLoad={(id, xM, yM) => edit(updateLoad(project, id, { xM, yM }))}
                     onContextMenu={openMenu}
                     onRoomsChange={rooms => edit({ ...project, rooms })}
@@ -1164,6 +1176,7 @@ export function Studio({
                         select({ kind: 'room', id: room.id });
                       }}
                       onPlace={placeEquipment}
+                      onPlaceLoad={placeLoad}
                       onContextMenu={openMenu}
                     />
                   </div>
@@ -1214,8 +1227,19 @@ export function Studio({
                   </button>
                 </div>
                 {layersOpen && <LayersMenu layers={layers} scene={scene} hideRoof={hideRoof} onChange={setLayers} onHideRoof={setHideRoof} onClose={() => setLayersOpen(false)} />}
-              </div>
               <div className="options-strip" aria-label={`${stepLabel} options`}>
+                <div className="strip-scroll">
+                {step === 'spaces' && (
+                  <div className="plan-legend strip-legend">
+                    <div><i className="swatch" style={{ background: wallColor('asm-wall-dining') }} />Exterior</div>
+                    <div><i className="swatch" style={{ background: wallColor('asm-wall-kitchen') }} />Service</div>
+                    <div><i className="swatch" style={{ background: wallColor('asm-wall-partition') }} />Partition</div>
+                    <div><i className="swatch" style={{ background: wallColor('asm-wall-walkin') }} />Walk-in</div>
+                    <div><i className="swatch" style={{ background: wallColor('asm-wall-glass') }} />Glass</div>
+                    <div><i className="swatch" style={{ background: INTERFACE_COLOR }} />Interface</div>
+                    <div><i className="swatch" style={{ background: wallColor(null) }} />No construction</div>
+                  </div>
+                )}
                 {step === 'spaces' && wallType && (
                   <span className="opt-chip">
                     <i className="pick-swatch" style={{ background: wallColor(wallType.assemblyId) }} />
@@ -1224,25 +1248,6 @@ export function Studio({
                       ×
                     </button>
                   </span>
-                )}
-                {step === 'loads' && (
-                  <>
-                    <label className="opt">
-                      <span>Load</span>
-                      <select value={loadId} onChange={event => armLoad(event.target.value)}>
-                        {LOAD_CATEGORY_ORDER.map(category => (
-                          <optgroup key={category} label={LOAD_CATEGORY_LABEL[category]}>
-                            {LOAD_CATALOG.filter(item => item.category === category).map(item => (
-                              <option key={item.id} value={item.id}>
-                                {item.group} · {item.name}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ))}
-                      </select>
-                    </label>
-                    {loadProduct && <span className="opt-spec">{loadSpec(loadProduct, project.units)}</span>}
-                  </>
                 )}
                 {step === 'equipment' && (
                   <>
@@ -1278,7 +1283,9 @@ export function Studio({
                     <DuctLegend />
                   </>
                 )}
-                <span className="opt-hint">{toolHint()}</span>
+                </div>
+                <span className="opt-hint" title={toolHint()}>{toolHint()}</span>
+              </div>
               </div>
             </>
           )}
@@ -1457,6 +1464,23 @@ function CatalogTree({
   const families = ductsOnly ? [] : FAMILY_ORDER.filter(item => family === 'all' || item === family);
   const ductNeedle = query.trim().toLowerCase();
   const ductProducts = DUCT_CATALOG.filter(product => `${product.name} ${product.manufacturer} ${product.model} ${product.supplier} ${product.group}`.toLowerCase().includes(ductNeedle));
+  if (ductsOnly) {
+    return (
+      <ul className="tn-tree">
+        {ductProducts.length === 0 && <li className="tree-empty">No ducts match.</li>}
+        {ductProducts.map(product => (
+          <TreeNode
+            key={product.id}
+            active={armedId === product.id}
+            dragId={catalogToken({ kind: 'duct', id: product.id })}
+            title={`${product.name} — ${product.manufacturer}`}
+            onSelect={() => onArmDuct(product.id)}
+            content={<><span className="tree-label">{product.name}</span><span className="tree-meta">{product.manufacturer}</span></>}
+          />
+        ))}
+      </ul>
+    );
+  }
   return (
     <ul className="tn-tree">
       {showDucts && (
@@ -1472,6 +1496,7 @@ function CatalogTree({
             <TreeNode
               key={product.id}
               active={armedId === product.id}
+              dragId={catalogToken({ kind: 'duct', id: product.id })}
               title={product.model}
               onSelect={() => onArmDuct(product.id)}
               content={<><span className="tree-label">{product.name}</span><span className="tree-meta">{product.manufacturer}</span></>}
@@ -1531,7 +1556,7 @@ function CatalogTree({
                     <TreeNode
                       key={product.id}
                       active={armedId === product.id}
-                      dragId={product.id}
+                      dragId={catalogToken({ kind: 'equipment', id: product.id })}
                       title={product.model}
                       onSelect={() => onArm(product.id)}
                       content={
@@ -2071,18 +2096,40 @@ function LayersMenu({
   );
 }
 
+function CatalogDragRow({ token, title, children }: { token: string; title?: string; children: ReactNode }) {
+  const dragged = useRef(false);
+  return (
+    <button
+      type="button"
+      draggable
+      title={title ?? 'Drag onto the plan'}
+      onDragStart={event => {
+        dragged.current = true;
+        event.dataTransfer.setData(CATALOG_MIME, token);
+        event.dataTransfer.effectAllowed = 'copy';
+      }}
+      onDragEnd={() => {
+        window.setTimeout(() => {
+          dragged.current = false;
+        }, 50);
+      }}
+      onClick={event => {
+        if (dragged.current) event.preventDefault();
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 function LoadCatalogList({
   query,
   category,
-  armedId,
   units,
-  onArm,
 }: {
   query: string;
   category: LoadCategory | 'all';
-  armedId: string | null;
   units: Project['units'];
-  onArm: (id: string) => void;
 }) {
   const needle = query.trim().toLowerCase();
   const categories = category === 'all' ? LOAD_CATEGORY_ORDER : [category];
@@ -2111,10 +2158,10 @@ function LoadCatalogList({
               <ul className="pick-list">
                 {group.items.map(item => (
                   <li key={item.id}>
-                    <button type="button" className={armedId === item.id ? 'active' : ''} aria-pressed={armedId === item.id} title={item.source} onClick={() => onArm(item.id)}>
+                    <CatalogDragRow token={catalogToken({ kind: 'load', id: item.id })} title={`${item.name}. ${loadSpec(item, units)}. ${item.source}`}>
                       <span>{item.name}</span>
                       <span className="pick-meta">{loadSpec(item, units)}</span>
-                    </button>
+                    </CatalogDragRow>
                   </li>
                 ))}
               </ul>

@@ -1,5 +1,5 @@
 import { catalogPorts, getProduct } from './catalog';
-import { DUCT_CATALOG, ductPairAllowed, streamFor } from './ductCatalog';
+import { streamFor } from './ductCatalog';
 import { DUCT_SERVICE_LABEL, openPorts } from './ducts';
 import { planningIssues } from './issues';
 import { getLoadProduct } from './loadCatalog';
@@ -125,15 +125,14 @@ export function buildChecks(
     const item = project.equipment.find(entry => entry.id === hit.equipmentId);
     const system = item?.systemId ? project.systems.find(entry => entry.id === item.systemId) : undefined;
     if (!item || !system || !streamFor(system.kind, hit.service)) continue;
-    const product = DUCT_CATALOG.find(entry => ductPairAllowed(entry, system.kind, hit.service));
     issues.push({
       id: `port-${hit.equipmentId}-${hit.portId}`,
       step: 'ducts',
       severity: 'planning',
       message: `${equipmentName(project, hit.equipmentId)} ${hit.portId} port has no ${DUCT_SERVICE_LABEL[hit.service].toLowerCase()} duct.`,
       selection: { kind: 'equipment', id: item.id },
-      fix: product ? { kind: 'duct', catalogId: product.id, systemId: system.id, service: hit.service } : { kind: 'select' },
-      fixLabel: product ? 'Draw duct' : 'Show',
+      fix: { kind: 'select' },
+      fixLabel: 'Show',
     });
   }
   return issues;

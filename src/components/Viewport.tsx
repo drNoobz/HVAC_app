@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CATALOG_MIME, equipmentSizeM, getProduct } from '@/domain/catalog';
+import { parseCatalogDrag } from '@/domain/catalogDrag';
 import type { EditorTool, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
 import { outlineCentroid, runGeom, solidSpans, WALL_THICK_M } from '@/domain/wallDraw';
 import { doorArc, doorHinge, doorSwingSide } from '@/domain/doorSwing';
@@ -36,6 +37,7 @@ export interface ViewportProps {
   onSelect: (selection: Selection) => void;
   onDrawRoom: (rect: { xM: number; yM: number; lengthM: number; widthM: number }) => void;
   onPlace: (point: { xM: number; yM: number }, catalogId: string) => void;
+  onPlaceLoad?: (point: { xM: number; yM: number }, loadId: string) => void;
   onContextMenu: (selection: Selection, x: number, y: number) => void;
 }
 
@@ -455,10 +457,10 @@ function viewPoses(rooms: readonly Room[]): {
   };
 }
 
-export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWalls, selection, tool, fitToken, hideRoof, cameraPose = 'orbit', onCameraSettled, onSelect, onDrawRoom, onPlace, onContextMenu }: ViewportProps) {
+export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWalls, selection, tool, fitToken, hideRoof, cameraPose = 'orbit', onCameraSettled, onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu }: ViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const toolRef = useRef(tool);
-  const handlersRef = useRef({ onSelect, onDrawRoom, onPlace, onContextMenu });
+  const handlersRef = useRef({ onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu });
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
@@ -483,7 +485,7 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
   toolRef.current = tool;
   roomsRef.current = rooms;
   poseListenerRef.current = onCameraSettled;
-  handlersRef.current = { onSelect, onDrawRoom, onPlace, onContextMenu };
+  handlersRef.current = { onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu };
 
   useEffect(() => {
     const host = hostRef.current;
@@ -657,11 +659,7 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
         controls.enabled = true;
         return;
       }
-      if (moved < CLICK_PX && toolRef.current.kind === 'place' && point) {
-        handlersRef.current.onPlace({ xM: snap(point.x), yM: snap(point.y) }, toolRef.current.catalogId);
-        return;
-      }
-      if (moved < CLICK_PX && toolRef.current.kind === 'select') {
+      if (moved < CLICK_PX && toolRef.current.kind !== 'draw') {
         const picked = pickSelection(event);
         if (contentRef.current) paintSelection(contentRef.current, picked);
         renderer.render(scene, camera);
@@ -692,14 +690,16 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
     const onCatalogDragLeave = () => markCatalogDrop(false);
     const onCatalogDrop = (event: DragEvent) => {
       markCatalogDrop(false);
-      const catalogId = event.dataTransfer?.getData(CATALOG_MIME);
-      if (!catalogId) return;
+      const drag = parseCatalogDrag(event.dataTransfer?.getData(CATALOG_MIME) ?? '');
+      if (!drag || (drag.kind !== 'equipment' && drag.kind !== 'load')) return;
       event.preventDefault();
       if (!setPointer(event.clientX, event.clientY)) return;
       raycaster.setFromCamera(pointer, camera);
       const hit = raycaster.intersectObject(ground)[0];
       if (!hit) return;
-      handlersRef.current.onPlace({ xM: snap(hit.point.x), yM: snap(hit.point.y) }, catalogId);
+      const point = { xM: snap(hit.point.x), yM: snap(hit.point.y) };
+      if (drag.kind === 'load') handlersRef.current.onPlaceLoad?.(point, drag.id);
+      else handlersRef.current.onPlace(point, drag.id);
     };
     renderer.domElement.addEventListener('dragover', onCatalogDragOver);
     renderer.domElement.addEventListener('dragleave', onCatalogDragLeave);

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { CATALOG_MIME, equipmentSizeM, getProduct } from '@/domain/catalog';
+import { parseCatalogDrag } from '@/domain/catalogDrag';
 import { streamFor } from '@/domain/ductCatalog';
 import { ductCrossings, ductSizeLabel, endRise, equipmentPortHits, nearestPort, portFits, type DuctDraftPoint } from '@/domain/ducts';
 import { equipmentGlyph, equipmentIconFor } from './EquipmentIcon';
@@ -409,6 +410,8 @@ export function PlanView({
   onNorthChange,
   onPlaceLoad,
   onMoveLoad,
+  onBeginDuct,
+  onPaintWall,
   step,
   layers,
 }: {
@@ -439,6 +442,8 @@ export function PlanView({
   onNorthChange: (deg: number) => void;
   onPlaceLoad: (point: { xM: number; yM: number }, loadId: string) => void;
   onMoveLoad: (id: string, xM: number, yM: number) => void;
+  onBeginDuct: (catalogId: string) => Extract<EditorTool, { kind: 'duct' }>;
+  onPaintWall: (selection: Selection, wallTypeId: string) => void;
   step: BuildStep;
   layers: PlanLayers;
 }) {
@@ -733,11 +738,37 @@ export function PlanView({
       }}
       onDrop={event => {
         setCatalogOver(false);
-        const catalogId = event.dataTransfer.getData(CATALOG_MIME);
-        if (!catalogId) return;
+        const drag = parseCatalogDrag(event.dataTransfer.getData(CATALOG_MIME));
+        if (!drag) return;
         event.preventDefault();
         const point = toWorld(event.clientX, event.clientY);
-        onPlace({ xM: snap(point.xM), yM: snap(point.yM) }, catalogId);
+        const dropped = { xM: snap(point.xM), yM: snap(point.yM) };
+        if (drag.kind === 'equipment') {
+          onPlace(dropped, drag.id);
+          return;
+        }
+        if (drag.kind === 'load') {
+          onPlaceLoad(dropped, drag.id);
+          return;
+        }
+        if (drag.kind === 'opening') {
+          const spot = locateOpening(project.rooms, wallRuns, dropped, drag.opening);
+          if (spot) onPlaceOpening(spot, drag.opening);
+          return;
+        }
+        if (drag.kind === 'wall') {
+          const spot = locateOpening(project.rooms, wallRuns, dropped, 'door');
+          const target = wallUnderPointer(event.clientX, event.clientY) ?? (spot?.roomId ? { kind: 'surface' as const, roomId: spot.roomId, face: 'walls' as const, wallFace: spot.face } : null);
+          if (target) onPaintWall(target, drag.id);
+          return;
+        }
+        const armed = onBeginDuct(drag.id);
+        if (!armed.systemId) return;
+        const snapped = snapDuct(dropped.xM, dropped.yM, project, armed.systemId, armed.service);
+        ductChainRef.current = [snapped];
+        ductSettings.current = armed;
+        setDuctChain([snapped]);
+        setDuctAim(snapped);
       }}
     >
       <div className="plan-sheet">
@@ -759,10 +790,6 @@ export function PlanView({
             drag.current = { kind: 'draw', x: start.x, y: start.y, pointerX: event.clientX, pointerY: event.clientY, view };
             setDraft({ xM: start.x, yM: start.y, lengthM: SNAP_M, widthM: SNAP_M });
             event.currentTarget.setPointerCapture(event.pointerId);
-            return;
-          }
-          if (tool.kind === 'place' || tool.kind === 'load') {
-            drag.current = { kind: 'place', x: point.xM, y: point.yM, pointerX: event.clientX, pointerY: event.clientY, view };
             return;
           }
           if (tool.kind === 'wall') {
@@ -794,17 +821,10 @@ export function PlanView({
             setAim(snapped);
             return;
           }
-          if (tool.kind === 'duct') {
+          if (tool.kind === 'duct' && ductChainRef.current) {
             if (!tool.systemId) return;
             const snapped = snapDuct(point.xM, point.yM, project, tool.systemId, tool.service);
             const points = ductChainRef.current;
-            if (!points) {
-              const next = [snapped];
-              ductChainRef.current = next;
-              setDuctChain(next);
-              setDuctAim(snapped);
-              return;
-            }
             const last = points[points.length - 1];
             if (Math.hypot(snapped.x - last.x, snapped.y - last.y) < 0.15) return;
             const next = [...points, snapped];
@@ -829,15 +849,10 @@ export function PlanView({
             setDuctAim(snapped);
             return;
           }
-          if (tool.kind === 'door' || tool.kind === 'window') {
-            drag.current = { kind: 'stamp', x: point.xM, y: point.yM, pointerX: event.clientX, pointerY: event.clientY, view };
-            showSpot(locateOpening(project.rooms, wallRuns, point, tool.kind));
-            event.currentTarget.setPointerCapture(event.pointerId);
-            return;
-          }
           const target = event.target as Element;
           const hit = target.closest('[data-hit]');
-          if (tool.kind === 'select' && hit) {
+          const selects = tool.kind === 'select' || tool.kind === 'place' || tool.kind === 'load' || tool.kind === 'door' || tool.kind === 'window' || (tool.kind === 'duct' && !ductChainRef.current);
+          if (selects && hit) {
             const roomId = hit.getAttribute('data-room');
             const room = roomId ? project.rooms.find(item => item.id === roomId) : undefined;
             if (hit.getAttribute('data-hit') === 'wall' && room) {
@@ -1543,21 +1558,25 @@ export function PlanView({
         </div>
       </div>
       </div>
-      {showSpaces && step === 'spaces' && (
-      <div className="plan-foot">
-      <div className="plan-legend">
-            <div><i className="swatch" style={{ background: wallColor('asm-wall-dining') }} />Exterior</div>
-            <div><i className="swatch" style={{ background: wallColor('asm-wall-kitchen') }} />Service</div>
-            <div><i className="swatch" style={{ background: wallColor('asm-wall-partition') }} />Partition</div>
-            <div><i className="swatch" style={{ background: wallColor('asm-wall-walkin') }} />Walk-in</div>
-            <div><i className="swatch" style={{ background: wallColor('asm-wall-glass') }} />Glass</div>
-            <div><i className="swatch" style={{ background: INTERFACE_COLOR }} />Interface</div>
-            <div><i className="swatch" style={{ background: wallColor(null) }} />No construction</div>
-      </div>
-      </div>
-      )}
     </div>
   );
+}
+
+function wallUnderPointer(clientX: number, clientY: number): Selection | null {
+  const el = document.elementFromPoint(clientX, clientY);
+  const edge = el?.closest('[data-edge]');
+  if (edge) {
+    const roomId = edge.getAttribute('data-room');
+    const index = Number(edge.getAttribute('data-edge'));
+    if (roomId && Number.isInteger(index) && index >= 0) return { kind: 'surface', roomId, face: 'walls', edge: index };
+  }
+  const wall = el?.closest('[data-hit="wall"]');
+  if (wall) {
+    const roomId = wall.getAttribute('data-room');
+    const face = wall.getAttribute('data-face');
+    if (roomId && (face === 'px' || face === 'nx' || face === 'py' || face === 'ny')) return { kind: 'surface', roomId, face: 'walls', wallFace: face };
+  }
+  return null;
 }
 
 function RoomDimensions({
