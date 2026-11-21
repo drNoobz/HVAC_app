@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { CATALOG_MIME, getProduct } from '@/domain/catalog';
+import { CATALOG_MIME, equipmentSizeM, getProduct } from '@/domain/catalog';
 import { equipmentGlyph, equipmentIconFor } from './EquipmentIcon';
 import type { EditorTool, Opening, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
-import { locateOpening, NO_WALL_RUNS, outlineCentroid, outlineRoomOk, polygonArea, roomLoop, runGeom, runOpeningEnds, snapDrawPoint, wallAngleDeg, wallQuad, wallQuads, type DrawPoint, type OpeningSpot, type WallSnap } from '@/domain/wallDraw';
+import { constrainEquipmentPosition, roomAtPoint } from '@/domain/projectOps';
+import { locateOpening, NO_WALL_RUNS, outlineCentroid, outlineRoomOk, pointInOutline, polygonArea, roomLoop, runGeom, runOpeningEnds, snapDrawPoint, wallAngleDeg, wallQuad, wallQuads, type DrawPoint, type OpeningSpot, type WallSnap } from '@/domain/wallDraw';
 import { METERS_PER_FOOT, formatArea, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
 import { doorArc, doorHinge, doorSwingSide, doorwayKey, openingEnds } from '@/domain/doorSwing';
 import { clampSharedEdge, moveRoomEdge, slideOpeningsTogether } from '@/domain/spanFit';
@@ -98,17 +99,6 @@ function dragUnitStep(pxPerM: number, units: Project['units']): number {
 function quantizeMeters(meters: number, step: number, units: Project['units']): number {
   const per = units === 'IP' ? METERS_PER_FOOT : 1;
   return round3((Math.round(meters / per / step) * step) * per);
-}
-
-function clampSpan(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, Math.min(min, max)), Math.max(min, max));
-}
-
-function dragReadoutPoint(face: WallFace, edge: number, along: number, inset: number): { x: number; y: number } {
-  if (face === 'px') return { x: edge - inset, y: along };
-  if (face === 'nx') return { x: edge + inset, y: along };
-  if (face === 'py') return { x: along, y: edge - inset };
-  return { x: along, y: edge + inset };
 }
 
 function round3(value: number): number {
@@ -324,6 +314,7 @@ export function PlanView({
   onRoomsChange,
   onMoveSpace,
   onMoveEquipment,
+  onRotateEquipment,
   onNorthChange,
   sheet,
 }: {
@@ -341,6 +332,7 @@ export function PlanView({
   onRoomsChange: (rooms: Room[]) => void;
   onMoveSpace: (roomId: string, dx: number, dy: number) => void;
   onMoveEquipment: (id: string, xM: number, yM: number) => void;
+  onRotateEquipment: (id: string, yawDeg: number) => void;
   onNorthChange: (deg: number) => void;
   sheet: 'all' | 'spaces' | 'systems';
 }) {
@@ -356,10 +348,13 @@ export function PlanView({
   const [spot, setSpot] = useState<OpeningSpot | null>(null);
   const [preview, setPreview] = useState<Room[] | null>(null);
   const [movingEquipment, setMovingEquipment] = useState<{ id: string; xM: number; yM: number } | null>(null);
+  const [rotatingEquipment, setRotatingEquipment] = useState<{ id: string; yawDeg: number } | null>(null);
+  const rotatingRef = useRef<{ id: string; yawDeg: number } | null>(null);
   const [gesture, setGesture] = useState<
     | { kind: 'wall' | 'opening'; roomId: string; face: WallFace; openingId?: string }
     | { kind: 'space'; roomId: string }
     | { kind: 'equipment'; id: string }
+    | { kind: 'rotate'; id: string }
     | null
   >(null);
   const [readout, setReadout] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -376,6 +371,7 @@ export function PlanView({
     | { kind: 'opening'; moves: { roomId: string; openingId: string }[]; grab: number; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace; armed: boolean }
     | { kind: 'space'; id: string; base: Room[]; grabX: number; grabY: number; pointerX: number; pointerY: number; view: ViewBox; armed: boolean }
     | { kind: 'equipment'; id: string; xM: number; yM: number; grabX: number; grabY: number; pointerX: number; pointerY: number; view: ViewBox; armed: boolean }
+    | { kind: 'rotate'; id: string; xM: number; yM: number; startYaw: number; startAngle: number; pointerX: number; pointerY: number; view: ViewBox }
     | null
   >(null);
   const wallRuns = project.wallRuns ?? NO_WALL_RUNS;
@@ -495,6 +491,16 @@ export function PlanView({
     movingRef.current = next;
     setMovingEquipment(next);
   };
+  const showRotate = (next: { id: string; yawDeg: number } | null) => {
+    rotatingRef.current = next;
+    setRotatingEquipment(next);
+  };
+  const snapYaw = (deg: number) => {
+    const stepped = Math.round(deg / 5) * 5;
+    let normalized = ((stepped % 360) + 360) % 360;
+    if (normalized > 180) normalized -= 360;
+    return normalized;
+  };
   const rooms = preview ?? project.rooms;
   const showSpaces = sheet !== 'systems';
   const showSystems = sheet !== 'spaces';
@@ -519,6 +525,28 @@ export function PlanView({
   const measuredOpening = gesture?.kind === 'opening'
     ? gestureRoom?.openings.find(opening => opening.id === gesture.openingId)
     : undefined;
+  const clearanceItem = (() => {
+    if (movingEquipment) {
+      const base = project.equipment.find(item => item.id === movingEquipment.id);
+      return base ? { ...base, xM: movingEquipment.xM, yM: movingEquipment.yM } : null;
+    }
+    if (rotatingEquipment) {
+      const base = project.equipment.find(item => item.id === rotatingEquipment.id);
+      return base ? { ...base, yawDeg: rotatingEquipment.yawDeg } : null;
+    }
+    if (selection.kind === 'equipment' && gesture?.kind !== 'equipment' && gesture?.kind !== 'rotate') {
+      return project.equipment.find(item => item.id === selection.id) ?? null;
+    }
+    return null;
+  })();
+  const clearanceFoot = clearanceItem ? componentFootprintAabb(clearanceItem) : null;
+  const clearanceRoom = clearanceItem ? roomAtPoint(rooms, clearanceItem.xM, clearanceItem.yM) : null;
+  const planEquipment = project.equipment.map(item => {
+    const before = gesture?.kind === 'space' ? project.rooms.find(room => room.id === item.roomId) : undefined;
+    const after = before ? rooms.find(room => room.id === before.id) : undefined;
+    const shifted = before && after ? { ...item, xM: item.xM + (after.xM - before.xM), yM: item.yM + (after.yM - before.yM) } : item;
+    return movingEquipment?.id === item.id ? { ...shifted, xM: movingEquipment.xM, yM: movingEquipment.yM } : shifted;
+  });
   const openHitMenu = (event: ReactMouseEvent, next: Selection) => {
     event.preventDefault();
     event.stopPropagation();
@@ -537,7 +565,7 @@ export function PlanView({
 
   return (
     <div
-      className={['plan-wrap', tool.kind === 'draw' ? 'is-draw' : '', tool.kind === 'place' ? 'is-place' : '', tool.kind === 'select' ? 'is-select' : '', tool.kind === 'wall' ? 'is-wall' : '', tool.kind === 'door' || tool.kind === 'window' ? 'is-opening-tool' : '', gesture ? 'is-dragging' : '', gesture?.kind === 'equipment' ? 'is-moving-equipment' : '', catalogOver ? 'is-catalog-drop' : ''].filter(Boolean).join(' ')}
+      className={['plan-wrap', tool.kind === 'draw' ? 'is-draw' : '', tool.kind === 'place' ? 'is-place' : '', tool.kind === 'select' ? 'is-select' : '', tool.kind === 'wall' ? 'is-wall' : '', tool.kind === 'door' || tool.kind === 'window' ? 'is-opening-tool' : '', gesture ? 'is-dragging' : '', gesture?.kind === 'equipment' ? 'is-moving-equipment' : '', gesture?.kind === 'rotate' ? 'is-rotating-equipment' : '', catalogOver ? 'is-catalog-drop' : ''].filter(Boolean).join(' ')}
       onDragEnter={event => {
         if (![...event.dataTransfer.types].includes(CATALOG_MIME)) return;
         event.preventDefault();
@@ -633,6 +661,27 @@ export function PlanView({
                 .filter((item): item is { id: string; face: WallFace } => item.face !== null);
               drag.current = { kind: 'wall', edges: [{ id: room.id, face }, ...partners], base: project.rooms, pointerX: event.clientX, pointerY: event.clientY, view, face, armed: false };
               event.currentTarget.setPointerCapture(event.pointerId);
+              return;
+            }
+            if (hit.getAttribute('data-hit') === 'equipment-rotate') {
+              const id = hit.getAttribute('data-id');
+              const item = id ? project.equipment.find(entry => entry.id === id) : undefined;
+              if (item) {
+                drag.current = {
+                  kind: 'rotate',
+                  id: item.id,
+                  xM: item.xM,
+                  yM: item.yM,
+                  startYaw: item.yawDeg,
+                  startAngle: (Math.atan2(point.yM - item.yM, point.xM - item.xM) * 180) / Math.PI,
+                  pointerX: event.clientX,
+                  pointerY: event.clientY,
+                  view,
+                };
+                setGesture({ kind: 'rotate', id: item.id });
+                onSelect({ kind: 'equipment', id: item.id });
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }
               return;
             }
             if (hit.getAttribute('data-hit') === 'equipment') {
@@ -751,10 +800,21 @@ export function PlanView({
               setGesture({ kind: 'equipment', id: current.id });
               onSelect({ kind: 'equipment', id: current.id });
             }
-            const xM = snap(current.xM + (point.xM - current.grabX));
-            const yM = snap(current.yM + (point.yM - current.grabY));
-            showEquipment({ id: current.id, xM, yM });
-            setReadout({ x: xM, y: yM, text: `${formatDelta(xM - current.xM, project.units)} · ${formatDelta(yM - current.yM, project.units)}` });
+            const item = project.equipment.find(entry => entry.id === current.id);
+            const rawX = snap(current.xM + (point.xM - current.grabX));
+            const rawY = snap(current.yM + (point.yM - current.grabY));
+            const placed = item
+              ? constrainEquipmentPosition(project.rooms, item, rawX, rawY)
+              : { xM: rawX, yM: rawY };
+            showEquipment({ id: current.id, xM: placed.xM, yM: placed.yM });
+            setReadout({ x: placed.xM, y: placed.yM, text: `${formatDelta(placed.xM - current.xM, project.units)} · ${formatDelta(placed.yM - current.yM, project.units)}` });
+            return;
+          }
+          if (current.kind === 'rotate') {
+            const angle = (Math.atan2(point.yM - current.yM, point.xM - current.xM) * 180) / Math.PI;
+            const yawDeg = snapYaw(current.startYaw + (angle - current.startAngle));
+            showRotate({ id: current.id, yawDeg });
+            setReadout({ x: point.xM, y: point.yM, text: `${yawDeg}°` });
             return;
           }
           if (current.kind === 'space') {
@@ -794,11 +854,8 @@ export function PlanView({
             const before = current.base.find(room => room.id === id);
             const after = next.find(room => room.id === id);
             if (before && after) {
-              const vertical = current.face === 'px' || current.face === 'nx';
-              const along = clampSpan(vertical ? point.yM : point.xM, vertical ? after.yM : after.xM, vertical ? after.yM + after.widthM : after.xM + after.lengthM);
-              const pos = dragReadoutPoint(current.face, edgeValue(after, current.face), along, Math.max(0.45, font * 2.2));
               const shown = quantizeMeters(edgeValue(after, current.face) - edgeValue(before, current.face), dragUnitStep(pxPerM, project.units), project.units);
-              setReadout({ ...pos, text: formatDelta(shown, project.units) });
+              setReadout({ x: point.xM, y: point.yM, text: formatDelta(shown, project.units) });
             }
             return;
           }
@@ -815,12 +872,9 @@ export function PlanView({
             const before = current.base.find(room => room.id === move.roomId)?.openings.find(item => item.id === move.openingId);
             const afterRoom = next.find(room => room.id === move.roomId);
             const after = afterRoom?.openings.find(item => item.id === move.openingId);
-            if (before && after && afterRoom) {
-              const vertical = current.face === 'px' || current.face === 'nx';
-              const along = clampSpan(vertical ? point.yM : point.xM, vertical ? afterRoom.yM : afterRoom.xM, vertical ? afterRoom.yM + afterRoom.widthM : afterRoom.xM + afterRoom.lengthM);
-              const pos = dragReadoutPoint(current.face, edgeValue(afterRoom, current.face), along, Math.max(0.45, font * 2.2));
+            if (before && after) {
               const shown = quantizeMeters(after.offsetM - before.offsetM, dragUnitStep(pxPerM, project.units), project.units);
-              setReadout({ ...pos, text: formatDelta(shown, project.units) });
+              setReadout({ x: point.xM, y: point.yM, text: formatDelta(shown, project.units) });
             }
           }
         }}
@@ -829,6 +883,7 @@ export function PlanView({
           drag.current = null;
           showLive(null);
           showEquipment(null);
+          showRotate(null);
           setGesture(null);
           setReadout(null);
         }}
@@ -872,6 +927,18 @@ export function PlanView({
             suppressClick.current = true;
             onSelect({ kind: 'equipment', id: current.id });
             if (current.armed && next && next.id === current.id) onMoveEquipment(current.id, next.xM, next.yM);
+            return;
+          }
+          if (current.kind === 'rotate') {
+            const next = rotatingRef.current;
+            showRotate(null);
+            setGesture(null);
+            setReadout(null);
+            suppressClick.current = true;
+            onSelect({ kind: 'equipment', id: current.id });
+            if (next && next.id === current.id && Math.abs(next.yawDeg - current.startYaw) > 1e-6) {
+              onRotateEquipment(current.id, next.yawDeg);
+            }
             return;
           }
           if (current.kind === 'space') {
@@ -1104,33 +1171,31 @@ export function PlanView({
           )}
           {showSpaces && rooms.map(room => {
             const shaped = (room.outline?.length ?? 0) >= 3;
-            const center = shaped ? outlineCentroid(room.outline ?? []) : { x: room.xM + room.lengthM / 2, y: room.yM + room.widthM / 2 };
             const area = shaped ? polygonArea(room.outline ?? []) : room.lengthM * room.widthM;
+            const detail = shaped
+              ? formatArea(area, project.units)
+              : `${formatArea(area, project.units)} · ${formatNumber(mToLength(room.lengthM, project.units), 2)} × ${formatNumber(mToLength(room.widthM, project.units), 2)} ${lengthUnit(project.units)}`;
+            const center = spaceLabelAnchor(room, planEquipment, font, room.name, detail);
             return (
               <g key={`${room.id}-label`} transform={`translate(${center.x} ${center.y}) scale(1,-1)`} pointerEvents="none">
                 <text textAnchor="middle" fontSize={font} fontWeight={500} fill={INK}>
                   {room.name}
                 </text>
                 <text textAnchor="middle" y={font * 1.4} fontSize={font * 0.68} fill="#5e6368">
-                  {shaped
-                    ? formatArea(area, project.units)
-                    : `${formatArea(area, project.units)} · ${formatNumber(mToLength(room.lengthM, project.units), 2)} × ${formatNumber(mToLength(room.widthM, project.units), 2)} ${lengthUnit(project.units)}`}
+                  {detail}
                 </text>
               </g>
             );
           })}
           {showSystems && <SystemLinks project={project} />}
-          {project.equipment.map(item => {
-            const before = gesture?.kind === 'space' ? project.rooms.find(room => room.id === item.roomId) : undefined;
-            const after = before ? rooms.find(room => room.id === before.id) : undefined;
-            const shifted = before && after ? { ...item, xM: item.xM + (after.xM - before.xM), yM: item.yM + (after.yM - before.yM) } : item;
-            const dragged = movingEquipment?.id === item.id ? { ...shifted, xM: movingEquipment.xM, yM: movingEquipment.yM } : shifted;
-            const systemIndex = dragged.systemId ? project.systems.findIndex(system => system.id === dragged.systemId) : -1;
+          {planEquipment.map(item => {
+            const shown = rotatingEquipment?.id === item.id ? { ...item, yawDeg: rotatingEquipment.yawDeg } : item;
+            const systemIndex = shown.systemId ? project.systems.findIndex(system => system.id === shown.systemId) : -1;
             const system = systemIndex >= 0 ? project.systems[systemIndex] : undefined;
             return (
               <EquipmentMark
                 key={item.id}
-                item={dragged}
+                item={shown}
                 active={selection.kind === 'equipment' && selection.id === item.id}
                 onSelect={onSelect}
                 onContextMenu={onContextMenu}
@@ -1227,7 +1292,10 @@ export function PlanView({
           })()}
           {showSpaces && measuredRoom && gesture?.kind !== 'space' && (measuredRoom.outline?.length ?? 0) < 3 && <RoomDimensions room={measuredRoom} rooms={rooms} units={project.units} fontM={font} wallFace={measuredFace} />}
           {showSpaces && measuredRoom && measuredOpening && <OpeningSlideDimension room={measuredRoom} opening={measuredOpening} units={project.units} fontM={font} />}
-          {readout && <DragReadout x={readout.x} y={readout.y} text={readout.text} fontM={font} />}
+          {showSpaces && clearanceFoot && clearanceRoom && (
+            <ClearanceDimensions foot={clearanceFoot} room={clearanceRoom} units={project.units} fontM={font} />
+          )}
+          {readout && <DragReadout x={readout.x} y={readout.y} text={readout.text} fontM={font} view={view} />}
         </g>
       </svg>
       <div className="plan-mark">
@@ -1333,6 +1401,184 @@ function Dimension({
   );
 }
 
+type FootprintAabb = { minX: number; minY: number; maxX: number; maxY: number; midX: number; midY: number };
+
+/** Axis-aligned bounds of a length×width footprint after yaw. Reusable for future movable components. */
+function componentFootprintAabb(item: { xM: number; yM: number; yawDeg: number; catalogId: string }): FootprintAabb {
+  const size = equipmentSizeM(getProduct(item.catalogId));
+  const rad = (item.yawDeg * Math.PI) / 180;
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  const hx = Math.max(size.lengthM, 0.05) / 2;
+  const hy = Math.max(size.widthM, 0.05) / 2;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [lx, ly] of [
+    [-hx, -hy],
+    [hx, -hy],
+    [hx, hy],
+    [-hx, hy],
+  ] as const) {
+    const x = item.xM + lx * c - ly * s;
+    const y = item.yM + lx * s + ly * c;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  return { minX, minY, maxX, maxY, midX: (minX + maxX) / 2, midY: (minY + maxY) / 2 };
+}
+
+function roomAabb(room: Room): FootprintAabb {
+  if ((room.outline?.length ?? 0) >= 3) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const point of room.outline!) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+    return { minX, minY, maxX, maxY, midX: (minX + maxX) / 2, midY: (minY + maxY) / 2 };
+  }
+  return {
+    minX: room.xM,
+    minY: room.yM,
+    maxX: room.xM + room.lengthM,
+    maxY: room.yM + room.widthM,
+    midX: room.xM + room.lengthM / 2,
+    midY: room.yM + room.widthM / 2,
+  };
+}
+
+function aabbOverlap(a: FootprintAabb, b: FootprintAabb, pad = 0): boolean {
+  return a.minX < b.maxX + pad && a.maxX > b.minX - pad && a.minY < b.maxY + pad && a.maxY > b.minY - pad;
+}
+
+/** Prefer the room centroid; slide the label if it would sit on equipment. */
+function spaceLabelAnchor(
+  room: Room,
+  equipment: readonly { xM: number; yM: number; yawDeg: number; catalogId: string; roomId: string | null }[],
+  fontM: number,
+  name: string,
+  detail: string,
+): { x: number; y: number } {
+  const shaped = (room.outline?.length ?? 0) >= 3;
+  const preferred = shaped ? outlineCentroid(room.outline ?? []) : { x: room.xM + room.lengthM / 2, y: room.yM + room.widthM / 2 };
+  const obstacles = equipment
+    .filter(item => item.roomId === room.id)
+    .map(item => {
+      const foot = componentFootprintAabb(item);
+      const chip = fontM * 1.1;
+      return {
+        ...foot,
+        minX: foot.minX - fontM * 0.15,
+        minY: foot.minY - fontM * 0.15,
+        maxX: foot.maxX + fontM * 0.15,
+        maxY: foot.maxY + chip,
+      };
+    });
+  if (obstacles.length === 0) return preferred;
+
+  const labelW = Math.max(2.2, Math.max(name.length, detail.length) * fontM * 0.52);
+  const labelH = fontM * 2.55;
+  const bounds = roomAabb(room);
+  const inset = Math.min(fontM * 0.35, Math.max(0.05, Math.min(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) * 0.08));
+  const halfW = labelW / 2;
+  const halfH = labelH / 2;
+
+  const candidates: { x: number; y: number }[] = [preferred];
+  for (const ty of [0.22, 0.5, 0.78]) {
+    for (const tx of [0.22, 0.5, 0.78]) {
+      candidates.push({
+        x: bounds.minX + (bounds.maxX - bounds.minX) * tx,
+        y: bounds.minY + (bounds.maxY - bounds.minY) * ty,
+      });
+    }
+  }
+  candidates.push(
+    { x: preferred.x, y: bounds.minY + halfH + inset },
+    { x: preferred.x, y: bounds.maxY - halfH - inset },
+    { x: bounds.minX + halfW + inset, y: preferred.y },
+    { x: bounds.maxX - halfW - inset, y: preferred.y },
+  );
+
+  let best = preferred;
+  let bestScore = Infinity;
+  for (const candidate of candidates) {
+    if (shaped && !pointInOutline(room.outline ?? [], candidate.x, candidate.y)) continue;
+    const box: FootprintAabb = {
+      minX: candidate.x - halfW,
+      minY: candidate.y - halfH,
+      maxX: candidate.x + halfW,
+      maxY: candidate.y + halfH,
+      midX: candidate.x,
+      midY: candidate.y,
+    };
+    if (
+      box.minX < bounds.minX + inset ||
+      box.maxX > bounds.maxX - inset ||
+      box.minY < bounds.minY + inset ||
+      box.maxY > bounds.maxY - inset
+    ) {
+      continue;
+    }
+    let overlap = 0;
+    for (const obstacle of obstacles) {
+      if (!aabbOverlap(box, obstacle)) continue;
+      const ox = Math.min(box.maxX, obstacle.maxX) - Math.max(box.minX, obstacle.minX);
+      const oy = Math.min(box.maxY, obstacle.maxY) - Math.max(box.minY, obstacle.minY);
+      overlap += Math.max(0, ox) * Math.max(0, oy);
+    }
+    const dx = candidate.x - preferred.x;
+    const dy = candidate.y - preferred.y;
+    const score = overlap * 40 + dx * dx + dy * dy;
+    if (score < bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function ClearanceDimensions({
+  foot,
+  room,
+  units,
+  fontM,
+}: {
+  foot: FootprintAabb;
+  room: Room;
+  units: Project['units'];
+  fontM: number;
+}) {
+  const left = foot.minX - room.xM;
+  const right = room.xM + room.lengthM - foot.maxX;
+  const bottom = foot.minY - room.yM;
+  const top = room.yM + room.widthM - foot.maxY;
+  const label = (meters: number) => formatNumber(mToLength(meters, units), meters < 1 ? 2 : 1);
+  return (
+    <g pointerEvents="none">
+      {left > 1e-6 && (
+        <Dimension x1={room.xM} y1={foot.midY} x2={foot.minX} y2={foot.midY} label={label(left)} fontM={fontM} outwardX={0} outwardY={1} />
+      )}
+      {right > 1e-6 && (
+        <Dimension x1={foot.maxX} y1={foot.midY} x2={room.xM + room.lengthM} y2={foot.midY} label={label(right)} fontM={fontM} outwardX={0} outwardY={1} />
+      )}
+      {bottom > 1e-6 && (
+        <Dimension x1={foot.midX} y1={room.yM} x2={foot.midX} y2={foot.minY} label={label(bottom)} fontM={fontM} outwardX={1} outwardY={0} />
+      )}
+      {top > 1e-6 && (
+        <Dimension x1={foot.midX} y1={foot.maxY} x2={foot.midX} y2={room.yM + room.widthM} label={label(top)} fontM={fontM} outwardX={1} outwardY={0} />
+      )}
+    </g>
+  );
+}
+
 function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
   const product = getProduct(catalogId);
   const roof = product?.mount === 'roof';
@@ -1379,14 +1625,16 @@ function EquipmentMark({
 }) {
   const product = getProduct(item.catalogId);
   const { name, roof } = equipmentLabel(item.catalogId);
-  const iconM = fontM * 1.2;
+  const size = equipmentSizeM(product);
+  const length = Math.max(size.lengthM, 0.05);
+  const width = Math.max(size.widthM, 0.05);
   const label = item.quantity > 1 ? `${name} ×${item.quantity}` : name;
-  const stroke = color ?? MARK_COLOR.equipment;
+  const stroke = size.stated ? color ?? MARK_COLOR.equipment : '#c4a574';
+  const fill = active ? SELECT_FILL : size.stated ? 'rgba(31,78,95,0.12)' : 'rgba(196,165,116,0.18)';
   const chipW = Math.max(fontM * 1.7, fontM * 0.56 * Math.max(label.length, systemName?.length ?? 0));
   const chipH = systemName ? fontM * 1.7 : fontM * 0.95;
-  const hitW = Math.max(iconM * 1.4, chipW);
-  const hitTop = iconM * 0.72;
-  const hitBottom = iconM * 0.72 + chipH + fontM * 0.16;
+  const iconM = Math.min(length, width, fontM * 1.6) * 1.1;
+  const showIcon = Math.min(length, width) >= fontM * 1.1;
   return (
     <g
       data-hit="equipment"
@@ -1405,34 +1653,90 @@ function EquipmentMark({
         onContextMenu({ kind: 'equipment', id: item.id }, event.clientX, event.clientY);
       }}
     >
-      <title>{product?.name ?? 'Equipment'}</title>
-      <rect x={item.xM - hitW / 2} y={item.yM - hitTop} width={hitW} height={hitTop + hitBottom} fill="transparent" />
-      <g transform={`translate(${item.xM} ${item.yM}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
-        <circle r={iconM * 0.68} fill={PAPER} stroke={active ? SELECT : stroke} strokeWidth={active ? 2.25 : HAIR} vectorEffect="non-scaling-stroke" pointerEvents="all" />
-        <g transform={`scale(${iconM / 960}) translate(-480 480)`} pointerEvents="all">
-          <path d={equipmentGlyph(product ? equipmentIconFor(product) : 'hvac')} fill={active ? SELECT : stroke} />
+      <title>
+        {product?.name ?? 'Equipment'}
+        {product?.dimensions ? ` · ${product.dimensions.stated}` : ' · size not stated (0.6 m marker)'}
+      </title>
+      <rect
+        x={item.xM - length / 2}
+        y={item.yM - width / 2}
+        width={length}
+        height={width}
+        fill={fill}
+        stroke={active ? SELECT : stroke}
+        strokeWidth={active ? 2.25 : HAIR}
+        strokeDasharray={roof ? '4 2.5' : undefined}
+        vectorEffect="non-scaling-stroke"
+      />
+      {showIcon && (
+        <g transform={`translate(${item.xM} ${item.yM}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
+          <g transform={`scale(${iconM / 960}) translate(-480 480)`}>
+            <path d={equipmentGlyph(product ? equipmentIconFor(product) : 'hvac')} fill={active ? SELECT : stroke} />
+          </g>
         </g>
-        <g transform={`translate(0 ${iconM * 0.68 + chipH / 2 + fontM * 0.08})`}>
-          <rect x={-chipW / 2} y={-chipH / 2} width={chipW} height={chipH} fill={PAPER} stroke="none" />
-          <text textAnchor="middle" dominantBaseline="middle" y={systemName ? -chipH * 0.18 : 0} fontSize={fontM * 0.62} fill={active ? SELECT : stroke}>
-            {label}
+      )}
+      <g transform={`translate(${item.xM} ${item.yM + width / 2 + chipH / 2 + fontM * 0.1}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
+        <rect x={-chipW / 2} y={-chipH / 2} width={chipW} height={chipH} fill={PAPER} stroke="none" />
+        <text textAnchor="middle" dominantBaseline="middle" y={systemName ? -chipH * 0.18 : 0} fontSize={fontM * 0.62} fill={active ? SELECT : stroke}>
+          {label}
+        </text>
+        {systemName && (
+          <text textAnchor="middle" dominantBaseline="middle" y={chipH * 0.28} fontSize={fontM * 0.52} fill={active ? SELECT : stroke}>
+            {systemName}
           </text>
-          {systemName && (
-            <text textAnchor="middle" dominantBaseline="middle" y={chipH * 0.28} fontSize={fontM * 0.52} fill={active ? SELECT : stroke}>
-              {systemName}
-            </text>
-          )}
-        </g>
+        )}
       </g>
+      {active && tool.kind === 'select' && (
+        <g data-hit="equipment-rotate" data-id={item.id} aria-label="Rotate equipment">
+          <line
+            x1={item.xM + length / 2}
+            y1={item.yM}
+            x2={item.xM + length / 2 + Math.max(fontM * 0.9, 0.2)}
+            y2={item.yM}
+            stroke={SELECT}
+            strokeWidth={HAIR}
+            vectorEffect="non-scaling-stroke"
+            pointerEvents="none"
+          />
+          <circle
+            cx={item.xM + length / 2 + Math.max(fontM * 0.9, 0.2)}
+            cy={item.yM}
+            r={Math.max(fontM * 0.48, 0.14)}
+            fill={PAPER}
+            stroke={SELECT}
+            strokeWidth={2.25}
+            vectorEffect="non-scaling-stroke"
+          />
+          <circle
+            cx={item.xM + length / 2 + Math.max(fontM * 0.9, 0.2)}
+            cy={item.yM}
+            r={Math.max(fontM * 0.18, 0.05)}
+            fill={SELECT}
+            stroke="none"
+            pointerEvents="none"
+          />
+        </g>
+      )}
     </g>
   );
 }
 
-function DragReadout({ x, y, text, fontM }: { x: number; y: number; text: string; fontM: number }) {
+function DragReadout({ x, y, text, fontM, view }: { x: number; y: number; text: string; fontM: number; view?: ViewBox }) {
   const height = fontM * 1.35;
   const width = Math.max(fontM * 3.4, fontM * 0.62 * text.length + fontM);
+  let drawX = x;
+  let drawY = y;
+  if (view) {
+    // Prefer above and slightly aside the pointer; flip when the pill would leave the sheet.
+    const margin = Math.max(fontM * 1.85, 0.38);
+    const side = Math.max(fontM * 1.25, 0.26);
+    const placeBelow = y > view.minY + view.h - (height + margin * 2.6);
+    const placeLeft = x > view.minX + view.w - (width * 0.55 + side * 2.2);
+    drawY = y + (placeBelow ? -(height / 2 + margin) : height / 2 + margin);
+    drawX = x + (placeLeft ? -side : side);
+  }
   return (
-    <g transform={`translate(${x} ${y}) scale(1,-1)`} pointerEvents="none">
+    <g transform={`translate(${drawX} ${drawY}) scale(1,-1)`} pointerEvents="none">
       <rect x={-width / 2} y={-height / 2} width={width} height={height} rx={height / 2} fill={DIM} />
       <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.78} fill="#fff" stroke="none" fontWeight={600}>
         {text}

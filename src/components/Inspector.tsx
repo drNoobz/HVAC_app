@@ -1,6 +1,6 @@
 'use client';
 
-import { CATEGORY_LABEL, getProduct } from '@/domain/catalog';
+import { CATEGORY_LABEL, getProduct, type CatalogProduct } from '@/domain/catalog';
 import {
   addOpening,
   assignEquipmentRoom,
@@ -35,7 +35,7 @@ import {
   type SurfaceFace,
   type WallFace,
 } from '@/domain/types';
-import { formatArea, formatLength, lengthToM, lengthUnit, mToLength } from '@/domain/units';
+import { formatArea, formatFlow, formatLength, formatPower, lengthToM, lengthUnit, mToLength } from '@/domain/units';
 import { polygonArea } from '@/domain/wallDraw';
 import {
   assemblyCategoriesForFace,
@@ -43,8 +43,10 @@ import {
   constructionCategoryLabel,
   findAssembly,
   findConstruction,
+  formatResistance,
   formatThickness,
   resolveStack,
+  stackResistance,
   type ConstructionAssembly,
   type ConstructionCategory,
   type ConstructionMaterial,
@@ -220,6 +222,48 @@ function assignSurface(project: Project, room: Room, face: 'floor' | 'ceiling', 
       [face]: { materialKey: null, constructionId, layers: assembly ? assembly.layers.map(layer => ({ ...layer })) : [], note },
     },
   });
+}
+
+function formatUFactor(rIp: number | null, units: Project['units']): string {
+  if (rIp == null || rIp <= 0) return 'Not stated';
+  if (units === 'IP') return `${(1 / rIp).toFixed(3)} Btu/(h·ft²·°F)`;
+  return `${((1 / rIp) * 5.678263337).toFixed(3)} W/(m²·K)`;
+}
+
+function ConstructionSpecSummary({
+  layers,
+  materials,
+  series,
+  units,
+  thicknessMm,
+}: {
+  layers: { materialId: string; thicknessMm: number | null }[];
+  materials: ConstructionMaterial[];
+  series: boolean;
+  units: Project['units'];
+  thicknessMm: number | null;
+}) {
+  const rIp = stackResistance(layers, materials, series);
+  return (
+    <dl className="spec-list">
+      <div>
+        <dt>Thickness</dt>
+        <dd>{thicknessMm == null ? 'Not stated' : formatThickness(thicknessMm, units)}</dd>
+      </div>
+      <div>
+        <dt>R-value</dt>
+        <dd>{formatResistance(rIp, units)}</dd>
+      </div>
+      <div>
+        <dt>U-factor</dt>
+        <dd>{formatUFactor(rIp, units)}</dd>
+      </div>
+      <div>
+        <dt>Layers</dt>
+        <dd>{layers.length}</dd>
+      </div>
+    </dl>
+  );
 }
 
 function stackThicknessMm(layers: { materialId: string; thicknessMm: number | null }[], materials: ConstructionMaterial[]): number | null {
@@ -457,14 +501,18 @@ function WallFaceFields({
       </header>
       <PortionLines portions={facePortions(room, face, project.rooms)} units={project.units} />
       <section className="prop-block">
+        <p className="prop-section">Specs</p>
+        <ConstructionSpecSummary
+          layers={layers}
+          materials={materials}
+          series={findAssembly(assemblies, stack.constructionId)?.series ?? true}
+          units={project.units}
+          thicknessMm={thickness}
+        />
+      </section>
+      <section className="prop-block">
         <p className="prop-section">Size</p>
         <UnitField label="Length" unit={unit} value={mToLength(lengthM, project.units)} onCommit={setRoomLength} />
-        <label className="field">
-          <span>Thickness</span>
-          <span className="prop-value">
-            {thickness == null ? 'Not stated' : formatThickness(thickness, project.units)}
-          </span>
-        </label>
         <UnitField label="Height" unit={unit} value={mToLength(room.heightM, project.units)} onCommit={value => onChange(updateRoom(project, room.id, { heightM: lengthToM(value, project.units), assumption: false }))} />
         <label className="field">
           <span>Kind</span>
@@ -554,11 +602,17 @@ function InterfaceFields({
         <span>{formatLength(hit.lengthM, project.units, 2)}</span>
       </div>
       <section className="prop-block">
+        <p className="prop-section">Specs</p>
+        <ConstructionSpecSummary
+          layers={layers}
+          materials={materials}
+          series={findAssembly(assemblies, assignment.constructionId)?.series ?? true}
+          units={project.units}
+          thicknessMm={thickness}
+        />
+      </section>
+      <section className="prop-block">
         <p className="prop-section">Construction</p>
-        <label className="field">
-          <span>Thickness</span>
-          <span className="prop-value">{thickness == null ? 'Not stated' : formatThickness(thickness, project.units)}</span>
-        </label>
         <label className="field">
           <span>Kind</span>
           <select
@@ -686,12 +740,26 @@ function SurfaceFields({
       />
     );
   }
+  const surfaceLayers = assignment ? resolveStack(assignment, assemblies, materials) : [];
+  const surfaceSeries = assignment ? findAssembly(assemblies, assignment.constructionId)?.series ?? true : true;
   return (
     <div className="stack props">
       <header className="prop-head">
         <p className="prop-kicker">{room.name}</p>
         <h2>{faceLabel}</h2>
       </header>
+      {assignment && (
+        <section className="prop-block">
+          <p className="prop-section">Specs</p>
+          <ConstructionSpecSummary
+            layers={surfaceLayers}
+            materials={materials}
+            series={surfaceSeries}
+            units={project.units}
+            thicknessMm={stackThicknessMm(surfaceLayers, materials)}
+          />
+        </section>
+      )}
       {assignment && (
       <ComponentSelect
         label={face === 'walls' ? 'Library component' : 'Component'}
@@ -709,9 +777,9 @@ function SurfaceFields({
       )}
       {assignment && (
       <StackEditor
-        layers={resolveStack(assignment, assemblies, materials)}
+        layers={surfaceLayers}
         materials={materials}
-        series={findAssembly(assemblies, assignment.constructionId)?.series ?? true}
+        series={surfaceSeries}
         units={project.units}
         onChange={layers => onChange(writeSurface({ ...assignment, materialKey: null, layers }))}
       />
@@ -1008,6 +1076,28 @@ function SystemFields({
   const system = project.systems.find(item => item.id === systemId);
   if (!system) return <p>System not found.</p>;
   const members = project.equipment.filter(item => item.systemId === system.id);
+  let airflowM3s = 0;
+  let coolingW = 0;
+  let heatingW = 0;
+  let hasAirflow = false;
+  let hasCooling = false;
+  let hasHeating = false;
+  for (const item of members) {
+    const product = getProduct(item.catalogId);
+    if (!product) continue;
+    if (product.airflow) {
+      airflowM3s += product.airflow.valueM3s * item.quantity;
+      hasAirflow = true;
+    }
+    if (product.cooling) {
+      coolingW += product.cooling.valueW * item.quantity;
+      hasCooling = true;
+    }
+    if (product.heating) {
+      heatingW += product.heating.valueW * item.quantity;
+      hasHeating = true;
+    }
+  }
   return (
     <div className="stack props">
       <header className="prop-head">
@@ -1028,14 +1118,38 @@ function SystemFields({
           ))}
         </select>
       </label>
+      <dl className="spec-list">
+        <div>
+          <dt>Equipment</dt>
+          <dd>{members.length}</dd>
+        </div>
+        <div>
+          <dt>Airflow</dt>
+          <dd>{hasAirflow ? formatFlow(airflowM3s, project.units) : 'Not stated'}</dd>
+        </div>
+        <div>
+          <dt>Cooling</dt>
+          <dd>{hasCooling ? formatPower(coolingW, project.units) : 'Not stated'}</dd>
+        </div>
+        <div>
+          <dt>Heating</dt>
+          <dd>{hasHeating ? formatPower(heatingW, project.units) : 'Not stated'}</dd>
+        </div>
+      </dl>
       <TextField label="Notes" value={system.notes} multiline onCommit={notes => onChange(updateSystem(project, system.id, { notes }))} />
       <ul className="plain-list">
         {members.map(item => {
           const product = getProduct(item.catalogId);
+          const bits = [
+            product?.airflow?.stated,
+            product?.cooling ? `${product.cooling.stated} cool` : null,
+            product?.heating ? `${product.heating.stated} heat` : null,
+          ].filter(Boolean);
           return (
             <li key={item.id}>
               <button type="button" className="linkish" onClick={() => onSelect({ kind: 'equipment', id: item.id })}>
                 {product ? `${product.manufacturer} ${product.model}` : item.catalogId} × {item.quantity}
+                {bits.length > 0 ? ` · ${bits.join(' · ')}` : ''}
               </button>
             </li>
           );
@@ -1056,6 +1170,34 @@ function SystemFields({
   );
 }
 
+function productSpecRows(product: CatalogProduct, units: Project['units']): { label: string; value: string }[] {
+  const cooling = product.cooling
+    ? `${product.cooling.stated} · ${formatPower(product.cooling.valueW, units)}`
+    : 'Not stated';
+  const heating = product.heating
+    ? `${product.heating.stated} · ${formatPower(product.heating.valueW, units)}`
+    : 'Not stated';
+  return [
+    { label: 'Manufacturer', value: product.manufacturer },
+    { label: 'Model', value: product.model },
+    { label: 'Category', value: CATEGORY_LABEL[product.category] },
+    { label: 'Supplier', value: product.supplier },
+    { label: 'Mount', value: product.mount },
+    { label: 'Airflow', value: product.airflow ? `${product.airflow.stated} · ${formatFlow(product.airflow.valueM3s, units)}` : 'Not stated' },
+    { label: 'Cooling', value: cooling },
+    { label: 'Heating', value: heating },
+    {
+      label: 'Dimensions',
+      value: product.dimensions
+        ? `${product.dimensions.stated} · ${formatLength(product.dimensions.lengthM, units, 2)} × ${formatLength(product.dimensions.widthM, units, 2)} × ${formatLength(product.dimensions.heightM, units, 2)}`
+        : 'Not stated (0.6 m marker)',
+    },
+    { label: 'Electrical', value: product.electrical ?? 'Not stated' },
+    { label: 'Connections', value: product.connections ?? 'Not stated' },
+    { label: 'Document', value: product.documentUrl ?? 'None' },
+  ];
+}
+
 function EquipmentFields({
   project,
   equipmentId,
@@ -1070,10 +1212,6 @@ function EquipmentFields({
   const item = project.equipment.find(entry => entry.id === equipmentId);
   if (!item) return <p>Equipment not found.</p>;
   const product = getProduct(item.catalogId);
-  const unit = lengthUnit(project.units);
-  const setLength = (key: 'xM' | 'yM' | 'zM', display: number) => {
-    onChange(updateEquipment(project, item.id, { [key]: lengthToM(display, project.units) }));
-  };
   return (
     <div className="stack props">
       <header className="prop-head">
@@ -1082,42 +1220,20 @@ function EquipmentFields({
       </header>
       {product && (
         <dl className="spec-list">
-          <div>
-            <dt>Manufacturer</dt>
-            <dd>{product.manufacturer}</dd>
-          </div>
-          <div>
-            <dt>Model</dt>
-            <dd>{product.model}</dd>
-          </div>
-          <div>
-            <dt>Category</dt>
-            <dd>{CATEGORY_LABEL[product.category]}</dd>
-          </div>
-          <div>
-            <dt>Supplier</dt>
-            <dd>{product.supplier}</dd>
-          </div>
-          <div>
-            <dt>Document</dt>
-            <dd>{product.documentUrl ?? 'None'}</dd>
-          </div>
-          <div>
-            <dt>Image</dt>
-            <dd>None supplied</dd>
-          </div>
-          <div>
-            <dt>Mount</dt>
-            <dd>{product.mount}</dd>
-          </div>
+          {productSpecRows(product, project.units).map(row => (
+            <div key={row.label}>
+              <dt>{row.label}</dt>
+              <dd>{row.value}</dd>
+            </div>
+          ))}
+          {product.gaps.length > 0 && (
+            <div>
+              <dt>Gaps</dt>
+              <dd>{product.gaps.join(' ')}</dd>
+            </div>
+          )}
         </dl>
       )}
-      <div className="field-grid">
-        <UnitField label="Center X" unit={unit} value={mToLength(item.xM, project.units)} onCommit={value => setLength('xM', value)} />
-        <UnitField label="Center Y" unit={unit} value={mToLength(item.yM, project.units)} onCommit={value => setLength('yM', value)} />
-        <UnitField label="Bottom Z" unit={unit} value={mToLength(item.zM, project.units)} onCommit={value => setLength('zM', value)} />
-        <UnitField label="Yaw" unit="deg" value={item.yawDeg} onCommit={yawDeg => onChange(updateEquipment(project, item.id, { yawDeg }))} />
-      </div>
       <label className="field">
         <span>Space</span>
         <select value={item.roomId ?? ''} onChange={event => onChange(assignEquipmentRoom(project, item.id, event.target.value || null))}>
@@ -1157,6 +1273,7 @@ function EquipmentFields({
         />
       </label>
       <TextField label="Notes" value={item.notes} multiline onCommit={notes => onChange(updateEquipment(project, item.id, { notes }))} />
+      <p className="muted">Move and rotate on the plan. Drag the rotate handle on a selected unit.</p>
       <div className="button-row">
         <button type="button" className="btn" onClick={() => onChange(duplicateEquipment(project, item.id))}>
           Duplicate

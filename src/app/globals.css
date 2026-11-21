@@ -546,8 +546,10 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
 .plan-wrap.is-select [data-hit="room"] { cursor: move; }
 .plan-wrap.is-select [data-hit="opening"] { cursor: grab; }
 .plan-wrap.is-select [data-hit="equipment"] { cursor: grab; }
+.plan-wrap.is-select [data-hit="equipment-rotate"] { cursor: grab; }
 .plan-wrap.is-dragging [data-hit="opening"] { cursor: grabbing; }
 .plan-wrap.is-moving-equipment, .plan-wrap.is-moving-equipment * { cursor: grabbing; }
+.plan-wrap.is-rotating-equipment, .plan-wrap.is-rotating-equipment * { cursor: grabbing; }
 .plan-foot { display: flex; justify-content: space-between; gap: 12px; align-items: flex-end; padding: 6px 8px; background: white; border-top: 1px solid var(--line); }
 .plan-legend, .plan-scale { font-size: 11px; color: var(--ink); }
 .plan-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }

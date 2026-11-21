@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { CATALOG_MIME, getProduct } from '@/domain/catalog';
+import { CATALOG_MIME, equipmentSizeM, getProduct } from '@/domain/catalog';
 import type { EditorTool, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
 import { outlineCentroid, runGeom, solidSpans, WALL_THICK_M } from '@/domain/wallDraw';
 import { doorArc, doorHinge, doorSwingSide } from '@/domain/doorSwing';
@@ -974,8 +974,8 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
 
     equipment.forEach(item => {
       const product = getProduct(item.catalogId);
-      const size = product?.dimensions ?? { lengthM: 0.6, widthM: 0.6, heightM: 0.6 };
-      const missingSize = !product?.dimensions;
+      const size = equipmentSizeM(product);
+      const missingSize = !size.stated;
       const equipmentData: PickData = { kind: 'equipment', id: item.id };
       const wrap = new THREE.Group();
       wrap.userData = equipmentData;

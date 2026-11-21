@@ -20,7 +20,7 @@ import {
   removeSystem,
   removeWallRun,
   removeWallRunOpening,
-  roomAtPoint,
+  constrainEquipmentPosition,
   setEdgeAssembly,
   setInterfaceAssembly,
   setWallAssembly,
@@ -668,8 +668,13 @@ export function Studio({
                   onPlace={(point, catalogId) => {
                     const product = getProduct(catalogId);
                     if (!product) return;
-                    const room = roomAtPoint(project.rooms, point.xM, point.yM);
-                    const item = buildPlacement(product, room, point);
+                    const placed = constrainEquipmentPosition(
+                      project.rooms,
+                      { catalogId: product.id, yawDeg: 0, roomId: null },
+                      point.xM,
+                      point.yM
+                    );
+                    const item = buildPlacement(product, placed.room, { xM: placed.xM, yM: placed.yM });
                     edit({ ...project, equipment: [...project.equipment, item] });
                     setSelection({ kind: 'equipment', id: item.id });
                     setTool({ kind: 'select' });
@@ -689,9 +694,25 @@ export function Studio({
                     const item = project.equipment.find(entry => entry.id === id);
                     const product = item ? getProduct(item.catalogId) : undefined;
                     if (!item || !product) return;
-                    if (Math.abs(xM - item.xM) < 1e-6 && Math.abs(yM - item.yM) < 1e-6) return;
-                    const room = roomAtPoint(project.rooms, xM, yM);
-                    edit(updateEquipment(project, id, { xM, yM, roomId: room?.id ?? null, zM: placementZ(room, product) }));
+                    const placed = constrainEquipmentPosition(project.rooms, item, xM, yM);
+                    if (Math.abs(placed.xM - item.xM) < 1e-6 && Math.abs(placed.yM - item.yM) < 1e-6 && (placed.room?.id ?? null) === item.roomId) return;
+                    edit(updateEquipment(project, id, { xM: placed.xM, yM: placed.yM, roomId: placed.room?.id ?? null, zM: placementZ(placed.room, product) }));
+                    setSelection({ kind: 'equipment', id });
+                  }}
+                  onRotateEquipment={(id, yawDeg) => {
+                    const item = project.equipment.find(entry => entry.id === id);
+                    const product = item ? getProduct(item.catalogId) : undefined;
+                    if (!item || !product) return;
+                    const placed = constrainEquipmentPosition(project.rooms, { ...item, yawDeg }, item.xM, item.yM);
+                    edit(
+                      updateEquipment(project, id, {
+                        yawDeg,
+                        xM: placed.xM,
+                        yM: placed.yM,
+                        roomId: placed.room?.id ?? null,
+                        zM: placementZ(placed.room, product),
+                      })
+                    );
                     setSelection({ kind: 'equipment', id });
                   }}
                 />
@@ -719,8 +740,13 @@ export function Studio({
                     onPlace={(point, catalogId) => {
                       const product = getProduct(catalogId);
                       if (!product) return;
-                      const room = roomAtPoint(project.rooms, point.xM, point.yM);
-                      const item = buildPlacement(product, room, point);
+                      const placed = constrainEquipmentPosition(
+                        project.rooms,
+                        { catalogId: product.id, yawDeg: 0, roomId: null },
+                        point.xM,
+                        point.yM
+                      );
+                      const item = buildPlacement(product, placed.room, { xM: placed.xM, yM: placed.yM });
                       edit({ ...project, equipment: [...project.equipment, item] });
                       setSelection({ kind: 'equipment', id: item.id });
                       setTool({ kind: 'select' });
@@ -1083,7 +1109,15 @@ function ProjectTree({
       if (selection.kind === 'system') open(`system:${selection.id}`);
       if (selection.kind === 'equipment') {
         const item = project.equipment.find(entry => entry.id === selection.id);
-        if (item?.systemId) open(`system:${item.systemId}`);
+        if (item?.systemId) {
+          open('systems');
+          open(`system:${item.systemId}`);
+        } else if (item?.roomId) {
+          open('spaces');
+          open(`room:${item.roomId}`);
+        } else {
+          open('unassigned');
+        }
       }
       if (!changed) return current;
       writeExpanded(storageKey, next);
@@ -1100,7 +1134,7 @@ function ProjectTree({
         const startOf = (target: (typeof targets)[number]) => target.sides.find(side => side.roomId === roomId && side.anchor === anchor)?.startM ?? 0;
         return startOf(a) - startOf(b);
       });
-  const unassigned = project.equipment.filter(item => !item.systemId);
+  const unassigned = project.equipment.filter(item => !item.systemId && !item.roomId);
   return (
     <ul className="tn-tree">
       <TreeNode
@@ -1122,6 +1156,7 @@ function ProjectTree({
       {project.rooms.map(room => {
         const roomKey = `room:${room.id}`;
         const roomClosed = closed(roomKey);
+        const hosted = project.equipment.filter(item => item.roomId === room.id && !item.systemId);
         return (
           <TreeNode
             key={room.id}
@@ -1142,6 +1177,7 @@ function ProjectTree({
                   {room.outline && room.outline.length >= 3
                     ? formatArea(polygonArea(room.outline), project.units)
                     : `${formatNumber(mToLength(room.lengthM, project.units), 1)} × ${formatNumber(mToLength(room.widthM, project.units), 1)} ${unit}`}
+                  {hosted.length > 0 ? ` · ${hosted.length}` : ''}
                 </span>
               </>
             }
@@ -1252,6 +1288,24 @@ function ProjectTree({
                         />
                       ))}
                     </TreeNode>
+                  );
+                })}
+                {hosted.map(item => {
+                  const product = getProduct(item.catalogId);
+                  return (
+                    <TreeNode
+                      key={item.id}
+                      active={selected('equipment', item.id)}
+                      onSelect={() => onSelect({ kind: 'equipment', id: item.id })}
+                      onMenu={event => onContextMenu({ kind: 'equipment', id: item.id }, event.clientX, event.clientY)}
+                      content={
+                        <>
+                          {product ? <EquipmentIcon name={equipmentIconFor(product)} /> : null}
+                          <span className="tree-label">{product ? product.model : item.catalogId}</span>
+                          {item.quantity > 1 && <span className="tree-meta">× {item.quantity}</span>}
+                        </>
+                      }
+                    />
                   );
                 })}
           </TreeNode>

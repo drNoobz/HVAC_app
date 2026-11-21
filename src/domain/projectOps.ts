@@ -1,4 +1,4 @@
-import { getProduct, type CatalogProduct } from './catalog';
+import { equipmentSizeM, getProduct, type CatalogProduct } from './catalog';
 import { builtinAssembly, cloneLayers, findAssembly, type ConstructionAssembly } from './constructionLibrary';
 import { createId, nowIso } from './ids';
 import type {
@@ -375,7 +375,7 @@ export function duplicateRoom(project: Project, roomId: string): Project {
 }
 
 export function placementZ(room: Room | null, product: CatalogProduct): number {
-  const height = product.dimensions?.heightM ?? 0.6;
+  const height = equipmentSizeM(product).heightM;
   if (!room || product.mount === 'grade') return room?.zM ?? 0;
   if (product.mount === 'ceiling') return room.zM + Math.max(0, room.heightM - height);
   return room.zM + room.heightM;
@@ -461,5 +461,95 @@ export function removeSystem(project: Project, id: string): Project {
 
 export function footprintOutsideRoom(item: PlacedEquipment, room: Room | undefined): boolean {
   if (!room) return false;
-  return item.xM < room.xM || item.xM > room.xM + room.lengthM || item.yM < room.yM || item.yM > room.yM + room.widthM;
+  const size = equipmentSizeM(getProduct(item.catalogId));
+  const { hx, hy } = footprintHalfExtents(size.lengthM, size.widthM, item.yawDeg);
+  return (
+    item.xM - hx < room.xM ||
+    item.xM + hx > room.xM + room.lengthM ||
+    item.yM - hy < room.yM ||
+    item.yM + hy > room.yM + room.widthM
+  );
+}
+
+/** Axis-aligned half-extents of a length×width footprint after yaw. */
+export function footprintHalfExtents(lengthM: number, widthM: number, yawDeg = 0): { hx: number; hy: number } {
+  const rad = (yawDeg * Math.PI) / 180;
+  const c = Math.abs(Math.cos(rad));
+  const s = Math.abs(Math.sin(rad));
+  const hl = Math.max(lengthM, 0.05) / 2;
+  const hw = Math.max(widthM, 0.05) / 2;
+  return { hx: hl * c + hw * s, hy: hl * s + hw * c };
+}
+
+function clampPointInRoom(room: Room, xM: number, yM: number, hx: number, hy: number): { xM: number; yM: number } {
+  const minX = room.xM + hx;
+  const maxX = room.xM + room.lengthM - hx;
+  const minY = room.yM + hy;
+  const maxY = room.yM + room.widthM - hy;
+  if (minX > maxX || minY > maxY) {
+    return { xM: Number((room.xM + room.lengthM / 2).toFixed(3)), yM: Number((room.yM + room.widthM / 2).toFixed(3)) };
+  }
+  return {
+    xM: Number(Math.min(Math.max(xM, minX), maxX).toFixed(3)),
+    yM: Number(Math.min(Math.max(yM, minY), maxY).toFixed(3)),
+  };
+}
+
+function footprintFitsInRoom(room: Room, xM: number, yM: number, hx: number, hy: number): boolean {
+  return (
+    xM - hx >= room.xM - 1e-9 &&
+    xM + hx <= room.xM + room.lengthM + 1e-9 &&
+    yM - hy >= room.yM - 1e-9 &&
+    yM + hy <= room.yM + room.widthM + 1e-9
+  );
+}
+
+function aabbHitsRoom(room: Room, xM: number, yM: number, hx: number, hy: number): boolean {
+  return !(xM + hx <= room.xM || xM - hx >= room.xM + room.lengthM || yM + hy <= room.yM || yM - hy >= room.yM + room.widthM);
+}
+
+/**
+ * Keep a component footprint out of walls: fully inside one space, or fully outdoors.
+ * Reusable for equipment and future movable components.
+ */
+export function constrainComponentPosition(
+  rooms: readonly Room[],
+  xM: number,
+  yM: number,
+  lengthM: number,
+  widthM: number,
+  yawDeg = 0,
+  preferRoomId?: string | null
+): { xM: number; yM: number; room: Room | null } {
+  const { hx, hy } = footprintHalfExtents(lengthM, widthM, yawDeg);
+  const fits = rooms.filter(room => footprintFitsInRoom(room, xM, yM, hx, hy));
+  if (fits.length > 0) {
+    const preferred = preferRoomId ? fits.find(room => room.id === preferRoomId) : undefined;
+    const room = preferred ?? roomAtPoint(fits, xM, yM) ?? fits[0];
+    return { xM: Number(xM.toFixed(3)), yM: Number(yM.toFixed(3)), room };
+  }
+  const host =
+    (preferRoomId ? rooms.find(room => room.id === preferRoomId) : undefined) ??
+    roomAtPoint(rooms, xM, yM) ??
+    rooms.find(room => aabbHitsRoom(room, xM, yM, hx, hy)) ??
+    null;
+  if (host) {
+    const clamped = clampPointInRoom(host, xM, yM, hx, hy);
+    return { ...clamped, room: host };
+  }
+  if (!rooms.some(room => aabbHitsRoom(room, xM, yM, hx, hy))) {
+    return { xM: Number(xM.toFixed(3)), yM: Number(yM.toFixed(3)), room: null };
+  }
+  const hit = rooms.find(room => aabbHitsRoom(room, xM, yM, hx, hy))!;
+  return { ...clampPointInRoom(hit, xM, yM, hx, hy), room: hit };
+}
+
+export function constrainEquipmentPosition(
+  rooms: readonly Room[],
+  item: Pick<PlacedEquipment, 'catalogId' | 'yawDeg' | 'roomId'>,
+  xM: number,
+  yM: number
+): { xM: number; yM: number; room: Room | null } {
+  const size = equipmentSizeM(getProduct(item.catalogId));
+  return constrainComponentPosition(rooms, xM, yM, size.lengthM, size.widthM, item.yawDeg, item.roomId);
 }

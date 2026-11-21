@@ -428,7 +428,7 @@ export function createSampleProject(): Project {
     [exhaust, makeup, comfort, restroomSys, dishSys],
     [
       place('hood-wall-8', plan.kitchen, 3.5, 13, exhaust.id, `${mark} Shown over the cooking line.`),
-      place('fan-upblast-30', plan.kitchen, 6.5, 14.5, exhaust.id, `${mark} Shown on the kitchen roof. Fan dimensions are not stated.`),
+      place('fan-upblast-30', plan.kitchen, 6.5, 14.5, exhaust.id, `${mark} Shown on the kitchen roof.`),
       place('mau-40', plan.prep, 13.2, 11.4, makeup.id, `${mark} Shown on the prep roof. Not balanced to the hood.`),
       place('fan-inline-8', plan.dish, 13.2, 14.5, dishSys.id, mark),
       place('bath-fan-150', plan.restroomA, 13.1, 6.5, restroomSys.id, mark),

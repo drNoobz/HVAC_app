@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "Restaurant components for this demo. Each component is an ordered stack of library layers. Walls, roofs, doors, and windows run outside to inside. Floors run top to bottom. Ceilings run from the room toward the outside. A series stack is layers in contact. A ceiling-and-roof stack is not a series path, because a plenum sits between them.",
+  "note": "Restaurant planning components built from the North American materials library. Each component is an ordered stack of library layers with published R/U sources. Walls, roofs, doors, and windows run outside to inside. Floors run top to bottom. Ceilings run from the room toward the outside. A series stack is layers in contact. A ceiling-and-roof stack is not a series path, because a plenum sits between them.",
   "assemblies": [
     {
       "id": "asm-floor-dining",
@@ -10,8 +10,16 @@
       "orderLabel": "Top → bottom",
       "series": true,
       "layers": [
-        { "materialId": "floor-carpet-fibrous", "thicknessMm": null, "place": "Finish" },
-        { "materialId": "floor-hw-concrete-4in", "thicknessMm": null, "place": "Slab" }
+        {
+          "materialId": "floor-carpet-fibrous",
+          "thicknessMm": null,
+          "place": "Finish"
+        },
+        {
+          "materialId": "floor-hw-concrete-4in",
+          "thicknessMm": null,
+          "place": "Slab"
+        }
       ],
       "source": "Carpet with fibrous pad, R-2.08, over 4 in heavyweight undried concrete, R-0.32.",
       "notes": "Top to bottom. Soil and air films are not included."
@@ -24,8 +32,16 @@
       "orderLabel": "Top → bottom",
       "series": true,
       "layers": [
-        { "materialId": "floor-tile", "thicknessMm": null, "place": "Tile finish" },
-        { "materialId": "floor-hw-concrete-4in", "thicknessMm": null, "place": "Slab" }
+        {
+          "materialId": "floor-tile",
+          "thicknessMm": null,
+          "place": "Tile finish"
+        },
+        {
+          "materialId": "floor-hw-concrete-4in",
+          "thicknessMm": null,
+          "place": "Slab"
+        }
       ],
       "source": "Tile, R-0.05, over 4 in heavyweight undried concrete, R-0.32.",
       "notes": "Top to bottom. Tile thickness was not stated in the source table. Thinset is not a separate row."
@@ -38,7 +54,11 @@
       "orderLabel": "Top → bottom",
       "series": true,
       "layers": [
-        { "materialId": "floor-hw-concrete-4in", "thicknessMm": null, "place": "Slab" }
+        {
+          "materialId": "floor-hw-concrete-4in",
+          "thicknessMm": null,
+          "place": "Slab"
+        }
       ],
       "source": "4 in heavyweight undried concrete, R-0.32.",
       "notes": "A bare slab. Add a finish layer if the room has one."
@@ -51,8 +71,16 @@
       "orderLabel": "Top → bottom",
       "series": true,
       "layers": [
-        { "materialId": "floor-walkin-panel", "thicknessMm": null, "place": "Walk-in floor panel" },
-        { "materialId": "floor-hw-concrete-4in", "thicknessMm": null, "place": "Supporting slab" }
+        {
+          "materialId": "floor-walkin-panel",
+          "thicknessMm": null,
+          "place": "Walk-in floor panel"
+        },
+        {
+          "materialId": "floor-hw-concrete-4in",
+          "thicknessMm": null,
+          "place": "Supporting slab"
+        }
       ],
       "source": "U.S. Cooler exposed prefabricated floor, R-28 or greater, on a concrete slab.",
       "notes": "Top to bottom. The panel R is the published minimum. Freezer floors may still need subfloor heat."
@@ -65,11 +93,31 @@
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
-        { "materialId": "wall-face-brick-4", "thicknessMm": null, "place": "Outside veneer" },
-        { "materialId": "insulation-polyiso-1", "thicknessMm": 26.5, "place": "Continuous insulation" },
-        { "materialId": "wall-gypsum-half", "thicknessMm": null, "place": "Sheathing" },
-        { "materialId": "insulation-batt-r13", "thicknessMm": null, "place": "Stud cavity" },
-        { "materialId": "wall-gypsum-half", "thicknessMm": null, "place": "Dining side" }
+        {
+          "materialId": "wall-face-brick-4",
+          "thicknessMm": null,
+          "place": "Outside veneer"
+        },
+        {
+          "materialId": "insulation-polyiso-1",
+          "thicknessMm": 26.5,
+          "place": "Continuous insulation"
+        },
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Sheathing"
+        },
+        {
+          "materialId": "insulation-batt-r13",
+          "thicknessMm": null,
+          "place": "Stud cavity"
+        },
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Dining side"
+        }
       ],
       "source": "Face brick R-0.44, foil-faced polyiso R-7.2 per inch, gypsum R-0.45, and an R-13 batt. The polyiso thickness is scaled to the R-7.5 continuous insulation named for an IECC zone 5 metal-framed wall.",
       "notes": "Outside to inside. Studs, brick ties, and air films are not in the layer sum. The zone 5 code maximum for this wall class is U-0.064, which is not the same as 1 divided by the layer sum."
@@ -82,9 +130,21 @@
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
-        { "materialId": "wall-cmu-8", "thicknessMm": null, "place": "Masonry shell" },
-        { "materialId": "insulation-polyiso-1", "thicknessMm": 26.5, "place": "Continuous insulation" },
-        { "materialId": "wall-gypsum-half", "thicknessMm": null, "place": "Kitchen side" }
+        {
+          "materialId": "wall-cmu-8",
+          "thicknessMm": null,
+          "place": "Masonry shell"
+        },
+        {
+          "materialId": "insulation-polyiso-1",
+          "thicknessMm": 26.5,
+          "place": "Continuous insulation"
+        },
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Kitchen side"
+        }
       ],
       "source": "8 in CMU R-1.11, foil-faced polyiso scaled from R-7.2 per inch to about R-7.5, and 1/2 in gypsum R-0.45.",
       "notes": "Outside to inside. A FRP or stainless kitchen finish is not a separate thermal layer in this library."
@@ -97,8 +157,16 @@
       "orderLabel": "One side → the other",
       "series": true,
       "layers": [
-        { "materialId": "wall-gypsum-half", "thicknessMm": null, "place": "Side A" },
-        { "materialId": "wall-gypsum-half", "thicknessMm": null, "place": "Side B" }
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Side A"
+        },
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Side B"
+        }
       ],
       "source": "Gypsum board, 1/2 in, R-0.45, both faces.",
       "notes": "The stud cavity is empty in this demo stack. Add a batt here if the partition is insulated."
@@ -111,7 +179,11 @@
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
-        { "materialId": "wall-walkin-cooler-xps", "thicknessMm": null, "place": "Cooler panel" }
+        {
+          "materialId": "wall-walkin-cooler-xps",
+          "thicknessMm": null,
+          "place": "Cooler panel"
+        }
       ],
       "source": "U.S. Cooler 4 in cooler XPS panel, minimum R-28.8.",
       "notes": "The published panel R is the whole wall. Metal skins are not a separate row in that specification."
@@ -124,7 +196,11 @@
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
-        { "materialId": "wall-walkin-freezer-xps", "thicknessMm": null, "place": "Freezer panel" }
+        {
+          "materialId": "wall-walkin-freezer-xps",
+          "thicknessMm": null,
+          "place": "Freezer panel"
+        }
       ],
       "source": "U.S. Cooler 4 in freezer XPS panel, minimum R-32.",
       "notes": "Swap this onto a walk-in when the box is a freezer. Metal skins are not a separate row."
@@ -137,7 +213,11 @@
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
-        { "materialId": "window-double-lowe", "thicknessMm": null, "place": "Glazed wall" }
+        {
+          "materialId": "window-double-lowe",
+          "thicknessMm": null,
+          "place": "Glazed wall"
+        }
       ],
       "source": "Engineering Toolbox sealed double glazing with a low-E coating, U-0.32.",
       "notes": "A glazed wall uses the published whole-window U-0.32. It is not a tested curtain wall, and SHGC was not stated."
@@ -150,9 +230,21 @@
       "orderLabel": "Room side → outside",
       "series": false,
       "layers": [
-        { "materialId": "ceiling-acoustic-half", "thicknessMm": null, "place": "Room side, dropped ceiling" },
-        { "materialId": "insulation-polyiso-1", "thicknessMm": 105.8, "place": "Roof insulation above the plenum" },
-        { "materialId": "roof-builtup-layer", "thicknessMm": null, "place": "Outside membrane" }
+        {
+          "materialId": "ceiling-acoustic-half",
+          "thicknessMm": null,
+          "place": "Room side, dropped ceiling"
+        },
+        {
+          "materialId": "insulation-polyiso-1",
+          "thicknessMm": 105.8,
+          "place": "Roof insulation above the plenum"
+        },
+        {
+          "materialId": "roof-builtup-layer",
+          "thicknessMm": null,
+          "place": "Outside membrane"
+        }
       ],
       "source": "1/2 in acoustic tile R-1.26, polyiso scaled from R-7.2 per inch to about R-30, and 3/8 in built-up roofing R-0.33. R-30 ci is the IECC zone 5 roof insulation named for insulation entirely above the deck.",
       "notes": "Room side toward the outside. The plenum between the tile and the roof is not a layer, so these R-values are not one series path."
@@ -165,9 +257,21 @@
       "orderLabel": "Room side → outside",
       "series": false,
       "layers": [
-        { "materialId": "wall-gypsum-half", "thicknessMm": null, "place": "Room side, washable ceiling" },
-        { "materialId": "insulation-polyiso-1", "thicknessMm": 105.8, "place": "Roof insulation above the ceiling" },
-        { "materialId": "roof-builtup-layer", "thicknessMm": null, "place": "Outside membrane" }
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Room side, washable ceiling"
+        },
+        {
+          "materialId": "insulation-polyiso-1",
+          "thicknessMm": 105.8,
+          "place": "Roof insulation above the ceiling"
+        },
+        {
+          "materialId": "roof-builtup-layer",
+          "thicknessMm": null,
+          "place": "Outside membrane"
+        }
       ],
       "source": "1/2 in gypsum R-0.45, polyiso scaled from R-7.2 per inch to about R-30, and 3/8 in built-up roofing R-0.33.",
       "notes": "Room side toward the outside. Gypsum stands in for a washable kitchen ceiling. The space above that ceiling is not a layer."
@@ -180,7 +284,11 @@
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
-        { "materialId": "ceiling-walkin-cooler-xps", "thicknessMm": null, "place": "Cooler ceiling panel" }
+        {
+          "materialId": "ceiling-walkin-cooler-xps",
+          "thicknessMm": null,
+          "place": "Cooler ceiling panel"
+        }
       ],
       "source": "U.S. Cooler 4 in cooler XPS ceiling, minimum R-28.8.",
       "notes": "The published panel R is the whole ceiling."
@@ -193,8 +301,16 @@
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
-        { "materialId": "roof-builtup-layer", "thicknessMm": null, "place": "Outside membrane" },
-        { "materialId": "insulation-polyiso-1", "thicknessMm": 105.8, "place": "Continuous insulation" }
+        {
+          "materialId": "roof-builtup-layer",
+          "thicknessMm": null,
+          "place": "Outside membrane"
+        },
+        {
+          "materialId": "insulation-polyiso-1",
+          "thicknessMm": 105.8,
+          "place": "Continuous insulation"
+        }
       ],
       "source": "3/8 in built-up roofing R-0.33 and polyiso scaled from R-7.2 per inch to about R-30. R-30 ci is the IECC zone 5 value for insulation entirely above the deck.",
       "notes": "Outside to inside. The deck is not in the cited R table. Use this when the ceiling is the roof."
@@ -207,7 +323,11 @@
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
-        { "materialId": "window-double-lowe", "thicknessMm": null, "place": "Whole window" }
+        {
+          "materialId": "window-double-lowe",
+          "thicknessMm": null,
+          "place": "Whole window"
+        }
       ],
       "source": "Engineering Toolbox sealed double glazing with a low-E coating, U-0.32.",
       "notes": "One published whole-window value. The panes, gap, and coating are not split into separate R-values because that table did not list them. SHGC was not stated."
@@ -220,7 +340,11 @@
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
-        { "materialId": "window-double-lowe-gas", "thicknessMm": null, "place": "Whole window" }
+        {
+          "materialId": "window-double-lowe-gas",
+          "thicknessMm": null,
+          "place": "Whole window"
+        }
       ],
       "source": "Engineering Toolbox double glazing with a low-E coating and heavy gas fill, U-0.27.",
       "notes": "Swap this onto a window when the product is gas-filled. SHGC was not stated."
@@ -233,7 +357,11 @@
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
-        { "materialId": "door-metal-insulated", "thicknessMm": null, "place": "Door leaf" }
+        {
+          "materialId": "door-metal-insulated",
+          "thicknessMm": null,
+          "place": "Door leaf"
+        }
       ],
       "source": "ASHRAE 90.1-2007 default for an insulated metal swinging door, U-0.50.",
       "notes": "One published door coefficient. The skins and core are not split out. Use the tested door label when you have one."
@@ -246,7 +374,11 @@
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
-        { "materialId": "door-metal-double", "thicknessMm": null, "place": "Door leaf" }
+        {
+          "materialId": "door-metal-double",
+          "thicknessMm": null,
+          "place": "Door leaf"
+        }
       ],
       "source": "ASHRAE 90.1-2007 uninsulated double-layer metal door, U-0.70.",
       "notes": "Swap this onto a door that has no insulation."
