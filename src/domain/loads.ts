@@ -145,6 +145,12 @@ export function loadLabel(item: LoadItem, product: LoadProduct | undefined): str
   return item.quantity > 1 ? `${product.name} × ${item.quantity}` : product.name;
 }
 
+/** Length and depth for the plan. Height is kept but not drawn. */
+export function loadPlanSize(item: LoadItem): { lengthM: number; widthM: number; heightM: number | null } | null {
+  if (item.lengthM == null || item.widthM == null || item.lengthM < 0.05 || item.widthM < 0.05) return null;
+  return { lengthM: item.lengthM, widthM: item.widthM, heightM: item.heightM };
+}
+
 export function addLoad(project: Project, loadId: string, point: { xM: number; yM: number }): Project {
   const product = getLoadProduct(loadId);
   const room = roomAtPoint(project.rooms, point.xM, point.yM);
@@ -155,6 +161,10 @@ export function addLoad(project: Project, loadId: string, point: { xM: number; y
     roomId: room.id,
     xM: Number(point.xM.toFixed(3)),
     yM: Number(point.yM.toFixed(3)),
+    yawDeg: 0,
+    lengthM: product.size?.lengthM ?? null,
+    widthM: product.size?.widthM ?? null,
+    heightM: product.size?.heightM ?? null,
     quantity: 1,
     override: null,
     notes: '',

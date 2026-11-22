@@ -80,6 +80,64 @@ export interface Room {
   edgeWalls?: SurfaceAssignment[];
   /** True when the room came from a template or sample and has not been confirmed. */
   assumption: boolean;
+  /** Air changes per hour. Missing or null uses the site default. */
+  infiltrationAch?: number | null;
+}
+
+export type SiteNumberKey =
+  | 'latitudeDeg'
+  | 'longitudeDeg'
+  | 'timeZoneH'
+  | 'elevationM'
+  | 'heatingDbC'
+  | 'coolingDbC'
+  | 'coolingWbC'
+  | 'coolingRangeK'
+  | 'windMs'
+  | 'windDirDeg'
+  | 'taub'
+  | 'taud'
+  | 'groundC'
+  | 'infiltrationAch';
+
+/** Outdoor design conditions and indoor targets. Temperatures °C, wind m/s, elevation m. */
+export interface SiteClimate {
+  station: string;
+  /** Weather file the imported values came from. */
+  fileName: string;
+  /** North positive. */
+  latitudeDeg: number | null;
+  /** East positive. */
+  longitudeDeg: number | null;
+  /** Hours from GMT. */
+  timeZoneH: number | null;
+  elevationM: number | null;
+  /** 99.6% annual heating dry bulb. */
+  heatingDbC: number | null;
+  /** 0.4% annual cooling dry bulb. */
+  coolingDbC: number | null;
+  /** Mean coincident wet bulb at the 0.4% dry bulb. */
+  coolingWbC: number | null;
+  /** Mean daily dry-bulb range in the cooling month. */
+  coolingRangeK: number | null;
+  coolingMonth: number;
+  windMs: number | null;
+  /** Degrees clockwise from north. */
+  windDirDeg: number | null;
+  /** Clear-sky optical depths for the cooling month. */
+  taub: number | null;
+  taud: number | null;
+  /** ASHRAE edition the optical depths come from. The air-mass exponents differ. */
+  tauEdition: '2009' | '2017';
+  groundC: number | null;
+  groundReflectance: number;
+  surfaceColor: 'dark' | 'light';
+  indoorCoolC: number;
+  indoorCoolRh: number;
+  indoorHeatC: number;
+  /** Project default air changes per hour. */
+  infiltrationAch: number | null;
+  sources: Partial<Record<SiteNumberKey, 'file' | 'manual'>>;
 }
 
 export interface HvacSystem {
@@ -163,9 +221,17 @@ export interface LoadItem {
   /** Load catalog id. */
   loadId: string;
   roomId: string | null;
-  /** Plan marker position, meters. */
+  /** Plan position, meters. Center of the footprint when the appliance has a size. */
   xM: number;
   yM: number;
+  /** Rotation about +Z, degrees. Used when the appliance has a footprint. */
+  yawDeg: number;
+  /** Plan length, meters. Null when not stated. */
+  lengthM: number | null;
+  /** Plan depth, meters. Null when not stated. */
+  widthM: number | null;
+  /** Height, meters. Null when not stated. Not drawn on the plan. */
+  heightM: number | null;
   /** People, appliances, or fixtures. Ignored for area loads. */
   quantity: number;
   override: LoadOverride | null;
@@ -214,6 +280,7 @@ export interface Project {
   wallRuns?: WallRun[];
   ducts?: DuctRun[];
   loads?: LoadItem[];
+  site?: SiteClimate;
   /** One stack per interface stretch, shared or outside air. The adapter checks the envelope and does not write these stacks into GeometryDocument. */
   interfaceWalls?: Record<string, SurfaceAssignment>;
   /** Stage 1 projects stay preliminary. Solver sizing is not available. */
@@ -232,6 +299,7 @@ export interface StoredTemplate {
 
 export type Selection =
   | { kind: 'project' }
+  | { kind: 'site' }
   | { kind: 'room'; id: string }
   | { kind: 'surface'; roomId: string; face: SurfaceFace; wallFace?: WallFace; edge?: number }
   | { kind: 'interface'; key: string }

@@ -62,6 +62,7 @@ import {
 import { PLAN_SIDES, WALL_TYPES, edgePortions, facePortions, findInterface, interfaceTargets, northDegrees, wallPlaceLabel, type InterfaceTarget, type WallPortion } from '@/domain/walls';
 import { StackEditor } from './StackEditor';
 import { TextField, UnitField } from './Fields';
+import { SiteClimateFields } from './SiteClimateFields';
 
 export function Inspector({
   project,
@@ -86,6 +87,9 @@ export function Inspector({
     <aside className="inspector">
       {selection.kind === 'project' && (
         <ProjectFields project={project} onChange={onChange} onDeleteProject={onDeleteProject} nameFocus={nameFocus} />
+      )}
+      {selection.kind === 'site' && (
+        <SiteClimateFields project={project} materials={materials} assemblies={assemblies} onChange={onChange} />
       )}
       {selection.kind === 'room' && (
         <RoomFields project={project} roomId={selection.id} assemblies={assemblies} onChange={onChange} onSelect={onSelect} nameFocus={nameFocus} />
@@ -1681,6 +1685,47 @@ function RoomLoadsBlock({ project, roomId, onSelect }: { project: Project; roomI
   );
 }
 
+function SizeField({
+  label,
+  meters,
+  units,
+  onCommit,
+}: {
+  label: string;
+  meters: number | null;
+  units: Project['units'];
+  onCommit: (meters: number | null) => void;
+}) {
+  const shown = meters == null ? '' : formatNumber(mToLength(meters, units), 2);
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <span className="unit-input">
+        <input
+          key={`${label}-${shown}`}
+          inputMode="decimal"
+          defaultValue={shown}
+          placeholder="Not stated"
+          onBlur={event => {
+            const text = event.currentTarget.value.trim();
+            if (text === '') {
+              if (meters != null) onCommit(null);
+              return;
+            }
+            const next = lengthToM(Number(text), units);
+            if (Number.isFinite(next) && next >= 0.05) onCommit(next);
+            else event.currentTarget.value = shown;
+          }}
+          onKeyDown={event => {
+            if (event.key === 'Enter') event.currentTarget.blur();
+          }}
+        />
+        <em>{lengthUnit(units)}</em>
+      </span>
+    </label>
+  );
+}
+
 function LoadFields({
   project,
   loadId,
@@ -1746,7 +1791,20 @@ function LoadFields({
         <p className="prop-section">Item</p>
         <label className="field">
           <span>Type</span>
-          <select value={product.id} onChange={event => onChange(updateLoad(project, item.id, { loadId: event.target.value, override: null }))}>
+          <select
+            value={product.id}
+            onChange={event => {
+              const next = getLoadProduct(event.target.value);
+              onChange(updateLoad(project, item.id, {
+                loadId: event.target.value,
+                override: null,
+                yawDeg: 0,
+                lengthM: next?.size?.lengthM ?? null,
+                widthM: next?.size?.widthM ?? null,
+                heightM: next?.size?.heightM ?? null,
+              }));
+            }}
+          >
             {loadGroups(product.category).map(group => (
               <optgroup key={group.group} label={group.group}>
                 {group.items.map(entry => (
@@ -1775,6 +1833,21 @@ function LoadFields({
             />
           </label>
         )}
+        {product.basis === 'unit' && (
+          <>
+            <div className="field-grid">
+              <SizeField label="Length" meters={item.lengthM} units={units} onCommit={lengthM => onChange(updateLoad(project, item.id, { lengthM }))} />
+              <SizeField label="Depth" meters={item.widthM} units={units} onCommit={widthM => onChange(updateLoad(project, item.id, { widthM }))} />
+              <SizeField label="Height" meters={item.heightM} units={units} onCommit={heightM => onChange(updateLoad(project, item.id, { heightM }))} />
+            </div>
+            {product.size?.note && <p className="muted">{product.size.note}</p>}
+            <p className="muted">
+              {item.lengthM != null && item.widthM != null
+                ? 'Drawn on the plan at this size. Drag the appliance to move it, and drag the handle to rotate it.'
+                : 'Enter length and depth to draw this appliance on the plan. Height is kept for reference.'}
+            </p>
+          </>
+        )}
         <p className="muted">
           {room ? (
             <>
@@ -1782,7 +1855,7 @@ function LoadFields({
               <button type="button" className="link-btn" onClick={() => onSelect({ kind: 'room', id: room.id })}>
                 {room.name || 'Space'}
               </button>
-              . Drag the marker on the plan to move it.
+              . Drag it on the plan to move it.
             </>
           ) : (
             'Outside every space. Drag it into a space.'

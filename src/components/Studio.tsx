@@ -4,7 +4,8 @@ import dynamic from 'next/dynamic';
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { catalogToken } from '@/domain/catalogDrag';
 import { buildChecks, stepForSelection, type BuildStep, type CheckIssue } from '@/domain/checks';
-import { getLoadProduct, LOAD_CATEGORY_COLOR, LOAD_CATEGORY_LABEL, LOAD_CATEGORY_ORDER, loadGroups, type LoadCategory } from '@/domain/loadCatalog';
+import { siteMissing, siteOf } from '@/domain/climate';
+import { getLoadProduct, LOAD_CATEGORY_LABEL, LOAD_CATEGORY_ORDER, loadGroups, type LoadCategory } from '@/domain/loadCatalog';
 import { addLoad, loadLabel, loadSpec, removeLoad, roomLoads, sumLoads, updateLoad } from '@/domain/loads';
 import {
   CATALOG_MIME,
@@ -58,6 +59,7 @@ import { projectToBuildingModel, validateModel } from '@/thermonode/localAdapter
 import { mergeAssemblies, mergeLibrary, type ConstructionAssembly, type ConstructionMaterial } from '@/domain/constructionLibrary';
 import { BoundaryPanel } from './BoundaryPanel';
 import { EquipmentIcon, categoryIcon, equipmentIconFor } from './EquipmentIcon';
+import { LoadIcon } from './LoadIcon';
 import { Inspector } from './Inspector';
 import { LibraryPanel } from './LibraryPanel';
 import { SchedulePanel } from './SchedulePanel';
@@ -108,7 +110,7 @@ const TOOL_LABEL: Record<ToolKind, string> = {
 /** Selections that keep the current step. Others switch to their own step. */
 const STEP_SELECTIONS: Record<BuildStep, Selection['kind'][]> = {
   spaces: ['room', 'surface', 'interface', 'opening', 'wallRun', 'wallOpening'],
-  loads: ['load', 'room'],
+  loads: ['load', 'room', 'site'],
   equipment: ['equipment', 'system'],
   ducts: ['duct', 'equipment', 'system'],
   check: [],
@@ -546,13 +548,27 @@ export function Studio({
     if (tool.kind === 'draw') return 'Drag to draw a rectangular space.';
     if (tool.kind === 'duct') return 'Click to bend the run. Esc finishes.';
     if (step === 'spaces') return 'Drag a wall type, door, or window onto a wall.';
-    if (step === 'loads') return 'Drag a load into a space.';
+    if (step === 'loads') return 'Set climate, then drag loads into a space.';
     if (step === 'equipment') return 'Drag equipment onto the plan.';
     if (step === 'ducts') return 'Drag a duct onto the plan to start.';
     return checks.length === 0 ? 'No issues found.' : 'Select an issue on the left to see it on the plan.';
   };
 
   const loadTotals = sumLoads(project, project.loads ?? []);
+  const site = siteOf(project);
+  const siteGapsList = siteMissing(site);
+  const siteCoolLabel =
+    site.coolingDbC == null
+      ? null
+      : project.units === 'IP'
+        ? `${formatNumber((site.coolingDbC * 9) / 5 + 32, 0)} °F`
+        : `${formatNumber(site.coolingDbC, 1)} °C`;
+  const siteHeatLabel =
+    site.heatingDbC == null
+      ? null
+      : project.units === 'IP'
+        ? `${formatNumber((site.heatingDbC * 9) / 5 + 32, 0)} °F`
+        : `${formatNumber(site.heatingDbC, 1)} °C`;
   const lastProduct = lastProductId ? getProduct(lastProductId) : undefined;
   const wallType = wallTypeId ? WALL_TYPES.find(item => item.id === wallTypeId) : undefined;
   const spaceNeedle = spaceQuery.trim().toLowerCase();
@@ -751,53 +767,75 @@ export function Studio({
                 </section>
               )}
               {sidePanel === 'project' && step === 'loads' && (
-                <section className="panel-section">
-                  <header className="panel-head">
-                    <h3>Loads by space</h3>
-                  </header>
-                  {project.rooms.length === 0 ? (
-                    <p className="panel-empty">Add spaces first. Each load sits inside a space.</p>
-                  ) : (
-                    <ul className="space-loads">
-                      {project.rooms.map(room => {
-                        const items = roomLoads(project, room.id);
-                        const totals = sumLoads(project, items);
-                        return (
-                          <li key={room.id}>
-                            <button type="button" className={`space-row${selection.kind === 'room' && selection.id === room.id ? ' active' : ''}`} onClick={() => setSelection({ kind: 'room', id: room.id })}>
-                              <span className="space-name">{room.name || 'Space'}</span>
-                              <span className="panel-meta">{items.length ? `${formatPower(totals.sensibleW, project.units)} S · ${formatPower(totals.latentW, project.units)} L` : 'No loads'}</span>
-                            </button>
-                            {items.length > 0 && (
-                              <ul className="load-rows">
-                                {items.map(item => {
-                                  const product = getLoadProduct(item.loadId);
-                                  return (
-                                    <li key={item.id}>
-                                      <button
-                                        type="button"
-                                        className={selection.kind === 'load' && selection.id === item.id ? 'active' : ''}
-                                        onClick={() => setSelection({ kind: 'load', id: item.id })}
-                                        onContextMenu={event => {
-                                          event.preventDefault();
-                                          openMenu({ kind: 'load', id: item.id }, event.clientX, event.clientY);
-                                        }}
-                                      >
-                                        <i className="load-dot" style={{ background: product ? LOAD_CATEGORY_COLOR[product.category] : '#9aa6b0' }} />
-                                        <span>{loadLabel(item, product)}</span>
-                                        {item.override && <span className="pick-tag">{item.override.source === 'manufacturer' ? 'Mfr' : 'Manual'}</span>}
-                                      </button>
-                                    </li>
-                                  );
-                                })}
-                              </ul>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </section>
+                <>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Climate</h3>
+                    </header>
+                    <button type="button" className={`space-row${selection.kind === 'site' ? ' active' : ''}`} onClick={() => select({ kind: 'site' })}>
+                      <span className="space-name">{site.station || 'Site climate'}</span>
+                      <span className="panel-meta">
+                        {siteCoolLabel && siteHeatLabel
+                          ? `Cool ${siteCoolLabel} · Heat ${siteHeatLabel}`
+                          : siteCoolLabel
+                            ? `Cool ${siteCoolLabel}`
+                            : 'Set exterior conditions'}
+                      </span>
+                    </button>
+                    {siteGapsList.length > 0 ? (
+                      <p className="panel-empty">Missing {siteGapsList.join(', ')}.</p>
+                    ) : (
+                      <p className="panel-empty">Exterior design day for envelope, solar, and infiltration.</p>
+                    )}
+                  </section>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Loads by space</h3>
+                    </header>
+                    {project.rooms.length === 0 ? (
+                      <p className="panel-empty">Add spaces first. Each load sits inside a space.</p>
+                    ) : (
+                      <ul className="space-loads">
+                        {project.rooms.map(room => {
+                          const items = roomLoads(project, room.id);
+                          const totals = sumLoads(project, items);
+                          return (
+                            <li key={room.id}>
+                              <button type="button" className={`space-row${selection.kind === 'room' && selection.id === room.id ? ' active' : ''}`} onClick={() => setSelection({ kind: 'room', id: room.id })}>
+                                <span className="space-name">{room.name || 'Space'}</span>
+                                <span className="panel-meta">{items.length ? `${formatPower(totals.sensibleW, project.units)} S · ${formatPower(totals.latentW, project.units)} L` : 'No loads'}</span>
+                              </button>
+                              {items.length > 0 && (
+                                <ul className="load-rows">
+                                  {items.map(item => {
+                                    const product = getLoadProduct(item.loadId);
+                                    return (
+                                      <li key={item.id}>
+                                        <button
+                                          type="button"
+                                          className={selection.kind === 'load' && selection.id === item.id ? 'active' : ''}
+                                          onClick={() => setSelection({ kind: 'load', id: item.id })}
+                                          onContextMenu={event => {
+                                            event.preventDefault();
+                                            openMenu({ kind: 'load', id: item.id }, event.clientX, event.clientY);
+                                          }}
+                                        >
+                                          {product ? <LoadIcon category={product.category} /> : <i className="load-dot" />}
+                                          <span>{loadLabel(item, product)}</span>
+                                          {item.override && <span className="pick-tag">{item.override.source === 'manufacturer' ? 'Mfr' : 'Manual'}</span>}
+                                        </button>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </section>
+                </>
               )}
               {sidePanel === 'project' && step === 'equipment' && (
                 <section className="panel-section">
@@ -1112,6 +1150,7 @@ export function Studio({
                     onBeginDuct={armDuct}
                     onPaintWall={paintWall}
                     onMoveLoad={(id, xM, yM) => edit(updateLoad(project, id, { xM, yM }))}
+                    onRotateLoad={(id, yawDeg) => edit(updateLoad(project, id, { yawDeg }))}
                     onContextMenu={openMenu}
                     onRoomsChange={rooms => edit({ ...project, rooms })}
                     onNorthChange={deg => edit({ ...project, northDeg: deg === 0 ? undefined : deg })}
@@ -2148,7 +2187,7 @@ function LoadCatalogList({
         <section key={section.id}>
           {category === 'all' && (
             <h4 className="load-cat">
-              <i className="load-dot" style={{ background: LOAD_CATEGORY_COLOR[section.id] }} />
+              <LoadIcon category={section.id} />
               {LOAD_CATEGORY_LABEL[section.id]}
             </h4>
           )}
@@ -2159,6 +2198,7 @@ function LoadCatalogList({
                 {group.items.map(item => (
                   <li key={item.id}>
                     <CatalogDragRow token={catalogToken({ kind: 'load', id: item.id })} title={`${item.name}. ${loadSpec(item, units)}. ${item.source}`}>
+                      <LoadIcon category={item.category} />
                       <span>{item.name}</span>
                       <span className="pick-meta">{loadSpec(item, units)}</span>
                     </CatalogDragRow>

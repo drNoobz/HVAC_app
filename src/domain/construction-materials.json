@@ -385,9 +385,9 @@
       "rIp": null,
       "uIp": null,
       "uSi": 5.8,
-      "shgc": null,
+      "shgc": 0.73,
       "source": "Engineering Toolbox transmission-loss table, vertical single glazing in a metal frame, 5.8 W/(m²·K).",
-      "notes": "Whole-window coefficient from that table. SHGC was not stated. Glass thickness was not stated.",
+      "notes": "Whole-window coefficient from that table. Glass thickness was not stated. SHGC 0.73 is ID 1, single clear glass in a metal frame, Carmody and Haglund (2012), Measure Guideline: Energy-Efficient Window Performance and Selection, DOE Building America, Table 1 (Efficient Windows Collaborative generic windows). Confirm with the product NFRC label.",
       "potentialSupplier": "Kawneer / YKK AP storefront (generic single-glaze performance class)"
     },
     {
@@ -399,9 +399,9 @@
       "rIp": null,
       "uIp": null,
       "uSi": 3,
-      "shgc": null,
+      "shgc": 0.65,
       "source": "Engineering Toolbox transmission-loss table, vertical sealed double glazing, 20 mm between glasses, 3.0 W/(m²·K).",
-      "notes": "SHGC was not stated. Frame type was not stated for this row.",
+      "notes": "Frame type was not stated for this row. SHGC 0.65 is ID 2, double clear glass in a metal frame, Carmody and Haglund (2012), Measure Guideline: Energy-Efficient Window Performance and Selection, DOE Building America, Table 1 (Efficient Windows Collaborative generic windows). A nonmetal frame is 0.57 in the same table. Confirm with the product NFRC label.",
       "potentialSupplier": "Kawneer / YKK AP / Oldcastle BuildingEnvelope"
     },
     {
@@ -413,9 +413,9 @@
       "rIp": null,
       "uIp": 0.32,
       "uSi": 1.8,
-      "shgc": null,
+      "shgc": 0.31,
       "source": "Engineering Toolbox transmission-loss table, vertical sealed double glazing with a low-E coating, U-0.32 and 1.8 W/(m²·K).",
-      "notes": "SHGC was not stated. Confirm the product label before using a solar-gain load.",
+      "notes": "SHGC 0.31 is ID 16, double low-E medium solar gain with argon at U-0.28, the closest U in Carmody and Haglund (2012), Measure Guideline: Energy-Efficient Window Performance and Selection, DOE Building America, Table 1 (Efficient Windows Collaborative generic windows). The coating level was not stated; that table spans 0.20 (low gain) to 0.50 (high gain). Confirm with the product NFRC label.",
       "potentialSupplier": "Kawneer / YKK AP / Oldcastle BuildingEnvelope"
     },
     {
@@ -427,9 +427,9 @@
       "rIp": null,
       "uIp": 0.27,
       "uSi": 1.5,
-      "shgc": null,
+      "shgc": 0.31,
       "source": "Engineering Toolbox transmission-loss table, double glazing with a low-E coating and heavy gas fill, U-0.27 and 1.5 W/(m²·K).",
-      "notes": "SHGC was not stated.",
+      "notes": "SHGC 0.31 is ID 16, double low-E medium solar gain with argon at U-0.28, Carmody and Haglund (2012), Measure Guideline: Energy-Efficient Window Performance and Selection, DOE Building America, Table 1 (Efficient Windows Collaborative generic windows). The coating level was not stated; ID 17, low solar gain at U-0.27, is 0.20. Confirm with the product NFRC label.",
       "potentialSupplier": "Kawneer / YKK AP / Oldcastle BuildingEnvelope"
     },
     {

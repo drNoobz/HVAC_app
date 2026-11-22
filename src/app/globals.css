@@ -160,6 +160,7 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
 }
 .lede { max-width: 62ch; color: var(--muted); margin-top: 0; }
 .muted, .sub { color: var(--muted); }
+.warn-line { margin: 0; font-size: 12px; color: #6d4a09; }
 .sub { display: block; font-size: 12px; margin-top: 2px; }
 .empty { color: var(--muted); padding: 12px; border: 1px dashed var(--line); background: white; }
 
@@ -460,6 +461,8 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
 .plan-wrap.is-select [data-hit="room"] { cursor: move; }
 .plan-wrap.is-select [data-hit="opening"] { cursor: grab; }
 .plan-wrap.is-select [data-hit="equipment"] { cursor: grab; }
+.plan-wrap.is-select [data-hit="load"] { cursor: grab; }
+.plan-wrap.is-select [data-hit="load-rotate"] { cursor: grab; }
 .plan-wrap.is-select [data-hit="equipment-rotate"] { cursor: grab; }
 .plan-wrap.is-dragging [data-hit="opening"] { cursor: grabbing; }
 .plan-wrap.is-moving-equipment, .plan-wrap.is-moving-equipment * { cursor: grabbing; }
@@ -989,7 +992,8 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
 .load-rows button > span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .load-rows button:hover { background: #f4f7f8; }
 .load-rows button.active { background: #e7f3f4; color: var(--teal-dark); font-weight: 600; }
-.load-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; display: inline-block; }
+.load-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; display: inline-block; background: #9aa6b0; }
+.load-icon { width: 16px; height: 16px; flex: none; display: block; }
 .load-catalog { display: grid; gap: 10px; }
 .load-cat { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; font-size: 12px; font-weight: 700; }
 .load-group { display: grid; gap: 2px; }

@@ -8,8 +8,9 @@ import { ductCrossings, ductSizeLabel, endRise, equipmentPortHits, nearestPort, 
 import { equipmentGlyph, equipmentIconFor } from './EquipmentIcon';
 import type { DuctService, DuctShape, EditorTool, LoadItem, Opening, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
 import type { BuildStep } from '@/domain/checks';
-import { getLoadProduct, LOAD_CATEGORY_COLOR, type LoadCategory } from '@/domain/loadCatalog';
-import { loadLabel } from '@/domain/loads';
+import { getLoadProduct, LOAD_CATEGORY_COLOR } from '@/domain/loadCatalog';
+import { LoadSymbol } from './LoadIcon';
+import { loadLabel, loadPlanSize } from '@/domain/loads';
 import { constrainEquipmentPosition, roomAtPoint } from '@/domain/projectOps';
 import { locateOpening, NO_WALL_RUNS, outlineCentroid, outlineRoomOk, pointInOutline, polygonArea, roomLoop, runGeom, runOpeningEnds, snapDrawPoint, wallAngleDeg, wallQuad, wallQuads, type DrawPoint, type OpeningSpot, type WallSnap } from '@/domain/wallDraw';
 import { METERS_PER_FOOT, formatArea, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
@@ -49,15 +50,6 @@ function stepFade(step: BuildStep): { spaces: number; loads: number; equipment: 
   return { spaces: 1, loads: 1, equipment: 1, ducts: 1 };
 }
 
-const LOAD_GLYPH: Record<LoadCategory, string> = {
-  people: 'P',
-  cooking: 'C',
-  warewashing: 'D',
-  refrigeration: 'R',
-  lighting: 'L',
-  plug: 'E',
-};
-
 function LoadMarks({
   loads,
   selection,
@@ -77,29 +69,80 @@ function LoadMarks({
       {loads.map(item => {
         const product = getLoadProduct(item.loadId);
         const active = selection.kind === 'load' && selection.id === item.id;
-        return (
-          <g
-            key={item.id}
-            data-hit="load"
-            data-id={item.id}
-            onContextMenu={event => {
-              event.preventDefault();
-              event.stopPropagation();
-              onContextMenu({ kind: 'load', id: item.id }, event.clientX, event.clientY);
-            }}
-          >
-            {active && <circle cx={item.xM} cy={item.yM} r={r * 1.5} fill="none" stroke={SELECT} strokeWidth={2.25} vectorEffect="non-scaling-stroke" />}
-            <circle cx={item.xM} cy={item.yM} r={r} fill={product ? LOAD_CATEGORY_COLOR[product.category] : '#7a7f85'} stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-            <g transform={`translate(${item.xM} ${item.yM}) scale(1,-1)`} pointerEvents="none">
-              <text textAnchor="middle" y={fontM * 0.3} fontSize={fontM * 0.85} fontWeight={600} fill="#fff">
-                {product ? LOAD_GLYPH[product.category] : '?'}
-              </text>
-              {labels && (
-                <text textAnchor="middle" y={r + fontM * 1.05} fontSize={fontM * 0.66} fill={INK}>
-                  {loadLabel(item, product)}
-                </text>
-              )}
+        const color = product ? LOAD_CATEGORY_COLOR[product.category] : '#7a7f85';
+        const size = loadPlanSize(item);
+        const menu = (event: ReactMouseEvent) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onContextMenu({ kind: 'load', id: item.id }, event.clientX, event.clientY);
+        };
+        if (!size) {
+          return (
+            <g key={item.id} data-hit="load" data-id={item.id} onContextMenu={menu}>
+              {active && <circle cx={item.xM} cy={item.yM} r={r * 1.5} fill="none" stroke={SELECT} strokeWidth={2.25} vectorEffect="non-scaling-stroke" />}
+              <circle cx={item.xM} cy={item.yM} r={r} fill={color} stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+              <g transform={`translate(${item.xM} ${item.yM}) scale(1,-1)`} pointerEvents="none">
+                {product ? (
+                  <g transform={`scale(${r / 16})`} color="#fff">
+                    <g transform="translate(-12 -12)">
+                      <LoadSymbol category={product.category} hair />
+                    </g>
+                  </g>
+                ) : (
+                  <text textAnchor="middle" y={fontM * 0.3} fontSize={fontM * 0.85} fontWeight={600} fill="#fff">?</text>
+                )}
+                {labels && (
+                  <text textAnchor="middle" y={r + fontM * 1.05} fontSize={fontM * 0.66} fill={INK}>
+                    {loadLabel(item, product)}
+                  </text>
+                )}
+              </g>
             </g>
+          );
+        }
+        const length = size.lengthM;
+        const width = size.widthM;
+        const label = loadLabel(item, product);
+        const chipW = Math.max(fontM * 1.7, fontM * 0.56 * label.length);
+        const iconM = Math.min(length, width, fontM * 1.6);
+        const showIcon = Math.min(length, width) >= fontM * 1.1 && product;
+        const handle = Math.max(fontM * 0.9, 0.2);
+        return (
+          <g key={item.id} transform={`rotate(${item.yawDeg} ${item.xM} ${item.yM})`} onContextMenu={menu}>
+            <rect
+              data-hit="load"
+              data-id={item.id}
+              x={item.xM - length / 2}
+              y={item.yM - width / 2}
+              width={length}
+              height={width}
+              fill={color}
+              fillOpacity={active ? 0.28 : 0.16}
+              stroke={active ? SELECT : color}
+              strokeWidth={active ? 2.25 : HAIR}
+              vectorEffect="non-scaling-stroke"
+            />
+            {showIcon && (
+              <g transform={`translate(${item.xM} ${item.yM}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none" color={active ? SELECT : color}>
+                <g transform={`scale(${iconM / 18}) translate(-12 -12)`}>
+                  <LoadSymbol category={product.category} hair />
+                </g>
+              </g>
+            )}
+            {labels && (
+              <g transform={`translate(${item.xM} ${item.yM + width / 2 + fontM * 0.7}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
+                <rect x={-chipW / 2} y={-fontM * 0.48} width={chipW} height={fontM * 0.96} fill={PAPER} stroke="none" />
+                <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.62} fill={active ? SELECT : color}>
+                  {label}
+                </text>
+              </g>
+            )}
+            {active && (
+              <g data-hit="load-rotate" data-id={item.id} aria-label="Rotate appliance">
+                <line x1={item.xM + length / 2} y1={item.yM} x2={item.xM + length / 2 + handle} y2={item.yM} stroke={SELECT} strokeWidth={HAIR} vectorEffect="non-scaling-stroke" pointerEvents="none" />
+                <circle cx={item.xM + length / 2 + handle} cy={item.yM} r={Math.max(fontM * 0.48, 0.14)} fill={PAPER} stroke={SELECT} strokeWidth={2.25} vectorEffect="non-scaling-stroke" />
+              </g>
+            )}
           </g>
         );
       })}
@@ -410,6 +453,7 @@ export function PlanView({
   onNorthChange,
   onPlaceLoad,
   onMoveLoad,
+  onRotateLoad,
   onBeginDuct,
   onPaintWall,
   step,
@@ -442,6 +486,7 @@ export function PlanView({
   onNorthChange: (deg: number) => void;
   onPlaceLoad: (point: { xM: number; yM: number }, loadId: string) => void;
   onMoveLoad: (id: string, xM: number, yM: number) => void;
+  onRotateLoad: (id: string, yawDeg: number) => void;
   onBeginDuct: (catalogId: string) => Extract<EditorTool, { kind: 'duct' }>;
   onPaintWall: (selection: Selection, wallTypeId: string) => void;
   step: BuildStep;
@@ -462,7 +507,9 @@ export function PlanView({
   const [movingEquipment, setMovingEquipment] = useState<{ id: string; xM: number; yM: number } | null>(null);
   const [rotatingEquipment, setRotatingEquipment] = useState<{ id: string; yawDeg: number } | null>(null);
   const [movingLoad, setMovingLoad] = useState<{ id: string; xM: number; yM: number } | null>(null);
+  const [rotatingLoad, setRotatingLoad] = useState<{ id: string; yawDeg: number } | null>(null);
   const movingLoadRef = useRef<{ id: string; xM: number; yM: number } | null>(null);
+  const rotatingLoadRef = useRef<{ id: string; yawDeg: number } | null>(null);
   const rotatingRef = useRef<{ id: string; yawDeg: number } | null>(null);
   const [gesture, setGesture] = useState<
     | { kind: 'wall' | 'opening'; roomId: string; face: WallFace; openingId?: string }
@@ -494,6 +541,7 @@ export function PlanView({
     | { kind: 'equipment'; id: string; xM: number; yM: number; grabX: number; grabY: number; pointerX: number; pointerY: number; view: ViewBox; armed: boolean }
     | { kind: 'rotate'; id: string; xM: number; yM: number; startYaw: number; startAngle: number; pointerX: number; pointerY: number; view: ViewBox }
     | { kind: 'load'; id: string; xM: number; yM: number; grabX: number; grabY: number; pointerX: number; pointerY: number; view: ViewBox; armed: boolean }
+    | { kind: 'load-rotate'; id: string; xM: number; yM: number; startYaw: number; startAngle: number; pointerX: number; pointerY: number; view: ViewBox }
     | null
   >(null);
   const wallRuns = project.wallRuns ?? NO_WALL_RUNS;
@@ -640,6 +688,10 @@ export function PlanView({
     movingLoadRef.current = next;
     setMovingLoad(next);
   };
+  const showLoadRotate = (next: { id: string; yawDeg: number } | null) => {
+    rotatingLoadRef.current = next;
+    setRotatingLoad(next);
+  };
   const showRotate = (next: { id: string; yawDeg: number } | null) => {
     rotatingRef.current = next;
     setRotatingEquipment(next);
@@ -701,7 +753,8 @@ export function PlanView({
     const before = gesture?.kind === 'space' ? project.rooms.find(room => room.id === item.roomId) : undefined;
     const after = before ? rooms.find(room => room.id === before.id) : undefined;
     const shifted = before && after ? { ...item, xM: item.xM + (after.xM - before.xM), yM: item.yM + (after.yM - before.yM) } : item;
-    return movingLoad?.id === item.id ? { ...shifted, xM: movingLoad.xM, yM: movingLoad.yM } : shifted;
+    const moved = movingLoad?.id === item.id ? { ...shifted, xM: movingLoad.xM, yM: movingLoad.yM } : shifted;
+    return rotatingLoad?.id === item.id ? { ...moved, yawDeg: rotatingLoad.yawDeg } : moved;
   });
   const openHitMenu = (event: ReactMouseEvent, next: Selection) => {
     event.preventDefault();
@@ -885,6 +938,26 @@ export function PlanView({
               }
               return;
             }
+            if (hit.getAttribute('data-hit') === 'load-rotate') {
+              const id = hit.getAttribute('data-id');
+              const item = id ? (project.loads ?? []).find(entry => entry.id === id) : undefined;
+              if (item) {
+                drag.current = {
+                  kind: 'load-rotate',
+                  id: item.id,
+                  xM: item.xM,
+                  yM: item.yM,
+                  startYaw: item.yawDeg,
+                  startAngle: (Math.atan2(point.yM - item.yM, point.xM - item.xM) * 180) / Math.PI,
+                  pointerX: event.clientX,
+                  pointerY: event.clientY,
+                  view,
+                };
+                onSelect({ kind: 'load', id: item.id });
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }
+              return;
+            }
             if (hit.getAttribute('data-hit') === 'load') {
               const id = hit.getAttribute('data-id');
               const item = id ? (project.loads ?? []).find(entry => entry.id === id) : undefined;
@@ -1036,10 +1109,11 @@ export function PlanView({
             setReadout({ x: xM, y: yM, text: `${formatDelta(xM - current.xM, project.units)} · ${formatDelta(yM - current.yM, project.units)}` });
             return;
           }
-          if (current.kind === 'rotate') {
+          if (current.kind === 'rotate' || current.kind === 'load-rotate') {
             const angle = (Math.atan2(point.yM - current.yM, point.xM - current.xM) * 180) / Math.PI;
             const yawDeg = snapYaw(current.startYaw + (angle - current.startAngle));
-            showRotate({ id: current.id, yawDeg });
+            if (current.kind === 'rotate') showRotate({ id: current.id, yawDeg });
+            else showLoadRotate({ id: current.id, yawDeg });
             setReadout({ x: point.xM, y: point.yM, text: `${yawDeg}°` });
             return;
           }
@@ -1111,6 +1185,7 @@ export function PlanView({
           showEquipment(null);
           showRotate(null);
           showLoad(null);
+          showLoadRotate(null);
           setGesture(null);
           setReadout(null);
         }}
@@ -1150,6 +1225,15 @@ export function PlanView({
             suppressClick.current = true;
             onSelect({ kind: 'load', id: current.id });
             if (current.armed && next && next.id === current.id) onMoveLoad(current.id, next.xM, next.yM);
+            return;
+          }
+          if (current.kind === 'load-rotate') {
+            const next = rotatingLoadRef.current;
+            showLoadRotate(null);
+            setReadout(null);
+            suppressClick.current = true;
+            onSelect({ kind: 'load', id: current.id });
+            if (next && next.id === current.id && Math.abs(next.yawDeg - current.startYaw) > 1e-6) onRotateLoad(current.id, next.yawDeg);
             return;
           }
           if (current.kind === 'pan') {

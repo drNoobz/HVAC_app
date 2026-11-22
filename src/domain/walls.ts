@@ -1,3 +1,4 @@
+import { normalizeSite } from './climate';
 import { builtinAssembly, cloneLayers } from './constructionLibrary';
 import type { DuctRun, LoadItem, Project, Room, SurfaceAssignment, WallFace } from './types';
 
@@ -836,6 +837,10 @@ function normalizeLoads(value: Project['loads']): LoadItem[] {
       roomId: typeof item.roomId === 'string' ? item.roomId : null,
       xM: finiteOrNull(item.xM) ?? 0,
       yM: finiteOrNull(item.yM) ?? 0,
+      yawDeg: Number.isFinite(item.yawDeg) ? item.yawDeg : 0,
+      lengthM: finiteOrNull(item.lengthM) != null && finiteOrNull(item.lengthM)! >= 0.05 ? finiteOrNull(item.lengthM) : null,
+      widthM: finiteOrNull(item.widthM) != null && finiteOrNull(item.widthM)! >= 0.05 ? finiteOrNull(item.widthM) : null,
+      heightM: finiteOrNull(item.heightM) != null && finiteOrNull(item.heightM)! >= 0.05 ? finiteOrNull(item.heightM) : null,
       quantity: Number(item.quantity) > 0 ? Number(item.quantity) : 1,
       override,
       notes: typeof item.notes === 'string' ? item.notes : '',
@@ -861,8 +866,10 @@ export function normalizeProject(project: Project, emptyNote: string): Project {
         const item = room.edgeWalls?.[index];
         return isAssignment(item) ? cloneWallAssignment(item) : blankWallAssignment(emptyNote);
       });
+      const ach = finiteOrNull(room.infiltrationAch);
       return {
         ...room,
+        infiltrationAch: ach != null && ach >= 0 ? ach : null,
         ...(outline ? { outline, edgeWalls } : { outline: undefined, edgeWalls: undefined }),
         surfaces: {
           floor: room.surfaces.floor,
@@ -874,6 +881,7 @@ export function normalizeProject(project: Project, emptyNote: string): Project {
     wallRuns: Array.isArray(project.wallRuns) ? project.wallRuns.map(run => ({ ...run, openings: run.openings ?? [] })) : [],
     ducts: normalizeDucts(project.ducts),
     loads: normalizeLoads(project.loads),
+    site: normalizeSite(project.site),
     interfaceWalls: normalizeInterfaceWalls(project.interfaceWalls),
   };
 }

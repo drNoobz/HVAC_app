@@ -1,12 +1,16 @@
+import { blankSite } from './climate';
 import { builtinAssembly, cloneLayers } from './constructionLibrary';
+import { catalogPorts, equipmentSizeM, getProduct } from './catalog';
+import { getDuctProduct } from './ductCatalog';
 import { createId, nowIso } from './ids';
-import { placementZ } from './projectOps';
-import { getProduct } from './catalog';
-import type { HvacSystem, Opening, PlacedEquipment, Project, Room, SurfaceAssignment, SystemKind } from './types';
-import { repeatedWalls, separateSharedWalls } from './walls';
+import { getLoadProduct } from './loadCatalog';
+import { addDuct, placementZ } from './projectOps';
+import type { DuctService, HvacSystem, LoadItem, Opening, PlacedEquipment, Project, Room, SiteClimate, SurfaceAssignment, SystemKind } from './types';
+import { interfaceTargets, isOutsideInterfaceKey, repeatedWalls, separateSharedWalls } from './walls';
 
 const PLANNING_NOTE = 'Planning default from the restaurant construction library. The stack is copied onto this surface. Confirm the climate zone and the tested assembly before design use.';
 const KITCHEN_USES = new Set(['Kitchen', 'Hot line', 'Prep', 'Dish']);
+const SERVICE_USES = new Set(['Kitchen', 'Hot line', 'Prep', 'Dish', 'Restroom', 'Storage', 'Dry storage', 'Corridor', 'Service']);
 const DINING_USES = new Set(['Dining', 'Bar']);
 
 function surface(assemblyId: string): SurfaceAssignment {
@@ -98,6 +102,80 @@ function place(
   };
 }
 
+const EXAMPLE = 'Example from the full-service template. Confirm the selection before design use.';
+
+function load(loadId: string, host: Room, xM: number, yM: number, quantity = 1, yawDeg = 0): LoadItem {
+  const product = getLoadProduct(loadId);
+  if (!product) throw new Error(`Unknown load ${loadId}`);
+  return {
+    id: createId('load'),
+    loadId,
+    roomId: host.id,
+    xM,
+    yM,
+    yawDeg,
+    lengthM: product.size?.lengthM ?? null,
+    widthM: product.size?.widthM ?? null,
+    heightM: product.size?.heightM ?? null,
+    quantity,
+    override: null,
+    notes: EXAMPLE,
+  };
+}
+
+function ductDiameter(catalogId: string, inches: number): number {
+  const size = getDuctProduct(catalogId)?.sizes?.find(item => item.id === String(inches));
+  if (!size) throw new Error(`No ${inches} in size on ${catalogId}`);
+  return size.widthM;
+}
+
+function portPoint(item: PlacedEquipment, portId: string): { x: number; y: number; equipmentId: string; portId: string } {
+  const product = getProduct(item.catalogId);
+  const port = product ? catalogPorts(product).find(entry => entry.id === portId) : undefined;
+  if (!product || !port) throw new Error(`No port ${portId} on ${item.catalogId}`);
+  const size = equipmentSizeM(product);
+  const yaw = (item.yawDeg * Math.PI) / 180;
+  const lx = (port.u * size.lengthM) / 2;
+  const ly = (port.v * size.widthM) / 2;
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  return { x: item.xM + lx * c - ly * s, y: item.yM + lx * s + ly * c, equipmentId: item.id, portId };
+}
+
+function connect(
+  project: Project,
+  catalogId: string,
+  systemId: string,
+  service: DuctService,
+  inches: number,
+  points: { x: number; y: number; equipmentId?: string; portId?: string }[],
+): Project {
+  const next = addDuct(project, { catalogId, systemId, service, shape: 'round', widthM: ductDiameter(catalogId, inches), heightM: null, points });
+  if (next === project) throw new Error(`Could not add ${service} duct ${catalogId}`);
+  return next;
+}
+
+function stub(project: Project, item: PlacedEquipment, portId: string, catalogId: string, systemId: string, service: DuctService, inches: number): Project {
+  const start = portPoint(item, portId);
+  const product = getProduct(item.catalogId);
+  const port = product ? catalogPorts(product).find(entry => entry.id === portId) : undefined;
+  if (!port) throw new Error(`No port ${portId} on ${item.catalogId}`);
+  const yaw = (item.yawDeg * Math.PI) / 180;
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  let dx = port.u * c - port.v * s;
+  let dy = port.u * s + port.v * c;
+  const length = Math.hypot(dx, dy);
+  if (length < 1e-6) {
+    dx = 0;
+    dy = 1;
+  } else {
+    dx /= length;
+    dy /= length;
+  }
+  return connect(project, catalogId, systemId, service, inches, [start, { x: start.x + dx * 0.8, y: start.y + dy * 0.8 }]);
+}
+
 function base(
   name: string,
   subtype: string,
@@ -108,7 +186,7 @@ function base(
   equipment: PlacedEquipment[]
 ): Project {
   const timestamp = nowIso();
-  return {
+  return assignInterfaces({
     schemaVersion: 1,
     id: createId('prj'),
     name,
@@ -122,180 +200,157 @@ function base(
     systems,
     equipment,
     wallRuns: [],
+    loads: [],
+    ducts: [],
     preliminary: true,
     createdAt: timestamp,
     updatedAt: timestamp,
-  };
+  });
+}
+
+function exteriorAssemblyId(use: string): string {
+  if (use === 'Walk-in') return 'asm-wall-walkin';
+  if (SERVICE_USES.has(use)) return 'asm-wall-kitchen';
+  return 'asm-wall-dining';
+}
+
+function assignInterfaces(project: Project): Project {
+  const interfaceWalls: NonNullable<Project['interfaceWalls']> = { ...project.interfaceWalls };
+  for (const target of interfaceTargets(project.rooms)) {
+    if (interfaceWalls[target.key]?.constructionId) continue;
+    const host = project.rooms.find(room => room.id === target.sides[0]?.roomId);
+    const other = project.rooms.find(room => room.id === target.sides[1]?.roomId);
+    const outside = isOutsideInterfaceKey(target.key);
+    const assemblyId = outside
+      ? exteriorAssemblyId(host?.use ?? '')
+      : host?.use === 'Walk-in' || other?.use === 'Walk-in'
+        ? 'asm-wall-walkin'
+        : 'asm-wall-partition';
+    interfaceWalls[target.key] = surface(assemblyId);
+  }
+  return { ...project, interfaceWalls };
 }
 
 const TEMPLATE_DETAILS =
   'Editable restaurant template. Room sizes, materials, and any example equipment are planning assumptions. Confirm them before design use.';
 
-export function createCafeProject(): Project {
-  const dining = room({
-    name: 'Dining',
-    use: 'Dining',
-    xM: 0,
-    yM: 0,
-    lengthM: 9,
-    widthM: 6.5,
-    heightM: 3.05,
-    openings: [door('px', 1.2), windowOpening('ny', 1.2, 1.6), windowOpening('ny', 4.8, 1.4)],
-  });
-  const kitchen = room({
-    name: 'Kitchen',
-    use: 'Kitchen',
-    xM: 9,
-    yM: 0,
-    lengthM: 5,
-    widthM: 4.2,
-    heightM: 3.2,
-    openings: [door('nx', 1.2)],
-  });
-  const restroom = room({
-    name: 'Restroom',
-    use: 'Restroom',
-    xM: 9,
-    yM: 4.2,
-    lengthM: 2.4,
-    widthM: 2.3,
-    heightM: 2.7,
-    openings: [door('nx', 0.4, 0.8)],
-  });
-  const storage = room({
-    name: 'Storage',
-    use: 'Storage',
-    xM: 11.4,
-    yM: 4.2,
-    lengthM: 2.6,
-    widthM: 2.3,
-    heightM: 2.7,
-    openings: [door('ny', 0.4, 0.9)],
-  });
-  const exhaust = system('Kitchen exhaust', 'kitchen-exhaust', 'Template grouping. No airflow has been calculated.');
-  const comfort = system('Dining comfort', 'comfort', 'Template grouping. No heating or cooling load has been calculated.');
-  const restroomSys = system('Restroom exhaust', 'restroom-exhaust', 'Template grouping.');
-  const example = 'Example from the café template. Not a sized selection.';
-  return base(
-    'Café',
-    'cafe',
-    { kind: 'template', templateId: 'cafe', label: 'Café template' },
-    TEMPLATE_DETAILS,
-    [dining, kitchen, restroom, storage],
-    [exhaust, comfort, restroomSys],
-    [
-      place('hood-wall-8', kitchen, 11.2, 2.1, exhaust.id, example),
-      place('bath-fan-150', restroom, 10.2, 5.3, restroomSys.id, example),
-    ]
-  );
+/**
+ * Chicago O'Hare annual design day from EnergyPlus TMY3 .ddy (ASHRAE 2009 Climate Design Data).
+ * July deep ground from the matching .stat. Infiltration is a planning default, not from that file.
+ */
+function fullServiceSite(): SiteClimate {
+  const site = blankSite();
+  const keys = [
+    'latitudeDeg',
+    'longitudeDeg',
+    'timeZoneH',
+    'elevationM',
+    'heatingDbC',
+    'coolingDbC',
+    'coolingWbC',
+    'coolingRangeK',
+    'windMs',
+    'windDirDeg',
+    'taub',
+    'taud',
+    'groundC',
+    'infiltrationAch',
+  ] as const;
+  return {
+    ...site,
+    station: "Chicago O'Hare Intl AP, IL (planning)",
+    fileName: 'USA_IL_Chicago-OHare.Intl.AP.725300_TMY3.ddy',
+    latitudeDeg: 41.98,
+    longitudeDeg: -87.92,
+    timeZoneH: -6,
+    elevationM: 201,
+    heatingDbC: -20,
+    coolingDbC: 33.3,
+    coolingWbC: 23.7,
+    coolingRangeK: 10.5,
+    coolingMonth: 7,
+    windMs: 5.2,
+    windDirDeg: 230,
+    taub: 0.455,
+    taud: 2.05,
+    tauEdition: '2009',
+    groundC: 13.8,
+    infiltrationAch: 0.25,
+    sources: Object.fromEntries(keys.map(key => [key, 'manual' as const])),
+  };
 }
 
 export function createFullServiceProject(): Project {
   const plan = fullServiceRooms();
   const exhaust = system('Kitchen exhaust', 'kitchen-exhaust', 'Template grouping. No airflow has been calculated.');
-  const makeup = system('Make-up air', 'makeup-air', 'Template grouping. No airflow has been calculated.');
-  const comfort = system('Dining comfort', 'comfort', 'Template grouping. No heating or cooling load has been calculated.');
+  const makeup = system('Make-up air', 'makeup-air', 'Template grouping. Not balanced to the hood.');
+  const comfort = system('Dining comfort', 'comfort', 'Template grouping. Not a load calculation.');
   const restroomSys = system('Restroom exhaust', 'restroom-exhaust', 'Template grouping.');
-  return base(
+  const dishSys = system('Dish exhaust', 'ventilation', 'Template grouping.');
+  const hood = place('hood-wall-8', plan.kitchen, 3.6, 15.39, exhaust.id, `${EXAMPLE} Wall canopy on the back wall.`);
+  const fan = place('fan-upblast-30', plan.kitchen, 7.6, 12.2, exhaust.id, `${EXAMPLE} Shown on the kitchen roof.`);
+  const mau = place('mau-40', plan.prep, 13.2, 11.2, makeup.id, `${EXAMPLE} Shown on the prep roof.`);
+  const rtu = place('rtu-12', plan.dining, 5, 4, comfort.id, `${EXAMPLE} Shown over the dining room. Capacity is not a calculated load.`);
+  const dishFan = place('fan-inline-8', plan.dish, 11.4, 14.4, dishSys.id, EXAMPLE);
+  const bathA = place('bath-fan-150', plan.restroomA, 13.1, 6.5, restroomSys.id, EXAMPLE);
+  const bathB = place('bath-fan-150', plan.restroomB, 15.3, 6.5, restroomSys.id, EXAMPLE);
+  const erv = place('erv-20', plan.office, 18, 8, comfort.id, EXAMPLE);
+  const project = base(
     'Full-service restaurant',
     'full-service',
     { kind: 'template', templateId: 'full-service', label: 'Full-service restaurant template' },
-    `${TEMPLATE_DETAILS} This template has rooms and systems only. Place equipment from the catalog.`,
+    `${TEMPLATE_DETAILS} Equipment, loads, and ducts are planning placements, not a design.`,
     plan.rooms,
-    [exhaust, makeup, comfort, restroomSys],
-    []
+    [exhaust, makeup, comfort, restroomSys, dishSys],
+    [hood, fan, mau, rtu, dishFan, bathA, bathB, erv]
   );
-}
-
-export function createCommercialKitchenProject(): Project {
-  const hot = room({
-    name: 'Hot line',
-    use: 'Hot line',
-    xM: 0,
-    yM: 0,
-    lengthM: 8,
-    widthM: 6.5,
-    heightM: 3.6,
-    openings: [door('px', 2.2, 1.2), door('py', 1.5, 1.2)],
-  });
-  const prep = room({
-    name: 'Prep',
-    use: 'Prep',
-    xM: 8,
-    yM: 0,
-    lengthM: 5.5,
-    widthM: 6.5,
-    heightM: 3.6,
-    openings: [door('nx', 2.2, 1.2)],
-  });
-  const dish = room({
-    name: 'Dish',
-    use: 'Dish',
-    xM: 0,
-    yM: 6.5,
-    lengthM: 6,
-    widthM: 4.2,
-    heightM: 3.4,
-    openings: [door('ny', 1.5, 1.2)],
-  });
-  const walkIn = room({
-    name: 'Walk-in',
-    use: 'Walk-in',
-    xM: 6,
-    yM: 6.5,
-    lengthM: 4,
-    widthM: 4.2,
-    heightM: 3.4,
-    openings: [door('ny', 1.4, 1.1)],
-  });
-  const dry = room({
-    name: 'Dry storage',
-    use: 'Dry storage',
-    xM: 10,
-    yM: 6.5,
-    lengthM: 3.5,
-    widthM: 4.2,
-    heightM: 3.2,
-    openings: [door('ny', 1.1, 0.9)],
-  });
-  const office = room({
-    name: 'Office',
-    use: 'Office',
-    xM: 13.5,
-    yM: 0,
-    lengthM: 3.2,
-    widthM: 3.2,
-    heightM: 2.7,
-    openings: [door('py', 1.0, 0.9), windowOpening('px', 0.8, 1.2)],
-  });
-  const corridor = room({
-    name: 'Corridor',
-    use: 'Corridor',
-    xM: 13.5,
-    yM: 3.2,
-    lengthM: 3.2,
-    widthM: 7.5,
-    heightM: 2.7,
-    openings: [door('ny', 1.0, 0.9)],
-  });
-  const exhaust = system('Kitchen exhaust', 'kitchen-exhaust', 'Template grouping. No airflow has been calculated.');
-  const makeup = system('Make-up air', 'makeup-air', 'Template grouping. No airflow has been calculated.');
-  const dishSys = system('Dish exhaust', 'ventilation', 'Template grouping.');
-  const example = 'Example from the commercial kitchen template. Not a sized selection.';
-  return base(
-    'Commercial kitchen',
-    'commercial-kitchen',
-    { kind: 'template', templateId: 'commercial-kitchen', label: 'Commercial kitchen template' },
-    TEMPLATE_DETAILS,
-    [hot, prep, dish, walkIn, dry, office, corridor],
-    [exhaust, makeup, dishSys],
-    [
-      place('hood-island-10', hot, 4, 3.2, exhaust.id, example),
-      place('fan-upblast-30', hot, 6.2, 2.2, exhaust.id, example),
-      place('mau-40', prep, 10.8, 3.2, makeup.id, example),
-      place('fan-inline-8', dish, 3, 8.4, dishSys.id, example),
-    ]
-  );
+  const hoodPort = portPoint(hood, 'exhaust');
+  const fanPort = portPoint(fan, 'in');
+  const supply = portPoint(rtu, 'supply');
+  const withGrease = connect(project, 'captiveaire-dw', exhaust.id, 'exhaust', 16, [
+    hoodPort,
+    { x: hoodPort.x, y: fanPort.y },
+    fanPort,
+  ]);
+  const withSupply = connect(withGrease, 'esm-sw-round', comfort.id, 'supply', 14, [
+    supply,
+    { x: supply.x + 2.2, y: supply.y },
+    { x: supply.x + 2.2, y: supply.y - 1.6 },
+  ]);
+  const finished = stub(withSupply, mau, 'supply', 'esm-sw-round', makeup.id, 'supply', 16);
+  const ducted = stub(finished, rtu, 'return', 'esm-sw-round', comfort.id, 'return', 14);
+  const dishIn = stub(ducted, dishFan, 'in', 'esm-sw-round', dishSys.id, 'exhaust', 10);
+  const dishOut = stub(dishIn, dishFan, 'out', 'esm-sw-round', dishSys.id, 'exhaust', 10);
+  const bathDucts = stub(dishOut, bathA, 'exhaust', 'esm-sw-round', restroomSys.id, 'exhaust', 6);
+  const bothBaths = stub(bathDucts, bathB, 'exhaust', 'esm-sw-round', restroomSys.id, 'exhaust', 6);
+  const supplyErv = stub(bothBaths, erv, 'sa', 'esm-sw-round', comfort.id, 'supply', 10);
+  const returnErv = stub(supplyErv, erv, 'ra', 'esm-sw-round', comfort.id, 'return', 10);
+  return {
+    ...returnErv,
+    location: "Chicago O'Hare, IL (planning climate)",
+    details: `${TEMPLATE_DETAILS} Equipment, loads, and ducts are planning placements, not a design. Exterior conditions use Chicago O'Hare ASHRAE 2009 design-day values; confirm the project site before design use.`,
+    site: fullServiceSite(),
+    loads: [
+      load('people-restaurant', plan.dining, 4, 3.2, 36),
+      load('people-restaurant', plan.bar, 14.2, 2.2, 8),
+      load('people-standing', plan.kitchen, 1.6, 12.4, 4),
+      load('people-standing', plan.prep, 11.5, 11.6, 2),
+      load('people-standing', plan.dish, 15.6, 13.8, 2),
+      load('people-office', plan.office, 17.6, 6.2, 2),
+      load('lpd-dining-family', plan.dining, 8.2, 2),
+      load('lpd-food-prep', plan.kitchen, 1.8, 14.2),
+      load('lpd-restroom', plan.restroomA, 13.1, 7.2),
+      load('cook-g-range-6', plan.kitchen, 2.7, 15.15),
+      load('cook-g-fryer-open', plan.kitchen, 3.55, 15.15),
+      load('cook-g-griddle-flat', plan.kitchen, 4.45, 15.15),
+      load('fridge-reach-in', plan.kitchen, 1.15, 11.1),
+      load('fridge-prep', plan.prep, 15.2, 10.6),
+      load('ware-sink-3', plan.dish, 14.2, 15.5),
+      load('ware-door-high', plan.dish, 11.3, 14.3),
+      load('plug-pos', plan.dining, 10.4, 6.2),
+      load('plug-desktop', plan.office, 17.2, 5.2),
+    ],
+  };
 }
 
 function fullServiceRooms() {
@@ -402,6 +457,7 @@ function fullServiceRooms() {
   return {
     rooms: [dining, bar, restroomA, restroomB, corridor, kitchen, prep, dish, storage, office],
     dining,
+    bar,
     kitchen,
     prep,
     dish,
@@ -449,21 +505,9 @@ export interface BuiltinTemplate {
 
 export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
   {
-    id: 'cafe',
-    name: 'Café',
-    description: 'Dining, kitchen, restroom, and storage, with an example hood and bathroom fan.',
-    create: createCafeProject,
-  },
-  {
     id: 'full-service',
     name: 'Full-service restaurant',
-    description: 'Dining, bar, kitchen, prep, dish, restrooms, storage, office, and corridor. Systems are grouped. Equipment is left for you to place.',
+    description: 'Dining, bar, kitchen, prep, dish, restrooms, storage, office, and corridor, with example equipment, loads, ducts, and Chicago O’Hare design-day climate.',
     create: createFullServiceProject,
-  },
-  {
-    id: 'commercial-kitchen',
-    name: 'Commercial kitchen',
-    description: 'Hot line, prep, dish, walk-in, storage, office, and corridor, with example hood, exhaust, and make-up air.',
-    create: createCommercialKitchenProject,
   },
 ];

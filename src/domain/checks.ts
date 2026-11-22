@@ -1,4 +1,5 @@
 import { catalogPorts, getProduct } from './catalog';
+import { siteMissing, siteOf } from './climate';
 import { streamFor } from './ductCatalog';
 import { DUCT_SERVICE_LABEL, openPorts } from './ducts';
 import { planningIssues } from './issues';
@@ -34,6 +35,7 @@ export function stepForSelection(selection: Selection): Exclude<BuildStep, 'chec
     case 'wallOpening':
       return 'spaces';
     case 'load':
+    case 'site':
       return 'loads';
     case 'equipment':
     case 'system':
@@ -67,6 +69,18 @@ export function buildChecks(
       severity: 'planning',
       message: row.message,
       selection: row.selection,
+      fix: { kind: 'select' },
+      fixLabel: 'Show',
+    });
+  }
+  const missingSite = siteMissing(siteOf(project));
+  if (project.rooms.length > 0 && missingSite.length > 0) {
+    issues.push({
+      id: 'site-climate',
+      step: 'loads',
+      severity: 'planning',
+      message: `Site and climate is missing ${missingSite.join(', ')}.`,
+      selection: { kind: 'site' },
       fix: { kind: 'select' },
       fixLabel: 'Show',
     });
