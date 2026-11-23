@@ -147,7 +147,43 @@ export interface HvacSystem {
   notes: string;
 }
 
-export type DuctService = 'supply' | 'return' | 'exhaust' | 'outdoor' | 'relief';
+export type DuctService = 'supply' | 'return' | 'exhaust' | 'outdoor' | 'relief' | 'mixed';
+
+/** Internal section of an air-handling unit, in airflow order. */
+export type UnitSectionKind =
+  | 'oa-damper'
+  | 'ra-damper'
+  | 'exhaust-damper'
+  | 'relief-fan'
+  | 'mixing-box'
+  | 'filter'
+  | 'heat-recovery'
+  | 'supply-fan'
+  | 'cooling-coil'
+  | 'heating-coil'
+  | 'humidifier';
+
+/** Fail position of a damper actuator. */
+export type DamperPosition = 'NO' | 'NC';
+
+/** What a coil exchanges heat with. */
+export type CoilMedium = 'dx' | 'co2-dx' | 'chilled-water' | 'hot-water' | 'glycol' | 'steam' | 'gas' | 'electric';
+
+export interface UnitSection {
+  id: string;
+  kind: UnitSectionKind;
+  /** Design airflow through this section, m³/s. Fans and outdoor/exhaust dampers set the unit port flows. */
+  flowM3s?: number | null;
+  /** Dampers only. */
+  position?: DamperPosition;
+  /** Dampers only. False means a hood or louver on the unit casing, with no duct connection. */
+  ducted?: boolean;
+  /** Coils only. */
+  medium?: CoilMedium;
+  /** Coil capacity, W. */
+  capacityW?: number | null;
+  note?: string;
+}
 
 export type DuctShape = 'round' | 'rect';
 
@@ -162,10 +198,21 @@ export interface StreamDesign {
   rh: number | null;
 }
 
-/** Open end when both ids are null. A port end names the equipment connection. */
+/** Open end when every id is null. A port end names the equipment connection; a node end names a junction. */
 export interface DuctEnd {
   equipmentId: string | null;
   portId: string | null;
+  /** Junction (tee or wye) shared with other runs. */
+  nodeId?: string | null;
+}
+
+/** Junction where three or more runs of one stream meet, or where a run changes size. Plan meters. */
+export interface DuctNode {
+  id: string;
+  systemId: string;
+  service: DuctService;
+  x: number;
+  y: number;
 }
 
 /** Where a duct centerline crosses a wall. Offset is meters along that wall. */
@@ -217,6 +264,10 @@ export interface PlacedEquipment {
   assumption: boolean;
   /** Position on the system schematic. Null when not placed there. */
   schematic?: { x: number; y: number } | null;
+  /** Air-handling units: internal sections in airflow order. Missing uses the catalog default. */
+  sections?: UnitSection[];
+  /** Terminals, hoods, and fans: design airflow, m³/s. Missing or null uses the catalog airflow. */
+  designFlowM3s?: number | null;
 }
 
 /** Where an override value came from. Missing fields fall back to the catalog default. */
@@ -296,6 +347,8 @@ export interface Project {
   equipment: PlacedEquipment[];
   wallRuns?: WallRun[];
   ducts?: DuctRun[];
+  /** Duct junctions. Missing on projects saved before branching ducts. */
+  ductNodes?: DuctNode[];
   loads?: LoadItem[];
   site?: SiteClimate;
   /** One stack per interface stretch, shared or outside air. The adapter checks the envelope and does not write these stacks into GeometryDocument. */

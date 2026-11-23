@@ -1,6 +1,6 @@
 import { normalizeSite } from './climate';
 import { builtinAssembly, cloneLayers } from './constructionLibrary';
-import type { DuctRun, LoadItem, Project, Room, SurfaceAssignment, WallFace } from './types';
+import type { DuctNode, DuctRun, LoadItem, Project, Room, SurfaceAssignment, WallFace } from './types';
 
 export const WALL_FACE_IDS: WallFace[] = ['px', 'nx', 'py', 'ny'];
 
@@ -791,7 +791,18 @@ function normalizeStreamDesign(value: DuctRun['streamDesign']): DuctRun['streamD
   return { flowM3s, dbC, wbC, rh };
 }
 
-function normalizeDucts(value: Project['ducts']): DuctRun[] {
+function normalizeDuctNodes(value: Project['ductNodes']): DuctNode[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(node => {
+    if (!node || typeof node.id !== 'string' || typeof node.systemId !== 'string') return [];
+    const x = Number(node.x);
+    const y = Number(node.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return [];
+    return [{ id: node.id, systemId: node.systemId, service: node.service ?? 'supply', x, y }];
+  });
+}
+
+function normalizeDucts(value: Project['ducts'], nodeIds: Set<string>): DuctRun[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap(run => {
     if (!run || typeof run.id !== 'string' || typeof run.systemId !== 'string') return [];
@@ -799,11 +810,12 @@ function normalizeDucts(value: Project['ducts']): DuctRun[] {
       .map(point => ({ x: Number(point?.x), y: Number(point?.y) }))
       .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
     if (points.length < 2) return [];
-    const service = run.service === 'return' || run.service === 'exhaust' || run.service === 'outdoor' || run.service === 'relief' ? run.service : 'supply';
+    const service = run.service === 'return' || run.service === 'exhaust' || run.service === 'outdoor' || run.service === 'relief' || run.service === 'mixed' ? run.service : 'supply';
     const shape = run.shape === 'rect' ? 'rect' : 'round';
     const end = (item: DuctRun['start'] | undefined): DuctRun['start'] => ({
       equipmentId: typeof item?.equipmentId === 'string' ? item.equipmentId : null,
       portId: typeof item?.portId === 'string' ? item.portId : null,
+      ...(typeof item?.nodeId === 'string' && nodeIds.has(item.nodeId) ? { nodeId: item.nodeId } : {}),
     });
     const streamDesign = normalizeStreamDesign(run.streamDesign);
     return [{
@@ -833,9 +845,15 @@ function normalizeEquipment(value: Project['equipment']): Project['equipment'] {
       item.schematic && Number.isFinite(item.schematic.x) && Number.isFinite(item.schematic.y)
         ? { x: Number(item.schematic.x), y: Number(item.schematic.y) }
         : null;
+    const sections = Array.isArray(item.sections)
+      ? item.sections.filter(section => section && typeof section.id === 'string' && typeof section.kind === 'string')
+      : undefined;
+    const designFlowM3s = finiteOrNull(item.designFlowM3s);
     return [{
       ...item,
       schematic,
+      sections,
+      designFlowM3s: designFlowM3s != null && designFlowM3s > 0 ? designFlowM3s : null,
     }];
   });
 }
@@ -885,6 +903,8 @@ export function northDegrees(value: unknown): number {
 
 export function normalizeProject(project: Project, emptyNote: string): Project {
   const northDeg = northDegrees(project.northDeg);
+  const ductNodes = normalizeDuctNodes(project.ductNodes);
+  const nodeIds = new Set(ductNodes.map(node => node.id));
   return {
     ...project,
     northDeg: northDeg === 0 ? undefined : northDeg,
@@ -908,7 +928,8 @@ export function normalizeProject(project: Project, emptyNote: string): Project {
     }),
     wallRuns: Array.isArray(project.wallRuns) ? project.wallRuns.map(run => ({ ...run, openings: run.openings ?? [] })) : [],
     equipment: normalizeEquipment(project.equipment),
-    ducts: normalizeDucts(project.ducts),
+    ducts: normalizeDucts(project.ducts, nodeIds),
+    ductNodes,
     loads: normalizeLoads(project.loads),
     site: normalizeSite(project.site),
     interfaceWalls: normalizeInterfaceWalls(project.interfaceWalls),

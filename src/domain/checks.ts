@@ -1,7 +1,9 @@
-import { catalogPorts, getProduct } from './catalog';
+import { getProduct } from './catalog';
+import { designFlow, placedPorts, unitFlows, unitSections } from './airUnits';
 import { siteMissing, siteOf } from './climate';
-import { streamFor } from './ductCatalog';
-import { DUCT_SERVICE_LABEL, openPorts } from './ducts';
+import { getDuctProduct, streamFor } from './ductCatalog';
+import { DUCT_SERVICE_LABEL, ductAreaM2, ductFlows, ductViewOf, isOpenEnd, openPorts } from './ducts';
+import { formatFlow } from './units';
 import { planningIssues } from './issues';
 import { getLoadProduct } from './loadCatalog';
 import { hoodOver } from './loads';
@@ -124,7 +126,7 @@ export function buildChecks(
   }
   for (const item of project.equipment) {
     const product = getProduct(item.catalogId);
-    if (!product || item.systemId || catalogPorts(product).length === 0) continue;
+    if (!product || item.systemId || placedPorts(item).length === 0) continue;
     issues.push({
       id: `eq-system-${item.id}`,
       step: 'equipment',
@@ -145,6 +147,110 @@ export function buildChecks(
       severity: 'planning',
       message: `${equipmentName(project, hit.equipmentId)} ${hit.portId} port has no ${DUCT_SERVICE_LABEL[hit.service].toLowerCase()} duct.`,
       selection: { kind: 'equipment', id: item.id },
+      fix: { kind: 'select' },
+      fixLabel: 'Show',
+    });
+  }
+  issues.push(...airIssues(project));
+  return issues;
+}
+
+const FPM = 0.00508;
+
+/** Network checks: open ends, unit airflow against its terminals, duct velocity, and building air balance. */
+function airIssues(project: Project): CheckIssue[] {
+  const issues: CheckIssue[] = [];
+  const units = project.units;
+  const flows = ductFlows(project);
+  for (const run of project.ducts ?? []) {
+    if (ductViewOf(run) !== 'plan') continue;
+    const system = project.systems.find(item => item.id === run.systemId);
+    const label = system ? streamFor(system.kind, run.service)?.label ?? DUCT_SERVICE_LABEL[run.service] : DUCT_SERVICE_LABEL[run.service];
+    const open = [run.start, run.end].filter(isOpenEnd).length;
+    if (open > 0) {
+      issues.push({
+        id: `duct-open-${run.id}`,
+        step: 'ducts',
+        severity: 'planning',
+        message: `${label} duct has ${open === 2 ? 'two open ends' : 'an open end'}. End it at a terminal, a unit port, or another run.`,
+        selection: { kind: 'duct', id: run.id },
+        fix: { kind: 'select' },
+        fixLabel: 'Show',
+      });
+    }
+    const flow = flows.runs.get(run.id)?.flowM3s;
+    const product = getDuctProduct(run.catalogId);
+    if (flow != null && flow > 0) {
+      const velocity = flow / ductAreaM2(run);
+      if (product?.group === 'Grease' && velocity < 500 * FPM) {
+        issues.push({
+          id: `duct-grease-${run.id}`,
+          step: 'ducts',
+          severity: 'warning',
+          message: `Grease duct velocity is ${Math.round(velocity / FPM)} fpm. NFPA 96 asks for at least 500 fpm; use a smaller duct.`,
+          selection: { kind: 'duct', id: run.id },
+          fix: { kind: 'select' },
+          fixLabel: 'Show',
+        });
+      } else if (product?.group !== 'Grease' && velocity > 2000 * FPM) {
+        issues.push({
+          id: `duct-fast-${run.id}`,
+          step: 'ducts',
+          severity: 'planning',
+          message: `${label} duct runs at ${Math.round(velocity / FPM)} fpm for ${formatFlow(flow, units)}. Low-pressure duct is usually kept under about 1,500–2,000 fpm.`,
+          selection: { kind: 'duct', id: run.id },
+          fix: { kind: 'select' },
+          fixLabel: 'Show',
+        });
+      }
+    }
+  }
+  for (const source of flows.sources) {
+    if (source.portM3s == null || source.terminals === 0 || source.partial) continue;
+    const gap = Math.abs(source.terminalsM3s - source.portM3s);
+    if (gap <= source.portM3s * 0.1) continue;
+    const item = project.equipment.find(entry => entry.id === source.equipmentId);
+    const product = item ? getProduct(item.catalogId) : undefined;
+    issues.push({
+      id: `air-balance-${source.equipmentId}-${source.portId}`,
+      step: 'ducts',
+      severity: 'warning',
+      message: `${product?.model ?? 'Unit'} ${source.portId} is set to ${formatFlow(source.portM3s, units)}, but ${source.terminals === 1 ? 'its terminal takes' : `its ${source.terminals} terminals add up to`} ${formatFlow(source.terminalsM3s, units)}.`,
+      selection: { kind: 'equipment', id: source.equipmentId },
+      fix: { kind: 'select' },
+      fixLabel: 'Show',
+    });
+  }
+  let outdoor = 0;
+  let exhaust = 0;
+  for (const item of project.equipment) {
+    const product = getProduct(item.catalogId);
+    if (!product) continue;
+    if (product.unit) {
+      const flows = unitFlows(item);
+      outdoor += (flows.outdoor ?? 0) * item.quantity;
+      if (unitSections(item).some(section => section.kind === 'heat-recovery')) exhaust += (flows.exhaust ?? 0) * item.quantity;
+    } else if (product.category === 'exhaust-fan' || product.category === 'bathroom-exhaust') {
+      exhaust += (designFlow(item) ?? 0) * item.quantity;
+    }
+  }
+  if (exhaust > 0 && outdoor > 0 && exhaust > outdoor * 1.02) {
+    issues.push({
+      id: 'air-building-balance',
+      step: 'equipment',
+      severity: 'warning',
+      message: `Exhaust fans remove ${formatFlow(exhaust, units)} but units bring in only ${formatFlow(outdoor, units)} of outdoor air. The building runs negative; raise make-up or outdoor air.`,
+      selection: null,
+      fix: { kind: 'select' },
+      fixLabel: 'Show',
+    });
+  } else if (exhaust > 0 && outdoor > 0) {
+    issues.push({
+      id: 'air-building-balance',
+      step: 'equipment',
+      severity: 'planning',
+      message: `Outdoor air ${formatFlow(outdoor, units)} against exhaust ${formatFlow(exhaust, units)}: building is ${outdoor - exhaust > 0 ? `positive by ${formatFlow(outdoor - exhaust, units)}` : 'balanced'}. Planning values only.`,
+      selection: null,
       fix: { kind: 'select' },
       fixLabel: 'Show',
     });

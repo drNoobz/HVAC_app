@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type P
 import { CATALOG_MIME, equipmentSizeM, getProduct, isSchematicOnly } from '@/domain/catalog';
 import { parseCatalogDrag } from '@/domain/catalogDrag';
 import { streamFor } from '@/domain/ductCatalog';
-import { ductCrossings, ductSizeLabel, ductViewOf, endRise, equipmentPortHits, nearestPort, portFits, streamDesignLabel, type DuctDraftPoint } from '@/domain/ducts';
+import { ductCrossings, ductFlows, ductSizeLabel, ductViewOf, endRise, equipmentPortHits, nearestNode, nearestPort, nearestRun, portFits, streamDesignLabel, type DuctDraftPoint } from '@/domain/ducts';
+import { isUnit, SECTION_TAG, sectionSummary, unitSections } from '@/domain/airUnits';
 import { equipmentGlyph, equipmentIconFor } from './EquipmentIcon';
 import type { DuctService, DuctShape, EditorTool, LoadItem, Opening, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
 import type { BuildStep } from '@/domain/checks';
@@ -13,7 +14,7 @@ import { LoadSymbol } from './LoadIcon';
 import { loadLabel, loadPlanSize } from '@/domain/loads';
 import { constrainEquipmentPosition, roomAtPoint } from '@/domain/projectOps';
 import { locateOpening, NO_WALL_RUNS, outlineCentroid, outlineRoomOk, pointInOutline, polygonArea, roomLoop, runGeom, runOpeningEnds, snapDrawPoint, wallAngleDeg, wallQuad, wallQuads, type DrawPoint, type OpeningSpot, type WallSnap } from '@/domain/wallDraw';
-import { METERS_PER_FOOT, formatArea, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
+import { METERS_PER_FOOT, formatArea, formatFlow, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
 import { doorArc, doorHinge, doorSwingSide, doorwayKey, openingEnds } from '@/domain/doorSwing';
 import { clampSharedEdge, moveRoomEdge, slideOpeningsTogether } from '@/domain/spanFit';
 import { INTERFACE_COLOR, MARK_COLOR, WALL_FACE_IDS, edgePortions, facePortions, findInterface, interfaceConstructionColor, interfaceTargets, northDegrees, roomFill, snapDrawnRect, snapPointToWalls, snapSpaceDelta, snapWallEdge, touchingRooms, wallColor, type WallPortion } from '@/domain/walls';
@@ -204,10 +205,26 @@ function snap(value: number): number {
   return Math.round(value / SNAP_M) * SNAP_M;
 }
 
+/** Snap order: a matching equipment port, an existing junction, a run of the same stream (makes a tee), then the grid. */
 function snapDuct(x: number, y: number, project: Project, systemId: string, service: DuctService): DuctDraftPoint {
   const port = nearestPort(project.equipment, x, y, 0.45, hit => portFits(project, hit, systemId, service));
   if (port) return { x: Number(port.x.toFixed(3)), y: Number(port.y.toFixed(3)), equipmentId: port.equipmentId, portId: port.portId };
+  const node = nearestNode(project, x, y, 0.35, systemId, service);
+  if (node) return { x: node.x, y: node.y, nodeId: node.id };
+  const run = nearestRun(project, x, y, 0.3, systemId, service);
+  if (run) return { x: Number(run.x.toFixed(3)), y: Number(run.y.toFixed(3)), splitDuctId: run.run.id };
   return { x: snap(x), y: snap(y) };
+}
+
+/** A drawn point that ends the run: a port, a junction, or a tee on another run. */
+function joins(point: DuctDraftPoint): boolean {
+  return !!(point.portId || point.nodeId || point.splitDuctId);
+}
+
+function sameJoin(a: DuctDraftPoint, b: DuctDraftPoint): boolean {
+  if (a.portId || b.portId) return a.equipmentId === b.equipmentId && a.portId === b.portId;
+  if (a.nodeId || b.nodeId) return a.nodeId === b.nodeId;
+  return Math.hypot(a.x - b.x, a.y - b.y) < 0.15;
 }
 
 function gridStep(pxPerM: number): number {
@@ -913,8 +930,8 @@ export function PlanView({
             const last = points[points.length - 1];
             if (Math.hypot(snapped.x - last.x, snapped.y - last.y) < 0.15) return;
             const next = [...points, snapped];
-            const sameStart = points.length === 1 && points[0].equipmentId === snapped.equipmentId && points[0].portId === snapped.portId;
-            if (snapped.portId && !sameStart) {
+            const sameStart = points.length === 1 && joins(points[0]) && sameJoin(points[0], snapped);
+            if (joins(snapped) && !sameStart) {
               ductChainRef.current = null;
               setDuctChain(null);
               setDuctAim(null);
@@ -934,6 +951,13 @@ export function PlanView({
             setDuctAim(snapped);
             return;
           }
+          if (tool.kind === 'duct' && !ductChainRef.current && tool.systemId) {
+            const snapped = snapDuct(point.xM, point.yM, project, tool.systemId, tool.service);
+            ductChainRef.current = [snapped];
+            setDuctChain([snapped]);
+            setDuctAim(snapped);
+            return;
+          }
           const target = event.target as Element;
           const hit = target.closest('[data-hit]');
           const hitKind = hit?.getAttribute('data-hit') ?? '';
@@ -943,7 +967,7 @@ export function PlanView({
             event.currentTarget.setPointerCapture(event.pointerId);
             return;
           }
-          const selects = tool.kind === 'select' || tool.kind === 'place' || tool.kind === 'load' || tool.kind === 'door' || tool.kind === 'window' || (tool.kind === 'duct' && !ductChainRef.current);
+          const selects = tool.kind === 'select' || tool.kind === 'place' || tool.kind === 'load' || tool.kind === 'door' || tool.kind === 'window';
           if (selects && hit) {
             const roomId = hit.getAttribute('data-room');
             const room = roomId ? project.rooms.find(item => item.id === roomId) : undefined;
@@ -1965,6 +1989,14 @@ function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
   const product = getProduct(catalogId);
   const roof = product?.mount === 'roof';
   if (product?.category === 'kitchen-hood') return { name: 'Hood', roof };
+  if (product?.category === 'air-handling') return { name: 'AHU', roof };
+  if (product?.category === 'air-terminal') {
+    if (product.id.startsWith('diff')) return { name: 'SD', roof };
+    if (product.id.startsWith('grille-ret')) return { name: 'RG', roof };
+    if (product.id.startsWith('grille')) return { name: 'EG', roof };
+    if (product.id.startsWith('louver')) return { name: product.id.endsWith('oa') ? 'OA LVR' : 'EA LVR', roof };
+    return { name: product.id.includes('intake') ? 'Intake' : 'Relief', roof };
+  }
   if (product?.category === 'makeup-air') return { name: 'MAU', roof };
   if (product?.category === 'energy-recovery' || /ERV|recovery/i.test(product?.name ?? '')) return { name: 'ERV', roof };
   if (product?.category === 'heating-cooling' || product?.category === 'system-equipment') {
@@ -2010,6 +2042,7 @@ function DuctLayer({
   const ports = tool.kind === 'duct'
     ? equipmentPortHits(project.equipment).filter(hit => portFits(project, hit, tool.systemId, tool.service))
     : [];
+  const flows = ductFlows(project).runs;
   return (
     <g>
       {(project.ducts ?? []).filter(run => ductViewOf(run) === 'plan').map(run => {
@@ -2021,6 +2054,8 @@ function DuctLayer({
         const label = labelSegment(run.points);
         const rise = [endRise(project, run, 'start'), endRise(project, run, 'end')];
         const design = streamDesignLabel(run.streamDesign, project.units);
+        const carried = flows.get(run.id);
+        const flowText = carried?.flowM3s != null && carried.flowM3s > 0 ? `${formatFlow(carried.flowM3s, project.units)}${carried.partial ? '+' : ''} · ` : '';
         return (
           <g key={run.id}>
             <polyline
@@ -2068,7 +2103,7 @@ function DuctLayer({
             {label && (
               <g transform={`translate(${label.x + label.nx * fontM * 1.15} ${label.y + label.ny * fontM * 1.15}) scale(1,-1) rotate(${label.deg})`} pointerEvents="none">
                 <text textAnchor="middle" fontSize={fontM * 0.62 * textScale} fill={color} fontWeight={600}>
-                  {design ?? ductSizeLabel(run, project.units)}
+                  {design ?? `${flowText}${ductSizeLabel(run, project.units)}`}
                 </text>
               </g>
             )}
@@ -2079,6 +2114,17 @@ function DuctLayer({
               return <circle key={end} cx={point.x} cy={point.y} r={0.12} fill="#fff" stroke={color} strokeWidth={1.6} vectorEffect="non-scaling-stroke" pointerEvents="none"><title>{`Riser ${formatLength(Math.abs(meters), project.units, 2)}`}</title></circle>;
             })}
           </g>
+        );
+      })}
+      {(project.ductNodes ?? []).map(node => {
+        const system = project.systems.find(item => item.id === node.systemId);
+        const color = (system && streamFor(system.kind, node.service)?.color) || '#5e6368';
+        const branches = (project.ducts ?? []).filter(run => run.start.nodeId === node.id || run.end.nodeId === node.id).length;
+        const target = tool.kind === 'duct' && tool.systemId === node.systemId && tool.service === node.service;
+        return (
+          <circle key={node.id} data-hit="duct-node" data-id={node.id} cx={node.x} cy={node.y} r={target ? 0.13 : 0.09} fill={color} stroke="#fff" strokeWidth={1.2} vectorEffect="non-scaling-stroke" pointerEvents="none">
+            <title>{`Junction · ${branches} runs`}</title>
+          </circle>
         );
       })}
       {ports.map(port => (
@@ -2205,7 +2251,10 @@ function EquipmentMark({
   const fill = active ? SELECT_FILL : size.stated ? 'rgba(31,78,95,0.12)' : 'rgba(196,165,116,0.18)';
   const chipH = systemName ? fontM * 1.7 : fontM * 0.95;
   const iconM = Math.min(length, width, fontM * 1.6) * 1.1;
-  const showIcon = Math.min(length, width) >= fontM * 1.1;
+  const sections = isUnit(product) ? unitSections(item) : [];
+  const band = sections.length > 0 ? length / sections.length : 0;
+  const showSections = sections.length > 0 && band >= fontM * 0.75 && width >= fontM * 1.2;
+  const showIcon = !showSections && Math.min(length, width) >= fontM * 1.1;
   return (
     <g
       data-hit="equipment"
@@ -2239,6 +2288,25 @@ function EquipmentMark({
         strokeDasharray={roof ? '4 2.5' : undefined}
         vectorEffect="non-scaling-stroke"
       />
+      {showSections && (
+        <g pointerEvents="none">
+          {sections.map((section, index) => {
+            const x0 = item.xM - length / 2 + index * band;
+            const cx = x0 + band / 2;
+            return (
+              <g key={section.id}>
+                {index > 0 && <line x1={x0} y1={item.yM - width / 2} x2={x0} y2={item.yM + width / 2} stroke={active ? SELECT : stroke} strokeWidth={0.8} strokeOpacity={0.55} vectorEffect="non-scaling-stroke" />}
+                <g transform={`translate(${cx} ${item.yM}) rotate(${-item.yawDeg}) scale(1,-1)`}>
+                  <text textAnchor="middle" dominantBaseline="middle" fontSize={Math.min(fontM * 0.5, band * 0.42)} fontWeight={600} fill={active ? SELECT : stroke}>
+                    <title>{sectionSummary(section)}</title>
+                    {SECTION_TAG[section.kind]}
+                  </text>
+                </g>
+              </g>
+            );
+          })}
+        </g>
+      )}
       {showIcon && (
         <g transform={`translate(${item.xM} ${item.yM}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
           <g transform={`scale(${iconM / 960}) translate(-480 480)`}>

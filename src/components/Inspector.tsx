@@ -21,9 +21,21 @@ import {
   updateEquipment,
   updateRoom,
   updateSystem,
+  syncDuctPorts,
 } from '@/domain/projectOps';
 import { getDuctProduct, roughnessLabel, servicesFor, streamFor, systemsForProduct } from '@/domain/ductCatalog';
-import { ductCrossings, ductSizeLabel, ductViewOf, DUCT_SERVICES, endRise, linkedPort, polylineLength } from '@/domain/ducts';
+import { ductAreaM2, ductCrossings, ductFlows, ductSizeLabel, ductViewOf, DUCT_SERVICES, DUCT_SERVICE_LABEL, endRise, linkedPort, nodeRuns, polylineLength } from '@/domain/ducts';
+import {
+  COIL_MEDIUM_LABEL,
+  COOLING_MEDIA,
+  HEATING_MEDIA,
+  newSection,
+  placedPorts,
+  portFlow,
+  SECTION_KINDS,
+  SECTION_LABEL,
+  unitSections,
+} from '@/domain/airUnits';
 import { doorDirection, hingeEnds, setDoorDirection, type DoorHinge } from '@/domain/doorSwing';
 import { placeBeside, resizeSpan, slideOpeningOffset } from '@/domain/spanFit';
 import {
@@ -40,6 +52,11 @@ import {
   type Selection,
   type SurfaceFace,
   type WallFace,
+  type CoilMedium,
+  type DamperPosition,
+  type PlacedEquipment,
+  type UnitSection,
+  type UnitSectionKind,
 } from '@/domain/types';
 import { formatArea, formatFlow, formatLength, formatNumber, formatPower, lengthToM, lengthUnit, mToLength, M3S_PER_CFM } from '@/domain/units';
 import { basisLabel, getLoadProduct, LOAD_CATEGORY_LABEL, loadGroups } from '@/domain/loadCatalog';
@@ -1281,6 +1298,21 @@ function EquipmentFields({
           )}
         </dl>
       )}
+      {product?.unit && <UnitSectionsEditor project={project} item={item} onChange={onChange} />}
+      {product && !product.unit && placedPorts(item).length > 0 && (
+        <section className="prop-block">
+          <p className="prop-section">Design airflow</p>
+          <FlowInput
+            label={product.terminal ? 'Terminal airflow' : 'Airflow'}
+            units={project.units}
+            value={item.designFlowM3s ?? null}
+            placeholder={product.airflow ? formatNumber(project.units === 'IP' ? product.airflow.valueM3s / M3S_PER_CFM : product.airflow.valueM3s * 1000, 0) : ''}
+            onCommit={value => onChange(updateEquipment(project, item.id, { designFlowM3s: value }))}
+          />
+          <p className="muted">Blank uses the catalog airflow. Duct flows add up from these values.</p>
+        </section>
+      )}
+      <PortFlows project={project} item={item} />
       <label className="field">
         <span>Space</span>
         <select value={item.roomId ?? ''} onChange={event => onChange(assignEquipmentRoom(project, item.id, event.target.value || null))}>
@@ -1340,6 +1372,190 @@ function EquipmentFields({
   );
 }
 
+function flowToText(value: number | null, units: Project['units']): string {
+  if (value == null) return '';
+  return formatNumber(units === 'IP' ? value / M3S_PER_CFM : value * 1000, 0);
+}
+
+function FlowInput({
+  label,
+  units,
+  value,
+  placeholder,
+  onCommit,
+}: {
+  label: string;
+  units: Project['units'];
+  value: number | null;
+  placeholder?: string;
+  onCommit: (value: number | null) => void;
+}) {
+  return (
+    <label className="field">
+      <span>{label} ({units === 'IP' ? 'CFM' : 'L/s'})</span>
+      <input
+        key={`${label}-${value}`}
+        defaultValue={flowToText(value, units)}
+        placeholder={placeholder}
+        inputMode="decimal"
+        onBlur={event => {
+          const raw = event.target.value.trim().replace(/,/g, '');
+          if (!raw) {
+            if (value != null) onCommit(null);
+            return;
+          }
+          const n = Number(raw);
+          if (!Number.isFinite(n) || n <= 0) {
+            event.target.value = flowToText(value, units);
+            return;
+          }
+          const next = units === 'IP' ? n * M3S_PER_CFM : n / 1000;
+          if (value == null || Math.abs(next - value) > 1e-9) onCommit(next);
+        }}
+      />
+    </label>
+  );
+}
+
+/** Port list with the design flow at each port and what the connected terminals add up to. */
+function PortFlows({ project, item }: { project: Project; item: PlacedEquipment }) {
+  const ports = placedPorts(item);
+  if (ports.length === 0) return null;
+  const flows = ductFlows(project);
+  const linked = new Set<string>();
+  for (const run of project.ducts ?? []) {
+    for (const end of [run.start, run.end]) if (end.equipmentId === item.id && end.portId) linked.add(end.portId);
+  }
+  return (
+    <section className="prop-block">
+      <p className="prop-section">Connections</p>
+      <dl className="spec-list">
+        {ports.map(entry => {
+          const design = portFlow(item, entry.id);
+          const source = flows.sources.find(row => row.equipmentId === item.id && row.portId === entry.id);
+          const parts = [`${DUCT_SERVICE_LABEL[entry.service]} ${entry.direction === 'in' ? 'in' : 'out'}`];
+          if (design != null) parts.push(formatFlow(design, project.units));
+          if (!linked.has(entry.id)) parts.push('no duct');
+          else if (source && source.terminals > 0) parts.push(`terminals ${formatFlow(source.terminalsM3s, project.units)}${source.partial ? ' + open ends' : ''}`);
+          return (
+            <div key={entry.id}>
+              <dt>{entry.id}</dt>
+              <dd>{parts.join(' · ')}</dd>
+            </div>
+          );
+        })}
+      </dl>
+    </section>
+  );
+}
+
+/** Sections of an air-handling unit in airflow order. Ports and port flows follow from them. */
+function UnitSectionsEditor({ project, item, onChange }: { project: Project; item: PlacedEquipment; onChange: (project: Project) => void }) {
+  const sections = unitSections(item);
+  const save = (next: UnitSection[]) => onChange(syncDuctPorts(updateEquipment(project, item.id, { sections: next })));
+  const patch = (id: string, change: Partial<UnitSection>) => save(sections.map(section => (section.id === id ? { ...section, ...change } : section)));
+  const move = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= sections.length) return;
+    const next = [...sections];
+    [next[index], next[target]] = [next[target], next[index]];
+    save(next);
+  };
+  const powerLabel = project.units === 'IP' ? 'kBtu/h' : 'kW';
+  const toPower = (watts: number | null | undefined) => (watts == null ? '' : formatNumber(project.units === 'IP' ? watts / 293.07107 : watts / 1000, 1));
+  return (
+    <section className="prop-block">
+      <p className="prop-section">Unit sections</p>
+      <p className="muted">In airflow order, outdoor and return side first. Air connections follow from the sections.</p>
+      <ol className="section-list">
+        {sections.map((section, index) => {
+          const damper = section.kind === 'oa-damper' || section.kind === 'ra-damper' || section.kind === 'exhaust-damper';
+          const coil = section.kind === 'cooling-coil' || section.kind === 'heating-coil';
+          const flowed = section.kind === 'supply-fan' || section.kind === 'relief-fan' || section.kind === 'oa-damper' || section.kind === 'exhaust-damper';
+          return (
+            <li key={section.id} className="section-item">
+              <div className="section-head">
+                <strong>{SECTION_LABEL[section.kind]}</strong>
+                <span className="section-tools">
+                  <button type="button" className="btn ghost small" aria-label="Move up" disabled={index === 0} onClick={() => move(index, -1)}>↑</button>
+                  <button type="button" className="btn ghost small" aria-label="Move down" disabled={index === sections.length - 1} onClick={() => move(index, 1)}>↓</button>
+                  <button type="button" className="btn ghost small" aria-label="Remove section" onClick={() => save(sections.filter(entry => entry.id !== section.id))}>✕</button>
+                </span>
+              </div>
+              {damper && (
+                <label className="field">
+                  <span>Fail position</span>
+                  <select value={section.position ?? 'NC'} onChange={event => patch(section.id, { position: event.target.value as DamperPosition })}>
+                    <option value="NC">Normally closed (NC)</option>
+                    <option value="NO">Normally open (NO)</option>
+                  </select>
+                </label>
+              )}
+              {(section.kind === 'oa-damper' || section.kind === 'exhaust-damper') && (
+                <label className="field check">
+                  <input type="checkbox" checked={section.ducted !== false} onChange={event => patch(section.id, { ducted: event.target.checked })} />
+                  <span>Ducted connection (off: hood on the casing)</span>
+                </label>
+              )}
+              {coil && (
+                <label className="field">
+                  <span>Medium</span>
+                  <select value={section.medium ?? ''} onChange={event => patch(section.id, { medium: event.target.value as CoilMedium })}>
+                    {(section.kind === 'cooling-coil' ? COOLING_MEDIA : HEATING_MEDIA).map(medium => (
+                      <option key={medium} value={medium}>{COIL_MEDIUM_LABEL[medium]}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {coil && (
+                <label className="field">
+                  <span>Capacity ({powerLabel})</span>
+                  <input
+                    key={`cap-${section.id}-${section.capacityW}`}
+                    defaultValue={toPower(section.capacityW)}
+                    placeholder="Not selected"
+                    inputMode="decimal"
+                    onBlur={event => {
+                      const raw = event.target.value.trim();
+                      const n = Number(raw);
+                      if (!raw) patch(section.id, { capacityW: null });
+                      else if (Number.isFinite(n) && n > 0) patch(section.id, { capacityW: project.units === 'IP' ? n * 293.07107 : n * 1000 });
+                    }}
+                  />
+                </label>
+              )}
+              {flowed && (
+                <FlowInput
+                  label={section.kind === 'oa-damper' ? 'Minimum outdoor air' : 'Airflow'}
+                  units={project.units}
+                  value={section.flowM3s ?? null}
+                  onCommit={value => patch(section.id, { flowM3s: value })}
+                />
+              )}
+              {section.note && <p className="muted">{section.note}</p>}
+            </li>
+          );
+        })}
+      </ol>
+      <label className="field">
+        <span>Add section</span>
+        <select
+          value=""
+          onChange={event => {
+            const kind = event.target.value as UnitSectionKind;
+            if (kind) save([...sections, newSection(kind)]);
+          }}
+        >
+          <option value="">Choose…</option>
+          {SECTION_KINDS.map(kind => (
+            <option key={kind} value={kind}>{SECTION_LABEL[kind]}</option>
+          ))}
+        </select>
+      </label>
+    </section>
+  );
+}
+
 function DuctFields({
   project,
   ductId,
@@ -1370,9 +1586,13 @@ function DuctFields({
     const empty = next.flowM3s == null && next.dbC == null && next.wbC == null && next.rh == null;
     onChange(updateDuct(project, run.id, { streamDesign: empty ? undefined : next }));
   };
+  const carried = ductFlows(project).runs.get(run.id);
+  const velocity = carried?.flowM3s != null && carried.flowM3s > 0 ? carried.flowM3s / ductAreaM2(run) : null;
   const endLabel = (which: 'start' | 'end') => {
     const link = which === 'start' ? start : end;
-    if (!link) return 'Open end';
+    const nodeId = (which === 'start' ? run.start : run.end).nodeId;
+    if (!link && nodeId) return `Junction · ${nodeRuns(project, nodeId).length} runs`;
+    if (!link) return 'Open end — finish at a terminal or another run';
     const item = project.equipment.find(entry => entry.id === link.equipmentId);
     const product = item ? getProduct(item.catalogId) : undefined;
     const rise = endRise(project, run, which);
@@ -1402,6 +1622,10 @@ function DuctFields({
         <span>
           {crossings} wall crossing{crossings === 1 ? '' : 's'}
         </span>
+      </div>
+      <div className="stat-row">
+        <span>{carried?.flowM3s != null ? `${formatFlow(carried.flowM3s, project.units)}${carried.partial ? ' + open ends' : ''}` : 'Flow not traced'}</span>
+        <span>{velocity != null ? (project.units === 'IP' ? `${formatNumber(velocity / 0.00508, 0)} fpm` : `${formatNumber(velocity, 1)} m/s`) : '—'}</span>
       </div>
       <section className="prop-block">
       <p className="prop-section">Routing</p>

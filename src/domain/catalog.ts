@@ -1,4 +1,4 @@
-import type { DuctService } from './types';
+import type { DuctService, UnitSection } from './types';
 
 export type EquipmentCategory =
   | 'kitchen-hood'
@@ -8,6 +8,8 @@ export type EquipmentCategory =
   | 'system-equipment'
   | 'heating-cooling'
   | 'energy-recovery'
+  | 'air-handling'
+  | 'air-terminal'
   | 'air-path';
 
 /** Top-level catalog family. Add families here when the library grows. */
@@ -19,9 +21,24 @@ export type EquipmentMount = 'ceiling' | 'roof' | 'grade';
 export interface CatalogPort {
   id: string;
   service: DuctService;
+  /** In: air enters the equipment here. Out: air leaves it. */
+  direction: 'in' | 'out';
+  /** Other streams this port also takes, such as relief air at an exhaust louver. */
+  accepts?: DuctService[];
   u: number;
   v: number;
 }
+
+export type UnitPortRole = 'oa' | 'ra' | 'sa' | 'ea';
+
+/** Air-handling unit: default internal sections and where each air connection sits on the casing. */
+export interface UnitSpec {
+  sections: Omit<UnitSection, 'id'>[];
+  portAt: Record<UnitPortRole, { id: string; u: number; v: number }>;
+}
+
+/** Room terminals serve a space. Outdoor terminals are intakes and discharges at the building skin. */
+export type TerminalRole = 'room' | 'outdoor';
 
 export interface StatedQuantity {
   /** Public catalog / listing text used for planning. Confirm on a current submittal. */
@@ -63,6 +80,14 @@ export interface CatalogProduct {
   reviewStatus: 'needs-confirmation';
   /** Missing or unverified fields. Does not repeat the page-level disclaimer. */
   gaps: string[];
+  /** Fixed connections. Units derive theirs from their sections instead. */
+  ports?: CatalogPort[];
+  /** Present on air-handling units, packaged rooftops, make-up air units, and ERVs. */
+  unit?: UnitSpec;
+  /** Present on diffusers, grilles, louvers, and roof hoods. */
+  terminal?: TerminalRole;
+  /** Older schematic nodes kept so saved projects open. Hidden from the library. */
+  legacy?: boolean;
 }
 
 export const CATALOG_SOURCE =
@@ -76,7 +101,9 @@ export const CATEGORY_LABEL: Record<EquipmentCategory, string> = {
   'system-equipment': 'System equipment',
   'heating-cooling': 'Heating and cooling',
   'energy-recovery': 'Energy recovery',
-  'air-path': 'Air path',
+  'air-handling': 'Air-handling unit',
+  'air-terminal': 'Air terminal',
+  'air-path': 'Air path (legacy)',
 };
 
 export const FAMILY_LABEL: Record<EquipmentFamily, string> = {
@@ -88,8 +115,8 @@ export const FAMILY_ORDER: EquipmentFamily[] = ['space', 'system'];
 
 /** Categories under each family. Subdivide by appending here later. */
 export const FAMILY_CATEGORIES: Record<EquipmentFamily, EquipmentCategory[]> = {
-  space: ['kitchen-hood', 'exhaust-fan', 'makeup-air', 'bathroom-exhaust'],
-  system: ['system-equipment', 'heating-cooling', 'energy-recovery', 'air-path'],
+  space: ['kitchen-hood', 'exhaust-fan', 'makeup-air', 'bathroom-exhaust', 'air-terminal'],
+  system: ['air-handling', 'system-equipment', 'heating-cooling', 'energy-recovery'],
 };
 
 /** Kept so older call sites compile. Air-path equipment is drawn on the plan. */
@@ -572,7 +599,330 @@ export const CATALOG: CatalogProduct[] = [
     reviewStatus: 'needs-confirmation',
     gaps: ['Planning node only; fan curve is not stated.'],
   },
+  {
+    id: 'ahu-csaa-12',
+    manufacturer: 'Trane',
+    model: 'Performance Climate Changer CSAA (size 12 class)',
+    name: 'Modular indoor air handler, mixed air',
+    category: 'air-handling',
+    supplier: 'Trane Technologies (USA)',
+    mount: 'grade',
+    dimensions: feet(16, 5.5, 5, 'Planning envelope ~16 ft × 5.5 ft × 5 ft for a size 12 unit with mixing box, filter, fan, and two coils'),
+    airflow: flow(6000, '6000 CFM planning point (size 12 ≈ 12 ft² coil face at 500 fpm)'),
+    cooling: null,
+    heating: null,
+    electrical: 'Fan motor and VFD per Trane selection. Confirm on submittal.',
+    connections: 'Outdoor, return, and supply air ducts. Coil piping and condensate per section.',
+    documentUrl: 'https://www.trane.com/commercial/north-america/us/en/products-systems/air-handlers/indoor-air-handlers.html',
+    image: null,
+    source: 'Trane Performance Climate Changer (CSAA): modular indoor air handler. Size number is roughly coil face area in ft².',
+    reviewStatus: 'needs-confirmation',
+    gaps: [
+      'Section lengths and casing size come from Trane selection software.',
+      'Coil capacities are not stated until the coils are selected.',
+      'No product image in this app.',
+    ],
+  },
+  {
+    id: 'ahu-csaa-66',
+    manufacturer: 'Trane',
+    model: 'Performance Climate Changer CSAA (size 66 class)',
+    name: 'Modular air handler, economizer with exhaust fan',
+    category: 'air-handling',
+    supplier: 'Trane Technologies (USA)',
+    mount: 'grade',
+    dimensions: feet(32, 11, 8.5, 'Planning envelope ~32 ft × 11 ft × 8.5 ft for a size 66 unit with exhaust fan, mixing box, fan, and two coils'),
+    airflow: flow(30000, '30,000 CFM planning point (size 66 ≈ 66 ft² coil face at ~450 fpm)'),
+    cooling: null,
+    heating: null,
+    electrical: 'Supply and exhaust fan motors and VFDs per Trane selection. Confirm on submittal.',
+    connections: 'Outdoor, return, exhaust, and supply air ducts. Refrigerant and glycol coil piping per section.',
+    documentUrl: 'https://www.trane.com/commercial/north-america/us/en/products-systems/air-handlers/indoor-air-handlers.html',
+    image: null,
+    source: 'Trane Performance Climate Changer (CSAA): modular indoor air handler with optional exhaust fan / economizer sections.',
+    reviewStatus: 'needs-confirmation',
+    gaps: [
+      'Section lengths and casing size come from Trane selection software.',
+      'CO₂ (R-744) DX coils are a special selection; confirm availability and pressure rating.',
+      'No product image in this app.',
+    ],
+  },
+  {
+    id: 'diff-sq-24',
+    manufacturer: 'Titus',
+    model: 'TMS',
+    name: 'Square ceiling supply diffuser, 24 × 24',
+    category: 'air-terminal',
+    supplier: 'Titus HVAC (USA)',
+    mount: 'ceiling',
+    dimensions: inches(24, 24, 10, '24 in × 24 in lay-in face; neck and plenum depth by selection'),
+    airflow: flow(350, '350 CFM planning point for a 10 in neck'),
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'Round neck from the branch duct. Balancing damper optional.',
+    documentUrl: 'https://www.titus-hvac.com/products/diffusers/square-and-rectangular-diffusers',
+    image: null,
+    source: 'Titus TMS square ceiling diffuser family. Neck size and throw from the Titus selection.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Throw, NC, and neck size need a selection at the design airflow.', 'No product image in this app.'],
+  },
+  {
+    id: 'grille-ret-24',
+    manufacturer: 'Titus',
+    model: '50F',
+    name: 'Eggcrate return grille, 24 × 24',
+    category: 'air-terminal',
+    supplier: 'Titus HVAC (USA)',
+    mount: 'ceiling',
+    dimensions: inches(24, 24, 8, '24 in × 24 in lay-in face'),
+    airflow: flow(700, '700 CFM planning point'),
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'Return plenum box or ducted collar.',
+    documentUrl: 'https://www.titus-hvac.com/products/grilles-and-registers',
+    image: null,
+    source: 'Titus 50F eggcrate return grille. Face velocity and pressure from the Titus selection.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Face velocity and NC need a selection at the design airflow.', 'No product image in this app.'],
+  },
+  {
+    id: 'grille-exh-12',
+    manufacturer: 'Titus',
+    model: '50F',
+    name: 'Eggcrate exhaust grille, 12 × 12',
+    category: 'air-terminal',
+    supplier: 'Titus HVAC (USA)',
+    mount: 'ceiling',
+    dimensions: inches(12, 12, 8, '12 in × 12 in face'),
+    airflow: flow(150, '150 CFM planning point'),
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'Ducted collar to the exhaust branch.',
+    documentUrl: 'https://www.titus-hvac.com/products/grilles-and-registers',
+    image: null,
+    source: 'Titus 50F eggcrate grille used for general exhaust.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Not for grease-laden air.', 'No product image in this app.'],
+  },
+  {
+    id: 'louver-oa',
+    manufacturer: 'Ruskin',
+    model: 'ELF6375DX',
+    name: 'Stationary drainable wall louver, outdoor-air intake',
+    category: 'air-terminal',
+    supplier: 'Ruskin (USA)',
+    mount: 'ceiling',
+    dimensions: inches(48, 6, 36, '48 in wide × 36 in high, 6 in deep frame'),
+    airflow: flow(3000, '3000 CFM planning point at about 500 fpm free-area velocity'),
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'Plenum or duct transition behind the louver. Bird screen standard.',
+    documentUrl: 'https://www.ruskin.com/louvers',
+    image: null,
+    source: 'Ruskin ELF6375DX stationary drainable louver, AMCA 500-L rated.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Free area and beginning water penetration velocity need the Ruskin selection for this size.', 'No product image in this app.'],
+  },
+  {
+    id: 'louver-ea',
+    manufacturer: 'Ruskin',
+    model: 'ELF6375DX',
+    name: 'Stationary drainable wall louver, exhaust discharge',
+    category: 'air-terminal',
+    supplier: 'Ruskin (USA)',
+    mount: 'ceiling',
+    dimensions: inches(48, 6, 36, '48 in wide × 36 in high, 6 in deep frame'),
+    airflow: flow(3000, '3000 CFM planning point'),
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'Plenum or duct transition behind the louver. Keep separation from outdoor-air intakes.',
+    documentUrl: 'https://www.ruskin.com/louvers',
+    image: null,
+    source: 'Ruskin ELF6375DX stationary drainable louver, AMCA 500-L rated.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Confirm separation distance to intakes under the governing mechanical code.', 'No product image in this app.'],
+  },
+  {
+    id: 'hood-intake-roof',
+    manufacturer: 'Greenheck',
+    model: 'FGI',
+    name: 'Gravity intake roof hood',
+    category: 'air-terminal',
+    supplier: 'Greenheck Fan Corporation (USA)',
+    mount: 'roof',
+    dimensions: inches(30, 30, 18, 'Planning curb envelope ~30 in × 30 in'),
+    airflow: flow(1500, '1500 CFM planning point'),
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'Roof curb and ducted throat.',
+    documentUrl: 'https://www.greenheck.com/products/air-movement/gravity-ventilators',
+    image: null,
+    source: 'Greenheck FGI aluminum gravity intake hood.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Throat size and pressure drop from the Greenheck selection.', 'No product image in this app.'],
+  },
+  {
+    id: 'hood-relief-roof',
+    manufacturer: 'Greenheck',
+    model: 'FGR',
+    name: 'Gravity relief roof hood',
+    category: 'air-terminal',
+    supplier: 'Greenheck Fan Corporation (USA)',
+    mount: 'roof',
+    dimensions: inches(30, 30, 18, 'Planning curb envelope ~30 in × 30 in'),
+    airflow: flow(1500, '1500 CFM planning point'),
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'Roof curb and ducted throat. Backdraft damper optional.',
+    documentUrl: 'https://www.greenheck.com/products/air-movement/gravity-ventilators',
+    image: null,
+    source: 'Greenheck FGR aluminum gravity relief hood.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Not for grease-laden air.', 'No product image in this app.'],
+  },
 ];
+
+const CFM_M3S = 0.0004719474432;
+
+function port(id: string, service: DuctService, direction: 'in' | 'out', u: number, v: number, accepts?: DuctService[]): CatalogPort {
+  return accepts ? { id, service, direction, accepts, u, v } : { id, service, direction, u, v };
+}
+
+/** Explicit connections. Air flows in at an inlet and out at an outlet. */
+const PORTS: Record<string, CatalogPort[]> = {
+  'hood-wall-8': [port('exhaust', 'exhaust', 'out', 0, 0)],
+  'hood-island-10': [port('exhaust', 'exhaust', 'out', 0, 0)],
+  'fan-upblast-30': [port('in', 'exhaust', 'in', 0, 0)],
+  'fan-inline-8': [port('in', 'exhaust', 'in', -1, 0), port('out', 'exhaust', 'out', 1, 0)],
+  'bath-fan-150': [port('exhaust', 'exhaust', 'out', 0, 0)],
+  'cu-5': [],
+  'damper-oa': [port('in', 'outdoor', 'in', -1, 0), port('out', 'outdoor', 'out', 1, 0)],
+  'damper-ra': [port('in', 'return', 'in', -1, 0), port('out', 'return', 'out', 1, 0)],
+  'damper-relief': [port('in', 'relief', 'in', -1, 0), port('out', 'relief', 'out', 1, 0)],
+  'mix-plenum': [port('oa', 'outdoor', 'in', -1, 0.55), port('ra', 'return', 'in', -1, -0.55), port('out', 'supply', 'out', 1, 0, ['mixed'])],
+  'filter-panel': [port('in', 'supply', 'in', -1, 0, ['mixed']), port('out', 'supply', 'out', 1, 0, ['mixed'])],
+  'coil-cool': [port('in', 'supply', 'in', -1, 0, ['mixed']), port('out', 'supply', 'out', 1, 0)],
+  'coil-heat': [port('in', 'supply', 'in', -1, 0), port('out', 'supply', 'out', 1, 0)],
+  'sensor-air': [port('in', 'supply', 'in', -1, 0), port('out', 'supply', 'out', 1, 0)],
+  'fan-supply': [port('in', 'supply', 'in', -1, 0, ['mixed']), port('out', 'supply', 'out', 1, 0)],
+  'diff-sq-24': [port('neck', 'supply', 'in', 0, 0)],
+  'grille-ret-24': [port('collar', 'return', 'out', 0, 0)],
+  'grille-exh-12': [port('collar', 'exhaust', 'out', 0, 0, ['relief'])],
+  'louver-oa': [port('collar', 'outdoor', 'out', 0, 0)],
+  'louver-ea': [port('collar', 'exhaust', 'in', 0, 0, ['relief'])],
+  'hood-intake-roof': [port('throat', 'outdoor', 'out', 0, 0)],
+  'hood-relief-roof': [port('throat', 'relief', 'in', 0, 0, ['exhaust'])],
+};
+
+const SIDE_PORTS: UnitSpec['portAt'] = {
+  oa: { id: 'oa', u: -1, v: 0.6 },
+  ea: { id: 'ea', u: -1, v: 0 },
+  ra: { id: 'ra', u: -1, v: -0.6 },
+  sa: { id: 'sa', u: 1, v: 0 },
+};
+
+/** Packaged rooftop: horizontal supply and return. Economizer hood and barometric relief sit on the casing. */
+function rooftop(cfm: number, heatingW: number, coolingW: number): UnitSpec {
+  return {
+    sections: [
+      { kind: 'oa-damper', position: 'NC', ducted: false, flowM3s: cfm * 0.2 * CFM_M3S, note: 'Economizer outdoor-air hood. Minimum outdoor air is a planning value.' },
+      { kind: 'exhaust-damper', position: 'NC', ducted: false, flowM3s: null, note: 'Barometric relief on the economizer.' },
+      { kind: 'ra-damper', position: 'NO', ducted: true },
+      { kind: 'mixing-box' },
+      { kind: 'filter' },
+      { kind: 'cooling-coil', medium: 'dx', capacityW: coolingW },
+      { kind: 'heating-coil', medium: 'gas', capacityW: heatingW },
+      { kind: 'supply-fan', flowM3s: cfm * CFM_M3S },
+    ],
+    portAt: {
+      oa: { id: 'oa', u: -1, v: 0.6 },
+      ea: { id: 'ea', u: -1, v: 0 },
+      ra: { id: 'return', u: -1, v: 0 },
+      sa: { id: 'supply', u: 1, v: 0 },
+    },
+  };
+}
+
+const UNITS: Record<string, UnitSpec> = {
+  'rtu-12': rooftop(3750, 200 * 293.07107, 12.5 * 3516.85),
+  'rtu-75': rooftop(2650, 150 * 293.07107, 7.5 * 3516.85),
+  'mau-40': {
+    sections: [
+      { kind: 'oa-damper', position: 'NC', ducted: false, flowM3s: 4000 * CFM_M3S, note: 'Intake hood with bird screen on the unit.' },
+      { kind: 'filter' },
+      { kind: 'supply-fan', flowM3s: 4000 * CFM_M3S },
+      { kind: 'heating-coil', medium: 'gas', capacityW: 400000 * 0.29307107, note: 'Direct gas-fired burner in the airstream.' },
+    ],
+    portAt: { ...SIDE_PORTS, sa: { id: 'supply', u: 1, v: 0 } },
+  },
+  'erv-20': {
+    sections: [
+      { kind: 'oa-damper', position: 'NC', ducted: true, flowM3s: 800 * CFM_M3S },
+      { kind: 'ra-damper', position: 'NC', ducted: true, note: 'Return inlet to the exhaust side of the core.' },
+      { kind: 'heat-recovery' },
+      { kind: 'filter' },
+      { kind: 'supply-fan', flowM3s: 800 * CFM_M3S },
+      { kind: 'relief-fan', flowM3s: 800 * CFM_M3S },
+      { kind: 'exhaust-damper', position: 'NC', ducted: true, flowM3s: 800 * CFM_M3S },
+    ],
+    portAt: {
+      oa: { id: 'oa', u: -1, v: 0.55 },
+      ea: { id: 'ea', u: -1, v: -0.55 },
+      sa: { id: 'sa', u: 1, v: 0.55 },
+      ra: { id: 'ra', u: 1, v: -0.55 },
+    },
+  },
+  'ahu-csaa-12': {
+    sections: [
+      { kind: 'oa-damper', position: 'NC', ducted: true, flowM3s: 1200 * CFM_M3S },
+      { kind: 'ra-damper', position: 'NO', ducted: true },
+      { kind: 'mixing-box' },
+      { kind: 'filter' },
+      { kind: 'supply-fan', flowM3s: 6000 * CFM_M3S },
+      { kind: 'cooling-coil', medium: 'chilled-water', capacityW: null },
+      { kind: 'heating-coil', medium: 'hot-water', capacityW: null },
+    ],
+    portAt: SIDE_PORTS,
+  },
+  'ahu-csaa-66': {
+    sections: [
+      { kind: 'oa-damper', position: 'NC', ducted: true, flowM3s: 5000 * CFM_M3S, note: 'Fresh air 5,000 CFM. 93 °F DB / 73 °F WB summer, -20 °F winter.' },
+      { kind: 'relief-fan', flowM3s: null, note: 'Evacuation fan for economizer operation.' },
+      { kind: 'exhaust-damper', position: 'NC', ducted: true, flowM3s: null },
+      { kind: 'ra-damper', position: 'NO', ducted: true, note: 'Return air 25,000 CFM at 50 °F / 60% RH.' },
+      { kind: 'mixing-box' },
+      { kind: 'filter' },
+      { kind: 'supply-fan', flowM3s: 30000 * CFM_M3S },
+      { kind: 'cooling-coil', medium: 'co2-dx', capacityW: null, note: 'Entering 57.3 °F DB / 49.9 °F WB, leaving 33.0 °F DB. Solenoid V-1, back-pressure valve V-2, 30 °F suction.' },
+      { kind: 'heating-coil', medium: 'glycol', capacityW: null, note: '50% propylene glycol, 68 GPM, 140 °F supply / 101 °F return. 3-way valve V-3. Leaving 53.7 °F DB in winter.' },
+    ],
+    portAt: SIDE_PORTS,
+  },
+};
+
+const TERMINALS: Record<string, TerminalRole> = {
+  'diff-sq-24': 'room',
+  'grille-ret-24': 'room',
+  'grille-exh-12': 'room',
+  'louver-oa': 'outdoor',
+  'louver-ea': 'outdoor',
+  'hood-intake-roof': 'outdoor',
+  'hood-relief-roof': 'outdoor',
+};
+
+for (const product of CATALOG) {
+  if (UNITS[product.id]) product.unit = UNITS[product.id];
+  else product.ports = PORTS[product.id] ?? [];
+  if (TERMINALS[product.id]) product.terminal = TERMINALS[product.id];
+  if (product.category === 'air-path') product.legacy = true;
+}
 
 const BY_ID = new Map(CATALOG.map(item => [item.id, item]));
 
@@ -583,68 +933,9 @@ export function getProduct(id: string): CatalogProduct | undefined {
   return BY_ID.get(id);
 }
 
-/** Plan connection points. Fractions sit on the real footprint, so they follow the stated size. */
+/** Fixed plan connection points. Units return none here; use placedPorts for a placed unit. */
 export function catalogPorts(product: CatalogProduct): CatalogPort[] {
-  const name = `${product.name} ${product.model}`;
-  if (/condens/i.test(name)) return [];
-  if (product.category === 'air-path') {
-    if (/mix/i.test(name)) {
-      return [
-        { id: 'oa', service: 'outdoor', u: -1, v: 0.55 },
-        { id: 'ra', service: 'return', u: -1, v: -0.55 },
-        { id: 'out', service: 'supply', u: 1, v: 0 },
-      ];
-    }
-    if (/relief|exhaust damper/i.test(name)) {
-      return [
-        { id: 'in', service: 'relief', u: -1, v: 0 },
-        { id: 'out', service: 'relief', u: 1, v: 0 },
-      ];
-    }
-    if (/outdoor-air damper|OA-DMP/i.test(name) || product.id === 'damper-oa') {
-      return [
-        { id: 'in', service: 'outdoor', u: -1, v: 0 },
-        { id: 'out', service: 'outdoor', u: 1, v: 0 },
-      ];
-    }
-    if (/return-air damper|RA-DMP/i.test(name) || product.id === 'damper-ra') {
-      return [
-        { id: 'in', service: 'return', u: -1, v: 0 },
-        { id: 'out', service: 'return', u: 1, v: 0 },
-      ];
-    }
-    return [
-      { id: 'in', service: 'supply', u: -1, v: 0 },
-      { id: 'out', service: 'supply', u: 1, v: 0 },
-    ];
-  }
-  if (product.category === 'kitchen-hood') return [{ id: 'exhaust', service: 'exhaust', u: 0, v: 0 }];
-  if (product.category === 'bathroom-exhaust') return [{ id: 'exhaust', service: 'exhaust', u: 0, v: 0 }];
-  if (product.category === 'exhaust-fan') {
-    if (/inline|mixed-flow|\bSQ\b/i.test(name)) {
-      return [
-        { id: 'in', service: 'exhaust', u: -1, v: 0 },
-        { id: 'out', service: 'exhaust', u: 1, v: 0 },
-      ];
-    }
-    return [{ id: 'in', service: 'exhaust', u: 0, v: 0 }];
-  }
-  if (product.category === 'makeup-air') return [{ id: 'supply', service: 'supply', u: 1, v: 0 }];
-  if (/recovery|HE1X|ERV/i.test(name) || product.category === 'energy-recovery') {
-    return [
-      { id: 'sa', service: 'supply', u: 1, v: 0.55 },
-      { id: 'ra', service: 'return', u: 1, v: -0.55 },
-      { id: 'oa', service: 'outdoor', u: -1, v: 0.55 },
-      { id: 'ea', service: 'exhaust', u: -1, v: -0.55 },
-    ];
-  }
-  if (product.category === 'heating-cooling' || product.category === 'system-equipment') {
-    return [
-      { id: 'supply', service: 'supply', u: 1, v: 0 },
-      { id: 'return', service: 'return', u: -1, v: 0 },
-    ];
-  }
-  return [];
+  return product.ports ?? [];
 }
 
 /** Plan/model footprint size from catalog specs, or the 0.6 m marker when not stated. */

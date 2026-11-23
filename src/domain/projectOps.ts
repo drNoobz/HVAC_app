@@ -1,10 +1,12 @@
 import { equipmentSizeM, getProduct, type CatalogProduct } from './catalog';
 import { builtinAssembly, cloneLayers, findAssembly, type ConstructionAssembly } from './constructionLibrary';
 import { ductPairAllowed, getDuctProduct } from './ductCatalog';
-import { ductElevation, linkedPort, polylineLength, sealDuct } from './ducts';
+import { defaultSections } from './airUnits';
+import { ductElevation, linkedPort, nearestNode, nearestRun, polylineLength, sealDuct } from './ducts';
 import { createId, nowIso } from './ids';
 import type {
   DuctEnd,
+  DuctNode,
   DuctRun,
   DuctService,
   DuctShape,
@@ -157,9 +159,18 @@ export function cloneProject(source: Project, overrides?: Partial<Project>): Pro
       systemId: item.systemId ? (systemIds.get(item.systemId) ?? null) : null,
     };
   });
+  const nodeIds = new Map<string, string>();
+  const ductNodes = (source.ductNodes ?? []).flatMap(node => {
+    const systemId = systemIds.get(node.systemId);
+    if (!systemId) return [];
+    const id = createId('node');
+    nodeIds.set(node.id, id);
+    return [{ ...node, id, systemId }];
+  });
   const remapEnd = (end: DuctEnd): DuctEnd => ({
     equipmentId: end.equipmentId ? (equipmentIds.get(end.equipmentId) ?? null) : null,
     portId: end.equipmentId && equipmentIds.has(end.equipmentId) ? end.portId : null,
+    ...(end.nodeId && nodeIds.has(end.nodeId) ? { nodeId: nodeIds.get(end.nodeId) } : {}),
   });
   const wallIds = new Map<string, string>();
   const wallRuns = (source.wallRuns ?? []).map(run => {
@@ -199,6 +210,7 @@ export function cloneProject(source: Project, overrides?: Partial<Project>): Pro
     equipment,
     wallRuns,
     ducts,
+    ductNodes,
     loads: (source.loads ?? []).flatMap(item => {
       const roomId = item.roomId ? roomIds.get(item.roomId) : undefined;
       if (!roomId) return [];
@@ -457,6 +469,7 @@ export function buildPlacement(
     notes: '',
     assumption: true,
     schematic,
+    ...(product.unit ? { sections: defaultSections(product) } : {}),
   };
 }
 
@@ -481,7 +494,7 @@ export function duplicateEquipment(project: Project, id: string): Project {
   if (!item) return project;
   return {
     ...project,
-    equipment: [...project.equipment, { ...item, id: createId('eq'), xM: item.xM + 0.5 }],
+    equipment: [...project.equipment, { ...item, id: createId('eq'), xM: item.xM + 0.5, sections: item.sections?.map(section => ({ ...section, id: createId('sec') })) }],
   };
 }
 
@@ -494,6 +507,57 @@ export function removeEquipment(project: Project, id: string): Project {
   };
 }
 
+type DraftPoint = { x: number; y: number; equipmentId?: string; portId?: string; nodeId?: string; splitDuctId?: string };
+
+const BRANCH_SNAP_M = 0.35;
+
+/** Split a run at a point and put a junction there. The first part keeps the run id. */
+function splitRun(project: Project, run: DuctRun, at: { x: number; y: number; segment: number }, nodeId: string): Project {
+  const head = [...run.points.slice(0, at.segment + 1), { x: at.x, y: at.y }];
+  const tail = [{ x: at.x, y: at.y }, ...run.points.slice(at.segment + 1)];
+  const first: DuctRun = { ...run, points: head, end: { equipmentId: null, portId: null, nodeId } };
+  const second: DuctRun = { ...run, id: createId('duct'), points: tail, start: { equipmentId: null, portId: null, nodeId }, streamDesign: undefined };
+  const ducts = (project.ducts ?? []).flatMap(item => (item.id === run.id ? [first, second] : [item]));
+  const next = { ...project, ducts };
+  return { ...next, ducts: ducts.map(item => (item.id === first.id || item.id === second.id ? sealDuct(item, next) : item)) };
+}
+
+/** Resolve a drawn end: a port, an existing junction, a new tee on a run of the same stream, or an open end. */
+function attachEnd(
+  project: Project,
+  point: DraftPoint,
+  systemId: string,
+  service: DuctService,
+): { project: Project; end: DuctEnd; x: number; y: number } {
+  if (point.equipmentId && point.portId) return { project, end: { equipmentId: point.equipmentId, portId: point.portId }, x: point.x, y: point.y };
+  const node = point.nodeId
+    ? (project.ductNodes ?? []).find(item => item.id === point.nodeId)
+    : nearestNode(project, point.x, point.y, 0.05, systemId, service);
+  if (node) return { project, end: { equipmentId: null, portId: null, nodeId: node.id }, x: node.x, y: node.y };
+  if (point.splitDuctId) {
+    const hit = nearestRun(project, point.x, point.y, BRANCH_SNAP_M, systemId, service);
+    if (hit) {
+      const near = (p: { x: number; y: number }) => Math.hypot(p.x - hit.x, p.y - hit.y) < 0.05;
+      const first = hit.run.points[0];
+      const last = hit.run.points[hit.run.points.length - 1];
+      for (const which of ['start', 'end'] as const) {
+        const tip = which === 'start' ? first : last;
+        const end = which === 'start' ? hit.run.start : hit.run.end;
+        if (!near(tip)) continue;
+        if (end.nodeId) return { project, end: { equipmentId: null, portId: null, nodeId: end.nodeId }, x: tip.x, y: tip.y };
+        if (end.equipmentId) return { project, end: { equipmentId: null, portId: null }, x: point.x, y: point.y };
+        const created: DuctNode = { id: createId('node'), systemId, service, x: tip.x, y: tip.y };
+        const ducts = (project.ducts ?? []).map(item => (item.id === hit.run.id ? { ...item, [which]: { equipmentId: null, portId: null, nodeId: created.id } } : item));
+        return { project: { ...project, ducts, ductNodes: [...(project.ductNodes ?? []), created] }, end: { equipmentId: null, portId: null, nodeId: created.id }, x: tip.x, y: tip.y };
+      }
+      const created: DuctNode = { id: createId('node'), systemId, service, x: Number(hit.x.toFixed(3)), y: Number(hit.y.toFixed(3)) };
+      const withNode = { ...project, ductNodes: [...(project.ductNodes ?? []), created] };
+      return { project: splitRun(withNode, hit.run, { ...hit, x: created.x, y: created.y }, created.id), end: { equipmentId: null, portId: null, nodeId: created.id }, x: created.x, y: created.y };
+    }
+  }
+  return { project, end: { equipmentId: null, portId: null }, x: point.x, y: point.y };
+}
+
 export function addDuct(
   project: Project,
   input: {
@@ -503,7 +567,7 @@ export function addDuct(
     shape: DuctShape;
     widthM: number;
     heightM: number | null;
-    points: { x: number; y: number; equipmentId?: string; portId?: string }[];
+    points: DraftPoint[];
     view?: DuctRun['view'];
     streamDesign?: DuctRun['streamDesign'];
   },
@@ -516,12 +580,26 @@ export function addDuct(
   const minLen = view === 'schematic' ? 0.05 : 0.2;
   if (input.points.length < 2 || polylineLength(input.points) < minLen) return project;
   if (!(input.widthM > 0.05)) return project;
-  const start = input.points[0];
-  const end = input.points[input.points.length - 1];
-  const ends = {
-    start: start.equipmentId && start.portId ? { equipmentId: start.equipmentId, portId: start.portId } : { equipmentId: null, portId: null },
-    end: end.equipmentId && end.portId ? { equipmentId: end.equipmentId, portId: end.portId } : { equipmentId: null, portId: null },
-  };
+  let next = project;
+  let ends: { start: DuctEnd; end: DuctEnd } = { start: { equipmentId: null, portId: null }, end: { equipmentId: null, portId: null } };
+  const points = input.points.map(point => ({ x: point.x, y: point.y }));
+  if (view === 'plan') {
+    const head = attachEnd(next, input.points[0], input.systemId, input.service);
+    next = head.project;
+    const tail = attachEnd(next, input.points[input.points.length - 1], input.systemId, input.service);
+    next = tail.project;
+    if (head.end.nodeId && head.end.nodeId === tail.end.nodeId) return project;
+    ends = { start: head.end, end: tail.end };
+    points[0] = { x: head.x, y: head.y };
+    points[points.length - 1] = { x: tail.x, y: tail.y };
+  } else {
+    const start = input.points[0];
+    const end = input.points[input.points.length - 1];
+    ends = {
+      start: start.equipmentId && start.portId ? { equipmentId: start.equipmentId, portId: start.portId } : { equipmentId: null, portId: null },
+      end: end.equipmentId && end.portId ? { equipmentId: end.equipmentId, portId: end.portId } : { equipmentId: null, portId: null },
+    };
+  }
   const run: DuctRun = sealDuct(
     {
       id: createId('duct'),
@@ -531,20 +609,20 @@ export function addDuct(
       shape: input.shape,
       widthM: input.widthM,
       heightM: input.shape === 'round' ? null : input.heightM && input.heightM > 0.05 ? input.heightM : input.widthM * 0.67,
-      zM: ductElevation(project, ends.start, ends.end),
-      points: input.points.map(point => ({ x: Number(point.x.toFixed(3)), y: Number(point.y.toFixed(3)) })),
+      zM: ductElevation(next, ends.start, ends.end),
+      points: points.map(point => ({ x: Number(point.x.toFixed(3)), y: Number(point.y.toFixed(3)) })),
       ...ends,
       penetrations: [],
       view,
       ...(input.streamDesign ? { streamDesign: input.streamDesign } : {}),
     },
-    project,
+    next,
   );
   const claimed = new Set([ends.start.equipmentId, ends.end.equipmentId].filter((id): id is string => !!id));
   return {
-    ...project,
-    ducts: [...(project.ducts ?? []), run],
-    equipment: project.equipment.map(item => (claimed.has(item.id) && !item.systemId ? { ...item, systemId: input.systemId } : item)),
+    ...next,
+    ducts: [...(next.ducts ?? []), run],
+    equipment: next.equipment.map(item => (claimed.has(item.id) && !item.systemId ? { ...item, systemId: input.systemId } : item)),
   };
 }
 
@@ -569,7 +647,42 @@ export function updateDuct(
 }
 
 export function removeDuct(project: Project, id: string): Project {
-  return { ...project, ducts: (project.ducts ?? []).filter(run => run.id !== id) };
+  return pruneNodes({ ...project, ducts: (project.ducts ?? []).filter(run => run.id !== id) });
+}
+
+function sameDuct(a: DuctRun, b: DuctRun): boolean {
+  return a.catalogId === b.catalogId && a.shape === b.shape && Math.abs(a.widthM - b.widthM) < 0.002 && Math.abs((a.heightM ?? 0) - (b.heightM ?? 0)) < 0.002 && a.systemId === b.systemId && a.service === b.service;
+}
+
+/** Drop junctions left with one run, and join two matching runs through a junction back into one. */
+export function pruneNodes(project: Project): Project {
+  let next = project;
+  for (const node of project.ductNodes ?? []) {
+    const ducts = next.ducts ?? [];
+    const touching = ducts.filter(run => run.start.nodeId === node.id || run.end.nodeId === node.id);
+    const dropNode = () => (next.ductNodes ?? []).filter(item => item.id !== node.id);
+    if (touching.length === 0) {
+      next = { ...next, ductNodes: dropNode() };
+      continue;
+    }
+    if (touching.length === 1) {
+      const run = touching[0];
+      const open = (end: DuctEnd): DuctEnd => (end.nodeId === node.id ? { equipmentId: null, portId: null } : end);
+      next = { ...next, ductNodes: dropNode(), ducts: ducts.map(item => (item.id === run.id ? { ...item, start: open(item.start), end: open(item.end) } : item)) };
+      continue;
+    }
+    if (touching.length === 2 && sameDuct(touching[0], touching[1])) {
+      const [a, b] = touching;
+      const aPoints = a.end.nodeId === node.id ? a.points : [...a.points].reverse();
+      const aStart = a.end.nodeId === node.id ? a.start : a.end;
+      const bPoints = b.start.nodeId === node.id ? b.points : [...b.points].reverse();
+      const bEnd = b.start.nodeId === node.id ? b.end : b.start;
+      const merged: DuctRun = { ...a, points: [...aPoints, ...bPoints.slice(1)], start: aStart, end: bEnd };
+      const withMerged = { ...next, ductNodes: dropNode(), ducts: ducts.filter(item => item.id !== b.id).map(item => (item.id === a.id ? merged : item)) };
+      next = { ...withMerged, ducts: (withMerged.ducts ?? []).map(item => (item.id === a.id ? sealDuct(item, withMerged) : item)) };
+    }
+  }
+  return next;
 }
 
 /** Pull port ends onto the equipment they are connected to. */
@@ -578,8 +691,9 @@ export function syncDuctPorts(project: Project): Project {
     if (run.points.length < 2) return run;
     const view = run.view === 'schematic' ? 'schematic' : 'plan';
     const points = run.points.map(point => ({ ...point }));
-    const start = linkedPort(project, run.start, view);
-    const end = linkedPort(project, run.end, view);
+    const node = (end: DuctEnd) => (end.nodeId ? (project.ductNodes ?? []).find(item => item.id === end.nodeId) : undefined);
+    const start = linkedPort(project, run.start, view) ?? node(run.start);
+    const end = linkedPort(project, run.end, view) ?? node(run.end);
     if (start) points[0] = { x: Number(start.x.toFixed(3)), y: Number(start.y.toFixed(3)) };
     if (end) points[points.length - 1] = { x: Number(end.x.toFixed(3)), y: Number(end.y.toFixed(3)) };
     return sealDuct({ ...run, points }, project);
@@ -605,7 +719,16 @@ export function removeSystem(project: Project, id: string): Project {
     systems: project.systems.filter(system => system.id !== id),
     equipment: project.equipment.map(item => (item.systemId === id ? { ...item, systemId: null } : item)),
     ducts: (project.ducts ?? []).filter(run => run.systemId !== id),
+    ductNodes: (project.ductNodes ?? []).filter(node => node.systemId !== id),
   };
+}
+
+/** Move a junction and pull the runs that end on it. */
+export function moveDuctNode(project: Project, id: string, x: number, y: number): Project {
+  return syncDuctPorts({
+    ...project,
+    ductNodes: (project.ductNodes ?? []).map(node => (node.id === id ? { ...node, x: Number(x.toFixed(3)), y: Number(y.toFixed(3)) } : node)),
+  });
 }
 
 export function footprintOutsideRoom(item: PlacedEquipment, room: Room | undefined): boolean {

@@ -1,12 +1,13 @@
 import { blankSite } from './climate';
 import { builtinAssembly, cloneLayers } from './constructionLibrary';
-import { catalogPorts, equipmentSizeM, getProduct } from './catalog';
+import { equipmentSizeM, getProduct } from './catalog';
+import { defaultSections, placedPorts } from './airUnits';
 import { getDuctProduct } from './ductCatalog';
 import { createId, nowIso } from './ids';
 import { getLoadProduct } from './loadCatalog';
 import { addDuct, placementZ } from './projectOps';
 import { applySystemPackage } from './systemPackages';
-import type { DuctService, HvacSystem, LoadItem, Opening, PlacedEquipment, Project, Room, SiteClimate, SurfaceAssignment, SystemKind } from './types';
+import type { DuctService, DuctNode, HvacSystem, LoadItem, Opening, PlacedEquipment, Project, Room, SiteClimate, SurfaceAssignment, SystemKind } from './types';
 import { interfaceTargets, isOutsideInterfaceKey, repeatedWalls, separateSharedWalls } from './walls';
 
 const PLANNING_NOTE = 'Planning default from the restaurant construction library. The stack is copied onto this surface. Confirm the climate zone and the tested assembly before design use.';
@@ -101,7 +102,15 @@ function place(
     quantity: 1,
     notes,
     assumption: true,
+    ...(product.unit ? { sections: defaultSections(product) } : {}),
   };
+}
+
+const CFM = 0.0004719474432;
+
+/** Same placement with a design airflow, CFM. */
+function rated(item: PlacedEquipment, cfm: number): PlacedEquipment {
+  return { ...item, designFlowM3s: cfm * CFM };
 }
 
 const EXAMPLE = 'Example from the full-service template. Confirm the selection before design use.';
@@ -133,7 +142,7 @@ function ductDiameter(catalogId: string, inches: number): number {
 
 function portPoint(item: PlacedEquipment, portId: string): { x: number; y: number; equipmentId: string; portId: string } {
   const product = getProduct(item.catalogId);
-  const port = product ? catalogPorts(product).find(entry => entry.id === portId) : undefined;
+  const port = product ? placedPorts(item).find(entry => entry.id === portId) : undefined;
   if (!product || !port) throw new Error(`No port ${portId} on ${item.catalogId}`);
   const size = equipmentSizeM(product);
   const yaw = (item.yawDeg * Math.PI) / 180;
@@ -150,16 +159,17 @@ function connect(
   systemId: string,
   service: DuctService,
   inches: number,
-  points: { x: number; y: number; equipmentId?: string; portId?: string }[],
+  points: { x: number; y: number; equipmentId?: string; portId?: string; nodeId?: string }[],
 ): Project {
   const next = addDuct(project, { catalogId, systemId, service, shape: 'round', widthM: ductDiameter(catalogId, inches), heightM: null, points });
   if (next === project) throw new Error(`Could not add ${service} duct ${catalogId}`);
   return next;
 }
 
-/** Open plan end (grille, diffuser, or outdoor terminal). Not tied to equipment. */
-function terminal(x: number, y: number): { x: number; y: number } {
-  return { x, y };
+/** Junction where a trunk tees into branches. */
+function junction(project: Project, systemId: string, service: DuctService, x: number, y: number): { project: Project; point: { x: number; y: number; nodeId: string } } {
+  const node: DuctNode = { id: createId('node'), systemId, service, x, y };
+  return { project: { ...project, ductNodes: [...(project.ductNodes ?? []), node] }, point: { x, y, nodeId: node.id } };
 }
 
 /** Duct from an equipment port out to a free terminal (outlet / discharge / diffuser). */
@@ -248,7 +258,7 @@ function assignInterfaces(project: Project): Project {
 }
 
 const TEMPLATE_DETAILS =
-  'Editable restaurant template. Room sizes, materials, and any example equipment are planning assumptions. Confirm them before design use. Dining comfort includes a mixed-air AHU drawn on the plan.';
+  'Editable restaurant template. Room sizes, materials, and any example equipment are planning assumptions. Confirm them before design use. Each air system runs from its unit or fan through branch ducts to diffusers, grilles, louvers, or roof hoods.';
 
 /**
  * Chicago O'Hare annual design day from EnergyPlus TMY3 .ddy (ASHRAE 2009 Climate Design Data).
@@ -301,124 +311,110 @@ export function createFullServiceProject(): Project {
   const exhaust = system(
     'Kitchen exhaust',
     'kitchen-exhaust',
-    'Inlet: Type I hood over the cooking line. Outlet: roof upblast fan to outdoors (fan has no ducted discharge). Grease duct hood → fan. Airflow not calculated.',
+    'Type I hood (1,600 CFM) → listed grease duct → roof upblast fan selected at the hood airflow. The fan discharges to outdoors on its own.',
   );
   const makeup = system(
     'Make-up air',
     'makeup-air',
-    'Inlet: outdoor air at the rooftop MAU (unit intake, not ducted on plan). Outlet: supply duct into the kitchen near the cooking line. Not balanced to the hood.',
+    'Rooftop direct-fired MAU with its intake hood on the unit. Supply trunk tees to two diffusers ahead of the cooking line. Set to the hood exhaust so the kitchen is close to neutral.',
   );
   const restroomSys = system(
     'Restroom exhaust',
     'restroom-exhaust',
-    'Inlet: ceiling grille on each bath fan (fan face). Outlet: exhaust duct from each fan to a roof terminal over the corridor.',
+    'Ceiling fan in each restroom (the grille is the fan face) → duct → gravity relief hood on the roof.',
   );
   const dishSys = system(
     'Dish exhaust',
     'ventilation',
-    'Inlet: capture terminal over the dish area → inline fan inlet. Outlet: fan outlet → roof discharge terminal.',
+    'Exhaust grille over the dish machine → inline fan → gravity relief hood on the roof.',
   );
   const ervSys = system(
     'Office ERV',
     'ventilation',
-    'Inlets: outdoor air (OA) from outside, return air (RA) from the office. Outlets: supply air (SA) into the office, exhaust air (EA) to outdoors.',
+    'Rooftop ERV with outdoor-air and exhaust hoods on the casing. Supply diffuser and return grille in the office.',
   );
-  const hood = place('hood-wall-8', plan.kitchen, 3.6, 15.39, exhaust.id, `${EXAMPLE} Wall canopy on the back wall — system inlet.`);
-  const fan = place('fan-upblast-30', plan.kitchen, 7.6, 12.2, exhaust.id, `${EXAMPLE} Roof upblast — system outlet to outdoors.`);
-  const mau = place('mau-40', plan.prep, 13.2, 11.2, makeup.id, `${EXAMPLE} Rooftop MAU. Outdoor intake on the unit; supply duct is the outlet.`);
-  const dishFan = place(
-    'fan-inline-8',
-    plan.dish,
-    12.2,
-    14.5,
-    dishSys.id,
-    `${EXAMPLE} Inline fan. Inlet toward dish; outlet toward roof.`,
-    180,
+  const hood = place('hood-wall-8', plan.kitchen, 3.6, 15.39, exhaust.id, `${EXAMPLE} Wall canopy on the back wall.`);
+  const fan = rated(place('fan-upblast-30', plan.kitchen, 7.6, 12.2, exhaust.id, `${EXAMPLE} Roof upblast fan selected at the hood airflow.`), 1600);
+  const mauBase = place('mau-40', plan.prep, 13.2, 11.2, makeup.id, `${EXAMPLE} Rooftop MAU. Intake hood on the unit; supply faces the kitchen.`, 180);
+  const mau: PlacedEquipment = {
+    ...mauBase,
+    sections: (mauBase.sections ?? []).map(section =>
+      section.kind === 'supply-fan' || section.kind === 'oa-damper' ? { ...section, flowM3s: 1600 * CFM } : section,
+    ),
+  };
+  const mauDiffA = rated(place('diff-sq-24', plan.kitchen, 1.6, 13.4, makeup.id, `${EXAMPLE} Make-up air diffuser ahead of the line.`), 800);
+  const mauDiffB = rated(place('diff-sq-24', plan.kitchen, 6.0, 13.4, makeup.id, `${EXAMPLE} Make-up air diffuser ahead of the line.`), 800);
+  const dishFan = rated(
+    place('fan-inline-8', plan.dish, 12.2, 14.5, dishSys.id, `${EXAMPLE} Inline fan. Inlet toward the dish grille; outlet to the roof hood.`, 180),
+    400,
   );
+  const dishGrille = rated(place('grille-exh-12', plan.dish, 15.2, 15.2, dishSys.id, `${EXAMPLE} Exhaust grille over the dish machine.`), 400);
+  const dishRelief = place('hood-relief-roof', plan.dish, 11.2, 15.6, dishSys.id, `${EXAMPLE} Roof discharge.`);
   const bathA = place('bath-fan-150', plan.restroomA, 13.1, 6.5, restroomSys.id, `${EXAMPLE} Ceiling fan — grille is the inlet.`);
   const bathB = place('bath-fan-150', plan.restroomB, 15.3, 6.5, restroomSys.id, `${EXAMPLE} Ceiling fan — grille is the inlet.`);
-  const erv = place(
-    'erv-20',
-    plan.office,
-    19.0,
-    7.0,
-    ervSys.id,
-    `${EXAMPLE} OA/EA face outdoors (east); SA/RA face the office.`,
-    180,
-  );
+  const bathReliefA = place('hood-relief-roof', plan.restroomA, 13.1, 7.45, restroomSys.id, `${EXAMPLE} Roof discharge for restroom A.`);
+  const bathReliefB = place('hood-relief-roof', plan.restroomB, 15.3, 7.45, restroomSys.id, `${EXAMPLE} Roof discharge for restroom B.`);
+  const ervBase = place('erv-20', plan.office, 19.0, 7.0, ervSys.id, `${EXAMPLE} Rooftop ERV. Outdoor-air and exhaust hoods are on the casing.`, 180);
+  const erv: PlacedEquipment = {
+    ...ervBase,
+    sections: (ervBase.sections ?? []).map(section =>
+      section.kind === 'oa-damper' || section.kind === 'exhaust-damper' ? { ...section, ducted: false } : section,
+    ),
+  };
+  const ervDiff = rated(place('diff-sq-24', plan.office, 17.2, 5.4, ervSys.id, `${EXAMPLE} Office supply diffuser.`), 800);
+  const ervGrille = rated(place('grille-ret-24', plan.office, 17.2, 8.6, ervSys.id, `${EXAMPLE} Office return grille.`), 800);
   const project = base(
     'Full-service restaurant',
     'full-service',
     { kind: 'template', templateId: 'full-service', label: 'Full-service restaurant template' },
-    `${TEMPLATE_DETAILS} Equipment, loads, and ducts are planning placements, not a design. Each system note states inlet and outlet.`,
+    `${TEMPLATE_DETAILS} Equipment, loads, and ducts are planning placements, not a design.`,
     plan.rooms,
     [exhaust, makeup, restroomSys, dishSys, ervSys],
-    [hood, fan, mau, dishFan, bathA, bathB, erv]
+    [hood, fan, mau, mauDiffA, mauDiffB, dishFan, dishGrille, dishRelief, bathA, bathB, bathReliefA, bathReliefB, erv, ervDiff, ervGrille],
   );
 
-  // Kitchen exhaust: hood (inlet) → grease duct → fan in (outlet is upblast to outdoors).
+  // Kitchen exhaust: hood collar → grease duct → upblast fan inlet.
   const hoodPort = portPoint(hood, 'exhaust');
   const fanIn = portPoint(fan, 'in');
-  let next = connect(project, 'captiveaire-dw', exhaust.id, 'exhaust', 16, [
-    hoodPort,
-    { x: hoodPort.x, y: fanIn.y },
-    fanIn,
-  ]);
+  let next = connect(project, 'captiveaire-dw', exhaust.id, 'exhaust', 16, [hoodPort, { x: hoodPort.x, y: fanIn.y }, fanIn]);
 
-  // Make-up air: outdoor intake on unit; supply duct to kitchen near the line (outlet).
-  next = fromPort(next, mau, 'supply', 'esm-sw-round', makeup.id, 'supply', 16, terminal(3.2, 14.2), [
-    { x: 10.2, y: 11.2 },
-    { x: 3.2, y: 11.2 },
-  ]);
+  // Make-up air: MAU supply → trunk → tee → two diffusers.
+  const tee = junction(next, makeup.id, 'supply', 6.0, 11.2);
+  next = tee.project;
+  next = connect(next, 'esm-sw-round', makeup.id, 'supply', 16, [portPoint(mau, 'supply'), tee.point]);
+  next = connect(next, 'esm-sw-round', makeup.id, 'supply', 12, [tee.point, portPoint(mauDiffB, 'neck')]);
+  next = connect(next, 'esm-sw-round', makeup.id, 'supply', 12, [tee.point, { x: 1.6, y: 11.2 }, portPoint(mauDiffA, 'neck')]);
 
-  // Dining comfort: mixed-air AHU drawn on the plan.
+  // Dining comfort: rooftop unit with a ducted supply trunk and return main.
   const beforeSystems = new Set(next.systems.map(item => item.id));
-  next = applySystemPackage(next, 'ahu-mixed-air', { xM: 5, yM: 4 });
+  next = applySystemPackage(next, 'rtu-ducted', { xM: 4.6, yM: 4 });
   const comfort = next.systems.find(item => !beforeSystems.has(item.id));
   if (!comfort) throw new Error('Dining comfort package failed to create a system');
   next = {
     ...next,
-    systems: next.systems.map(item =>
-      item.id === comfort.id
-        ? {
-            ...item,
-            name: 'Dining comfort',
-            notes:
-              'On the plan: OA → damper → mix → filter → fan → coils → SA, plus RA and relief. Zone inlet: return grille → RTU return. Zone outlet: RTU supply → dining diffuser. Stream labels are planning values, not a ThermoNode solve.',
-          }
-        : item,
-    ),
-    equipment: next.equipment.map(item => {
-      if (item.systemId !== comfort.id) return item;
-      if (item.catalogId === 'rtu-12') {
-        return { ...item, notes: `${EXAMPLE} Packaged unit over dining. The mixed-air path is drawn on the plan beside it.` };
-      }
-      return item;
-    }),
+    systems: next.systems.map(item => (item.id === comfort.id ? { ...item, name: 'Dining comfort' } : item)),
+    equipment: next.equipment.map(item => (item.systemId === comfort.id && !item.notes ? { ...item, notes: EXAMPLE } : item)),
   };
-  const rtu = next.equipment.find(item => item.systemId === comfort.id && item.catalogId === 'rtu-12');
-  if (!rtu) throw new Error('Dining comfort package missing RTU footprint');
-  next = fromPort(next, rtu, 'supply', 'esm-sw-round', comfort.id, 'supply', 14, terminal(8.5, 2.2), [{ x: 8.5, y: 4 }]);
-  next = toPort(next, terminal(1.6, 5.8), rtu, 'return', 'esm-sw-round', comfort.id, 'return', 14, [{ x: 1.6, y: 4 }]);
 
-  // Dish exhaust: capture terminal → fan in; fan out → roof discharge.
-  next = toPort(next, terminal(15.2, 15.2), dishFan, 'in', 'esm-sw-round', dishSys.id, 'exhaust', 10, [{ x: 15.2, y: 14.5 }]);
-  next = fromPort(next, dishFan, 'out', 'esm-sw-round', dishSys.id, 'exhaust', 10, terminal(12.2, 16.6));
+  // Dish exhaust: grille → inline fan → roof relief hood.
+  next = connect(next, 'esm-sw-round', dishSys.id, 'exhaust', 10, [portPoint(dishGrille, 'collar'), { x: 15.2, y: 14.5 }, portPoint(dishFan, 'in')]);
+  const dishOut = portPoint(dishFan, 'out');
+  next = connect(next, 'esm-sw-round', dishSys.id, 'exhaust', 10, [dishOut, { x: dishOut.x, y: 15.6 }, portPoint(dishRelief, 'throat')]);
 
-  // Restroom exhaust: fan grille is inlet; duct to roof terminal is outlet.
-  next = fromPort(next, bathA, 'exhaust', 'esm-sw-round', restroomSys.id, 'exhaust', 6, terminal(13.1, 9.3));
-  next = fromPort(next, bathB, 'exhaust', 'esm-sw-round', restroomSys.id, 'exhaust', 6, terminal(15.3, 9.3));
+  // Restroom exhaust: each fan → roof relief hood.
+  next = connect(next, 'esm-sw-round', restroomSys.id, 'exhaust', 6, [portPoint(bathA, 'exhaust'), portPoint(bathReliefA, 'throat')]);
+  next = connect(next, 'esm-sw-round', restroomSys.id, 'exhaust', 6, [portPoint(bathB, 'exhaust'), portPoint(bathReliefB, 'throat')]);
 
-  // Office ERV: OA + RA inlets; SA + EA outlets.
-  next = toPort(next, terminal(20.4, 7.5), erv, 'oa', 'esm-sw-round', ervSys.id, 'outdoor', 10);
-  next = fromPort(next, erv, 'ea', 'esm-sw-round', ervSys.id, 'exhaust', 10, terminal(20.4, 6.5));
-  next = fromPort(next, erv, 'sa', 'esm-sw-round', ervSys.id, 'supply', 10, terminal(17.2, 5.4));
-  next = toPort(next, terminal(17.2, 8.4), erv, 'ra', 'esm-sw-round', ervSys.id, 'return', 10);
+  // Office ERV: supply to the diffuser, return from the grille.
+  const ervSa = portPoint(erv, 'sa');
+  const ervRa = portPoint(erv, 'ra');
+  next = connect(next, 'esm-sw-round', ervSys.id, 'supply', 10, [ervSa, { x: 17.2, y: ervSa.y }, portPoint(ervDiff, 'neck')]);
+  next = connect(next, 'esm-sw-round', ervSys.id, 'return', 10, [portPoint(ervGrille, 'collar'), { x: 17.2, y: ervRa.y }, ervRa]);
 
   return {
     ...next,
     location: "Chicago O'Hare, IL (planning climate)",
-    details: `${TEMPLATE_DETAILS} Equipment, loads, and ducts are planning placements, not a design. Exterior conditions use Chicago O'Hare ASHRAE 2009 design-day values; confirm the project site before design use. System notes name each inlet and outlet. Dining comfort draws the mixed-air AHU on the plan.`,
+    details: `${TEMPLATE_DETAILS} Equipment, loads, and ducts are planning placements, not a design. Exterior conditions use Chicago O'Hare ASHRAE 2009 design-day values; confirm the project site before design use. Every duct ends at a unit, a fan, or a terminal, and branch airflows add up to the unit airflow.`,
     site: fullServiceSite(),
     loads: [
       load('people-restaurant', plan.dining, 4, 3.2, 36),
@@ -598,7 +594,7 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
     id: 'full-service',
     name: 'Full-service restaurant',
     description:
-      'Dining, bar, kitchen, prep, dish, restrooms, storage, office, and corridor, with climate, loads, plan ducts, and a dining mixed-air AHU drawn on the plan.',
+      'Dining, bar, kitchen, prep, dish, restrooms, storage, office, and corridor, with climate, loads, and complete air systems: ducted RTU, hood exhaust with make-up air, restroom and dish exhaust, and an office ERV.',
     create: createFullServiceProject,
   },
 ];
