@@ -169,9 +169,21 @@ export type DamperPosition = 'NO' | 'NC';
 /** What a coil exchanges heat with. */
 export type CoilMedium = 'dx' | 'co2-dx' | 'chilled-water' | 'hot-water' | 'glycol' | 'steam' | 'gas' | 'electric';
 
+/** Design season for schematic conditions. */
+export type DesignSeason = 'cooling' | 'heating';
+
+/** Entered air condition at a station. Temperatures °C, RH as a fraction 0–1. Give a wet bulb or an RH. */
+export interface AirState {
+  dbC: number | null;
+  wbC: number | null;
+  rh: number | null;
+}
+
 export interface UnitSection {
   id: string;
   kind: UnitSectionKind;
+  /** Air leaving this section, by design season. Dampers on the outdoor or return side hold the entering condition there. Missing values are carried or calculated. */
+  states?: Partial<Record<DesignSeason, AirState>>;
   /** Design airflow through this section, m³/s. Fans and outdoor/exhaust dampers set the unit port flows. */
   flowM3s?: number | null;
   /** Dampers only. */

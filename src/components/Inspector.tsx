@@ -1,5 +1,6 @@
 'use client';
 
+import { Fragment } from 'react';
 import { CATEGORY_LABEL, getProduct, type CatalogProduct } from '@/domain/catalog';
 import {
   addOpening,
@@ -52,7 +53,9 @@ import {
   type Selection,
   type SurfaceFace,
   type WallFace,
+  type AirState,
   type CoilMedium,
+  type DesignSeason,
   type DamperPosition,
   type PlacedEquipment,
   type UnitSection,
@@ -1449,6 +1452,98 @@ function PortFlows({ project, item }: { project: Project; item: PlacedEquipment 
   );
 }
 
+const STATE_LABEL: Partial<Record<UnitSectionKind, string>> = {
+  'oa-damper': 'Outdoor air (blank uses site climate)',
+  'ra-damper': 'Return air (blank uses indoor targets)',
+  'mixing-box': 'Mixed air (blank is calculated)',
+  'cooling-coil': 'Leaving air',
+  'heating-coil': 'Leaving air',
+  'heat-recovery': 'Leaving air',
+  humidifier: 'Leaving air',
+};
+
+/** Entered dry bulb, wet bulb, and RH for each design season. Blank fields are carried or calculated. */
+function StateFields({
+  label,
+  units,
+  states,
+  onChange,
+}: {
+  label: string;
+  units: Project['units'];
+  states: UnitSection['states'];
+  onChange: (states: UnitSection['states']) => void;
+}) {
+  const ip = units === 'IP';
+  const show = (c: number | null | undefined) => (c == null ? '' : formatNumber(ip ? c * 1.8 + 32 : c, 1));
+  const read = (text: string) => {
+    const raw = text.trim();
+    if (!raw) return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return undefined;
+    return ip ? (n - 32) / 1.8 : n;
+  };
+  const set = (season: DesignSeason, patch: Partial<AirState>) => {
+    const current: AirState = { dbC: null, wbC: null, rh: null, ...(states?.[season] ?? {}) };
+    const next = { ...current, ...patch };
+    const empty = next.dbC == null && next.wbC == null && next.rh == null;
+    const merged = { ...(states ?? {}) };
+    if (empty) delete merged[season];
+    else merged[season] = next;
+    onChange(Object.keys(merged).length > 0 ? merged : undefined);
+  };
+  const deg = ip ? '°F' : '°C';
+  return (
+    <div className="state-grid">
+      <span className="state-title">{label}</span>
+      <span />
+      <span>DB {deg}</span>
+      <span>WB {deg}</span>
+      <span>RH %</span>
+      {(['cooling', 'heating'] as const).map(season => {
+        const state = states?.[season];
+        return (
+          <Fragment key={season}>
+            <span className="state-season">{season === 'cooling' ? 'Cooling' : 'Heating'}</span>
+            <input
+              key={`db-${season}-${state?.dbC}`}
+              aria-label={`${season} dry bulb`}
+              defaultValue={show(state?.dbC)}
+              inputMode="decimal"
+              onBlur={event => {
+                const value = read(event.target.value);
+                if (value !== undefined && value !== (state?.dbC ?? null)) set(season, { dbC: value });
+              }}
+            />
+            <input
+              key={`wb-${season}-${state?.wbC}`}
+              aria-label={`${season} wet bulb`}
+              defaultValue={show(state?.wbC)}
+              inputMode="decimal"
+              onBlur={event => {
+                const value = read(event.target.value);
+                if (value !== undefined && value !== (state?.wbC ?? null)) set(season, { wbC: value });
+              }}
+            />
+            <input
+              key={`rh-${season}-${state?.rh}`}
+              aria-label={`${season} relative humidity`}
+              defaultValue={state?.rh == null ? '' : formatNumber(state.rh * 100, 0)}
+              inputMode="decimal"
+              onBlur={event => {
+                const raw = event.target.value.trim();
+                const n = Number(raw);
+                const value = !raw ? null : Number.isFinite(n) && n >= 0 && n <= 100 ? n / 100 : undefined;
+                if (value !== undefined && value !== (state?.rh ?? null)) set(season, { rh: value });
+              }}
+            />
+          </Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Sections of an air-handling unit in airflow order. Ports and port flows follow from them. */
 function UnitSectionsEditor({ project, item, onChange }: { project: Project; item: PlacedEquipment; onChange: (project: Project) => void }) {
   const sections = unitSections(item);
@@ -1530,6 +1625,14 @@ function UnitSectionsEditor({ project, item, onChange }: { project: Project; ite
                   units={project.units}
                   value={section.flowM3s ?? null}
                   onCommit={value => patch(section.id, { flowM3s: value })}
+                />
+              )}
+              {STATE_LABEL[section.kind] && (
+                <StateFields
+                  label={STATE_LABEL[section.kind]!}
+                  units={project.units}
+                  states={section.states}
+                  onChange={states => patch(section.id, { states })}
                 />
               )}
               {section.note && <p className="muted">{section.note}</p>}

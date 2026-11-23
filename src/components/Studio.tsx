@@ -63,6 +63,7 @@ import { EquipmentIcon, categoryIcon, equipmentIconFor } from './EquipmentIcon';
 import { LoadIcon } from './LoadIcon';
 import { Inspector } from './Inspector';
 import { LibraryPanel } from './LibraryPanel';
+import { SchematicPanel } from './SchematicPanel';
 import { SchedulePanel } from './SchedulePanel';
 
 const Viewport = dynamic(() => import('./Viewport'), {
@@ -70,10 +71,11 @@ const Viewport = dynamic(() => import('./Viewport'), {
   loading: () => <div className="viewport-loading">Loading 3D workspace…</div>,
 });
 
-type CenterView = 'model' | 'schedule' | 'library' | 'boundary';
+type CenterView = 'model' | 'schematic' | 'schedule' | 'library' | 'boundary';
 
 const CENTER_VIEWS: { id: CenterView; label: string }[] = [
   { id: 'model', label: 'Build' },
+  { id: 'schematic', label: 'Schematic' },
   { id: 'schedule', label: 'Schedule' },
   { id: 'library', label: 'Library' },
   { id: 'boundary', label: 'Thermonode' },
@@ -733,7 +735,7 @@ export function Studio({
           ))}
         </nav>
       )}
-      <div className={`studio-body${view === 'model' ? '' : ' is-wide'}`}>
+      <div className={`studio-body${view === 'model' ? '' : view === 'schematic' ? ' is-schematic' : ' is-wide'}`}>
         {view === 'model' && (
           <aside className="side" aria-label={`${stepLabel} panel`}>
             <div className="side-tabs" role="tablist" aria-label="Project and catalogue">
@@ -1342,12 +1344,13 @@ export function Studio({
               </div>
             </>
           )}
+          {view === 'schematic' && <SchematicPanel project={project} selection={selection} onSelect={setSelection} />}
           {view === 'schedule' && <SchedulePanel project={project} assemblies={assemblies} materials={materials} />}
           {view === 'library' && <LibraryPanel added={addedMaterials} onChange={onLibraryChange} addedAssemblies={addedAssemblies} onAssembliesChange={onAssembliesChange} />}
           {view === 'boundary' && <BoundaryPanel project={project} />}
         </section>
-        {view === 'model' && (
-          <Inspector project={project} selection={selection} materials={materials} assemblies={assemblies} onChange={edit} onSelect={select} onDeleteProject={onDeleteProject} nameFocus={nameFocus} />
+        {(view === 'model' || view === 'schematic') && (
+          <Inspector project={project} selection={selection} materials={materials} assemblies={assemblies} onChange={edit} onSelect={view === 'schematic' ? setSelection : select} onDeleteProject={onDeleteProject} nameFocus={nameFocus} />
         )}
       </div>
       <footer className="statusbar">

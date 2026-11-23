@@ -165,6 +165,8 @@ export interface SourcePortFlow {
   /** Sum of the room terminals reached through the ducts from this port. */
   terminalsM3s: number;
   terminals: number;
+  /** Placements of the terminals reached from this port. */
+  terminalIds: string[];
   partial: boolean;
 }
 
@@ -242,6 +244,7 @@ export function ductFlows(project: Project): { runs: Map<string, RunFlow>; sourc
       for (const vertex of outdoorOpen) roles.get(vertex)!.flow = rootRole.flow / outdoorOpen.length;
     }
     const visited = new Set<string>([root]);
+    const reached: string[] = [];
     const walk = (vertex: string): { flow: number; partial: boolean; terminals: number } => {
       const role = roles.get(vertex)!;
       let flow = 0;
@@ -251,6 +254,7 @@ export function ductFlows(project: Project): { runs: Map<string, RunFlow>; sourc
         if (role.flow == null) partial = true;
         else flow += role.flow;
         terminals += 1;
+        if (role.item) reached.push(role.item.id);
       }
       if (role.kind === 'open') partial = true;
       for (const edge of adjacency.get(vertex) ?? []) {
@@ -271,6 +275,7 @@ export function ductFlows(project: Project): { runs: Map<string, RunFlow>; sourc
       portM3s: rootRole.flow,
       terminalsM3s: total.flow,
       terminals: total.terminals,
+      terminalIds: reached,
       partial: total.partial,
     });
   }

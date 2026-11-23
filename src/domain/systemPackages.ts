@@ -67,6 +67,9 @@ function rect(service: DuctService, widthIn: number, heightIn: number, from: Pac
   return { catalogId: 'smacna-rect-galv', service, shape: 'rect', widthIn, heightIn, from, to, via };
 }
 
+/** °F to °C. */
+const f = (degF: number) => (degF - 32) / 1.8;
+
 const port = (member: string, portId: string): PackageRef => ({ member, portId });
 const node = (key: string): PackageRef => ({ node: key });
 
@@ -129,14 +132,54 @@ export const AHU_ECONOMIZER: SystemPackage = {
   systemName: 'AHU-1',
   notes: 'Fresh air 5,000 CFM at 93 °F DB / 73 °F WB summer, -20 °F winter. Return 25,000 CFM at 50 °F / 60% RH. Cooling coil leaving 33.0 °F DB; heating coil leaving 53.7 °F DB in winter. Sensors and valves are listed on the sections until controls are modeled.',
   members: [
-    { key: 'ahu', catalogId: 'ahu-csaa-66', planOffset: { xM: 0, yM: 0 } },
+    {
+      key: 'ahu',
+      catalogId: 'ahu-csaa-66',
+      planOffset: { xM: 0, yM: 0 },
+      sections: [
+        {
+          kind: 'oa-damper',
+          position: 'NC',
+          ducted: true,
+          flowM3s: 5000 * CFM,
+          states: { cooling: { dbC: f(93), wbC: f(73), rh: null }, heating: { dbC: f(-20), wbC: null, rh: null } },
+          note: 'Sensors on the diagram: HAF (humidity), TAF (temperature).',
+        },
+        { kind: 'relief-fan', flowM3s: null, note: 'Evacuation fan for economizer operation.' },
+        { kind: 'exhaust-damper', position: 'NC', ducted: true, flowM3s: null },
+        {
+          kind: 'ra-damper',
+          position: 'NO',
+          ducted: true,
+          states: { cooling: { dbC: f(50), wbC: null, rh: 0.6 }, heating: { dbC: f(50), wbC: null, rh: 0.6 } },
+          note: 'Sensors on the diagram: TR, HR. Mixed-air sensors TM, HM after the mixing box.',
+        },
+        { kind: 'mixing-box' },
+        { kind: 'filter' },
+        { kind: 'supply-fan', flowM3s: 30000 * CFM },
+        {
+          kind: 'cooling-coil',
+          medium: 'co2-dx',
+          capacityW: null,
+          states: { cooling: { dbC: f(33), wbC: null, rh: null } },
+          note: 'Solenoid valve V-1 and back-pressure control valve V-2, 30 °F suction.',
+        },
+        {
+          kind: 'heating-coil',
+          medium: 'glycol',
+          capacityW: null,
+          states: { heating: { dbC: f(53.7), wbC: null, rh: null } },
+          note: '50% propylene glycol, 68 GPM, 140 °F supply / 101 °F return. 3-way control valve V-3. Supply sensors TA1, HA, TA2.',
+        },
+      ],
+    },
     { key: 'oaLouver', catalogId: 'louver-oa', planOffset: { xM: -7.5, yM: 1.0 }, yawDeg: 90, designCfm: 5000 },
     { key: 'eaLouver', catalogId: 'louver-ea', planOffset: { xM: -7.5, yM: -1.0 }, yawDeg: 90 },
   ],
   nodes: [],
   ducts: [
     rect('outdoor', 30, 24, port('oaLouver', 'collar'), port('ahu', 'oa')),
-    rect('exhaust', 30, 24, port('ahu', 'ea'), port('eaLouver', 'collar'), [{ x: -6.2, y: 0 }, { x: -6.2, y: -1.0 }]),
+    rect('relief', 30, 24, port('ahu', 'ea'), port('eaLouver', 'collar'), [{ x: -6.2, y: 0 }, { x: -6.2, y: -1.0 }]),
     rect('return', 72, 30, { x: -5.6, y: -4.0 }, port('ahu', 'ra'), [{ x: -5.6, y: -1.005 }]),
     rect('supply', 72, 36, port('ahu', 'sa'), { x: 8.5, y: 0 }),
   ],
