@@ -45,6 +45,8 @@ export function categoryIcon(category: string): EquipmentIconName {
     case 'system-equipment':
     case 'heating-cooling':
       return 'hvac';
+    case 'air-path':
+      return 'air';
     case 'humidifier':
       return 'humidity_percentage';
     default:
@@ -61,6 +63,12 @@ export function equipmentIconFor(product: { id: string; name: string; category: 
   if (/condens/i.test(name)) return 'heat_pump';
   if (/kitchen cooling|mini-?split/i.test(name)) return 'climate_mini_split';
   if (product.category === 'energy-recovery' || /recovery/i.test(name)) return 'air_purifier';
+  if (product.category === 'air-path') {
+    if (/sensor/i.test(name)) return 'humidity_percentage';
+    if (/fan/i.test(name)) return 'mode_fan_2';
+    if (/coil|filter|damper|mix/i.test(name)) return 'air';
+    return 'air';
+  }
   if (product.category === 'humidifier' || /humid/i.test(name)) return 'humidity_percentage';
   if (/co2/i.test(name)) return 'co2';
   if (/\bco\b|carbon monoxide/i.test(name)) return 'detector_co';

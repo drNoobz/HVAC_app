@@ -1,8 +1,12 @@
-import { catalogPorts, equipmentSizeM, getProduct } from './catalog';
+import { catalogPorts, equipmentSizeM, getProduct, isSchematicOnly } from './catalog';
 import { streamFor } from './ductCatalog';
-import type { DuctEnd, DuctPenetration, DuctRun, DuctService, PlacedEquipment, Project, Room, SystemKind, WallFace, WallRun } from './types';
-import { formatLength } from './units';
+import type { DuctEnd, DuctPenetration, DuctRun, DuctService, DuctView, PlacedEquipment, Project, Room, StreamDesign, SystemKind, WallFace, WallRun } from './types';
+import { formatFlow, formatLength, formatNumber } from './units';
 import { roomLoop, type DrawPoint } from './wallDraw';
+
+export function ductViewOf(run: Pick<DuctRun, 'view'> | undefined | null): DuctView {
+  return run?.view === 'schematic' ? 'schematic' : 'plan';
+}
 
 export const DUCT_SERVICES: { id: DuctService; label: string }[] = [
   { id: 'supply', label: 'Supply' },
@@ -72,10 +76,24 @@ export function ductSizeLabel(run: Pick<DuctRun, 'shape' | 'widthM' | 'heightM'>
   return `ø ${formatLength(run.widthM, units, 2)}`;
 }
 
-export function portWorld(item: PlacedEquipment, port: { u: number; v: number }): { x: number; y: number; z: number } | null {
+export function portWorld(
+  item: PlacedEquipment,
+  port: { u: number; v: number },
+  view: DuctView = 'plan',
+): { x: number; y: number; z: number } | null {
   const product = getProduct(item.catalogId);
   if (!product) return null;
   const size = equipmentSizeM(product);
+  if (view === 'schematic') {
+    const origin = item.schematic;
+    if (!origin) return null;
+    return {
+      x: origin.x + port.u * size.lengthM / 2,
+      y: origin.y + port.v * size.widthM / 2,
+      z: item.zM + size.heightM,
+    };
+  }
+  if (isSchematicOnly(product)) return null;
   const rad = (item.yawDeg * Math.PI) / 180;
   const c = Math.cos(rad);
   const s = Math.sin(rad);
@@ -88,13 +106,15 @@ export function portWorld(item: PlacedEquipment, port: { u: number; v: number })
   };
 }
 
-export function equipmentPortHits(equipment: readonly PlacedEquipment[]): DuctPortHit[] {
+export function equipmentPortHits(equipment: readonly PlacedEquipment[], view: DuctView = 'plan'): DuctPortHit[] {
   const hits: DuctPortHit[] = [];
   for (const item of equipment) {
     const product = getProduct(item.catalogId);
     if (!product) continue;
+    if (view === 'plan' && isSchematicOnly(product)) continue;
+    if (view === 'schematic' && !item.schematic) continue;
     for (const port of catalogPorts(product)) {
-      const world = portWorld(item, port);
+      const world = portWorld(item, port, view);
       if (!world) continue;
       hits.push({ equipmentId: item.id, portId: port.id, service: port.service, ...world });
     }
@@ -102,13 +122,24 @@ export function equipmentPortHits(equipment: readonly PlacedEquipment[]): DuctPo
   return hits;
 }
 
-/** Ports with no duct run attached. */
-export function openPorts(project: Project): DuctPortHit[] {
+/** Ports with no duct run attached in the given view. */
+export function openPorts(project: Project, view: DuctView = 'plan'): DuctPortHit[] {
   const used = new Set<string>();
   for (const run of project.ducts ?? []) {
+    if (ductViewOf(run) !== view) continue;
     for (const end of [run.start, run.end]) if (end.equipmentId && end.portId) used.add(`${end.equipmentId}:${end.portId}`);
   }
-  return equipmentPortHits(project.equipment).filter(hit => !used.has(`${hit.equipmentId}:${hit.portId}`));
+  return equipmentPortHits(project.equipment, view).filter(hit => !used.has(`${hit.equipmentId}:${hit.portId}`));
+}
+
+export function streamDesignLabel(design: StreamDesign | undefined | null, units: Project['units']): string | null {
+  if (!design) return null;
+  const bits: string[] = [];
+  if (design.flowM3s != null) bits.push(formatFlow(design.flowM3s, units));
+  if (design.dbC != null) bits.push(`${formatNumber(design.dbC, 1)}°C DB`);
+  if (design.wbC != null) bits.push(`${formatNumber(design.wbC, 1)}°C WB`);
+  if (design.rh != null) bits.push(`${formatNumber(design.rh * 100, 0)}% RH`);
+  return bits.length > 0 ? bits.join(' · ') : null;
 }
 
 export function portFits(project: Project, hit: DuctPortHit, systemId: string, service: DuctService): boolean {
@@ -125,10 +156,11 @@ export function nearestPort(
   y: number,
   maxM: number,
   allow: (hit: DuctPortHit) => boolean = () => true,
+  view: DuctView = 'plan',
 ): DuctPortHit | null {
   let best: DuctPortHit | null = null;
   let bestD = maxM;
-  for (const hit of equipmentPortHits(equipment)) {
+  for (const hit of equipmentPortHits(equipment, view)) {
     if (!allow(hit)) continue;
     const distance = Math.hypot(hit.x - x, hit.y - y);
     if (distance <= bestD) {
@@ -139,13 +171,13 @@ export function nearestPort(
   return best;
 }
 
-export function linkedPort(project: Project, end: DuctEnd): DuctPortHit | null {
+export function linkedPort(project: Project, end: DuctEnd, view: DuctView = 'plan'): DuctPortHit | null {
   if (!end.equipmentId || !end.portId) return null;
   const item = project.equipment.find(entry => entry.id === end.equipmentId);
   const product = item ? getProduct(item.catalogId) : undefined;
   const port = product ? catalogPorts(product).find(entry => entry.id === end.portId) : undefined;
   if (!item || !port) return null;
-  const world = portWorld(item, port);
+  const world = portWorld(item, port, view);
   if (!world) return null;
   return { equipmentId: item.id, portId: port.id, service: port.service, ...world };
 }
@@ -156,7 +188,7 @@ export function ductElevation(project: Project, start: DuctEnd, end: DuctEnd): n
 }
 
 export function endRise(project: Project, run: DuctRun, which: 'start' | 'end'): number {
-  const linked = linkedPort(project, which === 'start' ? run.start : run.end);
+  const linked = linkedPort(project, which === 'start' ? run.start : run.end, ductViewOf(run));
   if (!linked) return 0;
   return linked.z - run.zM;
 }
@@ -217,9 +249,13 @@ export function ductCrossings(points: readonly DrawPoint[], rooms: readonly Room
 }
 
 export function sealDuct(run: DuctRun, project: Project): DuctRun {
+  if (ductViewOf(run) === 'schematic') {
+    return { ...run, view: 'schematic', penetrations: [] };
+  }
   const crossings = ductCrossings(run.points, project.rooms, project.wallRuns ?? []);
   return {
     ...run,
+    view: run.view ?? 'plan',
     penetrations: crossings.map(({ x: _x, y: _y, ...penetration }) => penetration),
   };
 }

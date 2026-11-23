@@ -151,6 +151,17 @@ export type DuctService = 'supply' | 'return' | 'exhaust' | 'outdoor' | 'relief'
 
 export type DuctShape = 'round' | 'rect';
 
+/** Plan = building meters. Schematic = system process diagram units. */
+export type DuctView = 'plan' | 'schematic';
+
+/** User-entered stream design labels. Not solved; ThermoNode later. */
+export interface StreamDesign {
+  flowM3s: number | null;
+  dbC: number | null;
+  wbC: number | null;
+  rh: number | null;
+}
+
 /** Open end when both ids are null. A port end names the equipment connection. */
 export interface DuctEnd {
   equipmentId: string | null;
@@ -183,6 +194,10 @@ export interface DuctRun {
   start: DuctEnd;
   end: DuctEnd;
   penetrations: DuctPenetration[];
+  /** Missing on older projects means plan. */
+  view?: DuctView;
+  /** Optional design callouts on the stream. */
+  streamDesign?: StreamDesign;
 }
 
 export interface PlacedEquipment {
@@ -200,6 +215,8 @@ export interface PlacedEquipment {
   quantity: number;
   notes: string;
   assumption: boolean;
+  /** Position on the system schematic. Null when not placed there. */
+  schematic?: { x: number; y: number } | null;
 }
 
 /** Where an override value came from. Missing fields fall back to the catalog default. */

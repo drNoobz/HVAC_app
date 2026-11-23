@@ -781,6 +781,16 @@ function cleanOutline(outline: Room['outline']): Room['outline'] | undefined {
   return points.length >= 3 ? points : undefined;
 }
 
+function normalizeStreamDesign(value: DuctRun['streamDesign']): DuctRun['streamDesign'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const flowM3s = finiteOrNull(value.flowM3s);
+  const dbC = finiteOrNull(value.dbC);
+  const wbC = finiteOrNull(value.wbC);
+  const rh = finiteOrNull(value.rh);
+  if (flowM3s == null && dbC == null && wbC == null && rh == null) return undefined;
+  return { flowM3s, dbC, wbC, rh };
+}
+
 function normalizeDucts(value: Project['ducts']): DuctRun[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap(run => {
@@ -795,6 +805,7 @@ function normalizeDucts(value: Project['ducts']): DuctRun[] {
       equipmentId: typeof item?.equipmentId === 'string' ? item.equipmentId : null,
       portId: typeof item?.portId === 'string' ? item.portId : null,
     });
+    const streamDesign = normalizeStreamDesign(run.streamDesign);
     return [{
       id: run.id,
       catalogId: typeof run.catalogId === 'string' ? run.catalogId : '',
@@ -808,6 +819,23 @@ function normalizeDucts(value: Project['ducts']): DuctRun[] {
       start: end(run.start),
       end: end(run.end),
       penetrations: Array.isArray(run.penetrations) ? run.penetrations : [],
+      view: run.view === 'schematic' ? 'schematic' : 'plan',
+      ...(streamDesign ? { streamDesign } : {}),
+    }];
+  });
+}
+
+function normalizeEquipment(value: Project['equipment']): Project['equipment'] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(item => {
+    if (!item || typeof item.id !== 'string' || typeof item.catalogId !== 'string') return [];
+    const schematic =
+      item.schematic && Number.isFinite(item.schematic.x) && Number.isFinite(item.schematic.y)
+        ? { x: Number(item.schematic.x), y: Number(item.schematic.y) }
+        : null;
+    return [{
+      ...item,
+      schematic,
     }];
   });
 }
@@ -879,6 +907,7 @@ export function normalizeProject(project: Project, emptyNote: string): Project {
       };
     }),
     wallRuns: Array.isArray(project.wallRuns) ? project.wallRuns.map(run => ({ ...run, openings: run.openings ?? [] })) : [],
+    equipment: normalizeEquipment(project.equipment),
     ducts: normalizeDucts(project.ducts),
     loads: normalizeLoads(project.loads),
     site: normalizeSite(project.site),

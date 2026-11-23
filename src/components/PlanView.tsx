@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { CATALOG_MIME, equipmentSizeM, getProduct } from '@/domain/catalog';
+import { CATALOG_MIME, equipmentSizeM, getProduct, isSchematicOnly } from '@/domain/catalog';
 import { parseCatalogDrag } from '@/domain/catalogDrag';
 import { streamFor } from '@/domain/ductCatalog';
-import { ductCrossings, ductSizeLabel, endRise, equipmentPortHits, nearestPort, portFits, type DuctDraftPoint } from '@/domain/ducts';
+import { ductCrossings, ductSizeLabel, ductViewOf, endRise, equipmentPortHits, nearestPort, portFits, streamDesignLabel, type DuctDraftPoint } from '@/domain/ducts';
 import { equipmentGlyph, equipmentIconFor } from './EquipmentIcon';
 import type { DuctService, DuctShape, EditorTool, LoadItem, Opening, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
 import type { BuildStep } from '@/domain/checks';
@@ -43,11 +43,25 @@ export const DEFAULT_LAYERS: PlanLayers = { spaces: true, loads: true, equipment
 
 /** Layers outside the active step stay visible and clickable but recede. */
 function stepFade(step: BuildStep): { spaces: number; loads: number; equipment: number; ducts: number } {
-  if (step === 'spaces') return { spaces: 1, loads: 0.35, equipment: 0.35, ducts: 0.25 };
-  if (step === 'loads') return { spaces: 1, loads: 1, equipment: 0.45, ducts: 0.25 };
-  if (step === 'equipment') return { spaces: 1, loads: 0.45, equipment: 1, ducts: 0.35 };
-  if (step === 'ducts') return { spaces: 0.8, loads: 0.3, equipment: 1, ducts: 1 };
+  if (step === 'spaces') return { spaces: 1, loads: 0.16, equipment: 0.16, ducts: 0.12 };
+  if (step === 'loads') return { spaces: 0.4, loads: 1, equipment: 0.16, ducts: 0.12 };
+  if (step === 'equipment') return { spaces: 0.4, loads: 0.16, equipment: 1, ducts: 0.16 };
+  if (step === 'ducts') return { spaces: 0.35, loads: 0.14, equipment: 0.32, ducts: 1 };
   return { spaces: 1, loads: 1, equipment: 1, ducts: 1 };
+}
+
+/** Inactive step labels draw smaller as well as fainter. */
+function labelScale(opacity: number): number {
+  return opacity >= 0.9 ? 1 : 0.68;
+}
+
+/** Which build step owns a plan hit. Null hits are empty canvas. */
+function hitPhase(hit: string): BuildStep | null {
+  if (hit === 'room' || hit === 'wall' || hit === 'edge' || hit === 'opening' || hit === 'interface' || hit === 'wall-run' || hit === 'wall-opening') return 'spaces';
+  if (hit === 'load' || hit === 'load-rotate') return 'loads';
+  if (hit === 'equipment' || hit === 'equipment-rotate') return 'equipment';
+  if (hit === 'duct') return 'ducts';
+  return null;
 }
 
 function LoadMarks({
@@ -55,12 +69,14 @@ function LoadMarks({
   selection,
   fontM,
   labels,
+  labelScale: textScale = 1,
   onContextMenu,
 }: {
   loads: readonly LoadItem[];
   selection: Selection;
   fontM: number;
   labels: boolean;
+  labelScale?: number;
   onContextMenu: (selection: Selection, x: number, y: number) => void;
 }) {
   const r = Math.max(fontM * 0.85, 0.16);
@@ -92,7 +108,7 @@ function LoadMarks({
                   <text textAnchor="middle" y={fontM * 0.3} fontSize={fontM * 0.85} fontWeight={600} fill="#fff">?</text>
                 )}
                 {labels && (
-                  <text textAnchor="middle" y={r + fontM * 1.05} fontSize={fontM * 0.66} fill={INK}>
+                  <text textAnchor="middle" y={r + fontM * 1.05} fontSize={fontM * 0.66 * textScale} fill={INK}>
                     {loadLabel(item, product)}
                   </text>
                 )}
@@ -103,7 +119,6 @@ function LoadMarks({
         const length = size.lengthM;
         const width = size.widthM;
         const label = loadLabel(item, product);
-        const chipW = Math.max(fontM * 1.7, fontM * 0.56 * label.length);
         const iconM = Math.min(length, width, fontM * 1.6);
         const showIcon = Math.min(length, width) >= fontM * 1.1 && product;
         const handle = Math.max(fontM * 0.9, 0.2);
@@ -131,8 +146,7 @@ function LoadMarks({
             )}
             {labels && (
               <g transform={`translate(${item.xM} ${item.yM + width / 2 + fontM * 0.7}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
-                <rect x={-chipW / 2} y={-fontM * 0.48} width={chipW} height={fontM * 0.96} fill={PAPER} stroke="none" />
-                <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.62} fill={active ? SELECT : color}>
+                <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.62 * textScale} fill={active ? SELECT : color}>
                   {label}
                 </text>
               </g>
@@ -455,6 +469,7 @@ export function PlanView({
   onMoveLoad,
   onRotateLoad,
   onBeginDuct,
+  onPlacePackage,
   onPaintWall,
   step,
   layers,
@@ -488,6 +503,7 @@ export function PlanView({
   onMoveLoad: (id: string, xM: number, yM: number) => void;
   onRotateLoad: (id: string, yawDeg: number) => void;
   onBeginDuct: (catalogId: string) => Extract<EditorTool, { kind: 'duct' }>;
+  onPlacePackage: (point: { xM: number; yM: number }, packageId: string) => void;
   onPaintWall: (selection: Selection, wallTypeId: string) => void;
   step: BuildStep;
   layers: PlanLayers;
@@ -534,7 +550,7 @@ export function PlanView({
   const spotRef = useRef<OpeningSpot | null>(null);
   const suppressClick = useRef(false);
   const drag = useRef<
-    | { kind: 'pan' | 'draw' | 'place' | 'stamp'; x: number; y: number; pointerX: number; pointerY: number; view: ViewBox }
+    | { kind: 'pan' | 'draw' | 'place' | 'stamp'; x: number; y: number; pointerX: number; pointerY: number; view: ViewBox; keepClick?: boolean }
     | { kind: 'wall'; edges: { id: string; face: WallFace }[]; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace; armed: boolean; interfaceKey?: string }
     | { kind: 'opening'; moves: { roomId: string; openingId: string }[]; grab: number; base: Room[]; pointerX: number; pointerY: number; view: ViewBox; face: WallFace; armed: boolean }
     | { kind: 'space'; id: string; base: Room[]; grabX: number; grabY: number; pointerX: number; pointerY: number; view: ViewBox; armed: boolean }
@@ -706,6 +722,10 @@ export function PlanView({
   const showSpaces = layers.spaces;
   const showSystems = step !== 'spaces';
   const fade = stepFade(step);
+  const spaceText = labelScale(fade.spaces);
+  const loadText = labelScale(fade.loads);
+  const equipmentText = labelScale(fade.equipment);
+  const ductText = labelScale(tool.kind === 'duct' ? 1 : fade.ducts);
   const highlightedRoom =
     selection.kind === 'room'
       ? rooms.find(room => room.id === selection.id)
@@ -743,7 +763,9 @@ export function PlanView({
   })();
   const clearanceFoot = clearanceItem ? componentFootprintAabb(clearanceItem) : null;
   const clearanceRoom = clearanceItem ? roomAtPoint(rooms, clearanceItem.xM, clearanceItem.yM) : null;
-  const planEquipment = project.equipment.map(item => {
+  const planEquipment = project.equipment
+    .filter(item => !isSchematicOnly(getProduct(item.catalogId)))
+    .map(item => {
     const before = gesture?.kind === 'space' ? project.rooms.find(room => room.id === item.roomId) : undefined;
     const after = before ? rooms.find(room => room.id === before.id) : undefined;
     const shifted = before && after ? { ...item, xM: item.xM + (after.xM - before.xM), yM: item.yM + (after.yM - before.yM) } : item;
@@ -800,6 +822,10 @@ export function PlanView({
           onPlace(dropped, drag.id);
           return;
         }
+        if (drag.kind === 'package') {
+          onPlacePackage(dropped, drag.id);
+          return;
+        }
         if (drag.kind === 'load') {
           onPlaceLoad(dropped, drag.id);
           return;
@@ -829,6 +855,12 @@ export function PlanView({
         ref={svgRef}
         viewBox={`${view.minX} ${-(view.minY + view.h)} ${view.w} ${view.h}`}
         style={{ fontFamily: '"IBM Plex Sans", "Segoe UI", sans-serif' }}
+        onClickCapture={event => {
+          if (!suppressClick.current) return;
+          suppressClick.current = false;
+          event.stopPropagation();
+          event.preventDefault();
+        }}
         onMouseDown={event => {
           if (event.button !== 0) return;
           event.preventDefault();
@@ -904,6 +936,13 @@ export function PlanView({
           }
           const target = event.target as Element;
           const hit = target.closest('[data-hit]');
+          const hitKind = hit?.getAttribute('data-hit') ?? '';
+          const owner = hitPhase(hitKind);
+          if (hit && step !== 'check' && owner && owner !== step) {
+            drag.current = { kind: 'pan', x: point.xM, y: point.yM, pointerX: event.clientX, pointerY: event.clientY, view, keepClick: true };
+            event.currentTarget.setPointerCapture(event.pointerId);
+            return;
+          }
           const selects = tool.kind === 'select' || tool.kind === 'place' || tool.kind === 'load' || tool.kind === 'door' || tool.kind === 'window' || (tool.kind === 'duct' && !ductChainRef.current);
           if (selects && hit) {
             const roomId = hit.getAttribute('data-room');
@@ -1237,7 +1276,8 @@ export function PlanView({
             return;
           }
           if (current.kind === 'pan') {
-            if (moved < DRAG_PX && tool.kind === 'select') onSelect({ kind: 'project' });
+            if (moved >= DRAG_PX) suppressClick.current = true;
+            else if (!current.keepClick && tool.kind === 'select') onSelect({ kind: 'project' });
             return;
           }
           if (current.kind === 'equipment') {
@@ -1494,27 +1534,31 @@ export function PlanView({
           </g>
           {(layers.ducts || tool.kind === 'duct') && (
             <g opacity={tool.kind === 'duct' ? 1 : fade.ducts}>
-              <DuctLayer project={project} selection={selection} tool={tool} fontM={font} showSize={showDuctSize} onSelect={onSelect} onContextMenu={onContextMenu} />
+              <DuctLayer project={project} selection={selection} tool={tool} fontM={font} labelScale={ductText} showSize={showDuctSize} onSelect={onSelect} onContextMenu={onContextMenu} />
             </g>
           )}
-          {layers.labels && rooms.map(room => {
-            const shaped = (room.outline?.length ?? 0) >= 3;
-            const area = shaped ? polygonArea(room.outline ?? []) : room.lengthM * room.widthM;
-            const detail = shaped
-              ? formatArea(area, project.units)
-              : `${formatArea(area, project.units)} · ${formatNumber(mToLength(room.lengthM, project.units), 2)} × ${formatNumber(mToLength(room.widthM, project.units), 2)} ${lengthUnit(project.units)}`;
-            const center = spaceLabelAnchor(room, planEquipment, font, room.name, detail);
-            return (
-              <g key={`${room.id}-label`} transform={`translate(${center.x} ${center.y}) scale(1,-1)`} pointerEvents="none">
-                <text textAnchor="middle" fontSize={font} fontWeight={500} fill={INK}>
-                  {room.name}
-                </text>
-                <text textAnchor="middle" y={font * 1.4} fontSize={font * 0.68} fill="#5e6368">
-                  {detail}
-                </text>
-              </g>
-            );
-          })}
+          {layers.labels && (
+            <g opacity={fade.spaces}>
+              {rooms.map(room => {
+                const shaped = (room.outline?.length ?? 0) >= 3;
+                const area = shaped ? polygonArea(room.outline ?? []) : room.lengthM * room.widthM;
+                const detail = shaped
+                  ? formatArea(area, project.units)
+                  : `${formatArea(area, project.units)} · ${formatNumber(mToLength(room.lengthM, project.units), 2)} × ${formatNumber(mToLength(room.widthM, project.units), 2)} ${lengthUnit(project.units)}`;
+                const center = spaceLabelAnchor(room, planEquipment, font, room.name, detail);
+                return (
+                  <g key={`${room.id}-label`} transform={`translate(${center.x} ${center.y}) scale(1,-1)`} pointerEvents="none">
+                    <text textAnchor="middle" fontSize={font * spaceText} fontWeight={500} fill={INK}>
+                      {room.name}
+                    </text>
+                    <text textAnchor="middle" y={font * 1.4 * spaceText} fontSize={font * 0.68 * spaceText} fill="#5e6368">
+                      {detail}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          )}
           {layers.equipment && <g opacity={fade.equipment}>{planEquipment.map(item => {
             const shown = rotatingEquipment?.id === item.id ? { ...item, yawDeg: rotatingEquipment.yawDeg } : item;
             const systemIndex = shown.systemId ? project.systems.findIndex(system => system.id === shown.systemId) : -1;
@@ -1528,6 +1572,7 @@ export function PlanView({
                 onContextMenu={onContextMenu}
                 tool={tool}
                 fontM={font}
+                labelScale={equipmentText}
                 systemName={showSystems ? system?.name : undefined}
                 color={showSystems && system ? SYSTEM_COLORS[systemIndex % SYSTEM_COLORS.length] : undefined}
               />
@@ -1535,7 +1580,7 @@ export function PlanView({
           })}</g>}
           {layers.loads && (
             <g opacity={fade.loads}>
-              <LoadMarks loads={planLoads} selection={selection} fontM={font} labels={layers.labels} onContextMenu={onContextMenu} />
+              <LoadMarks loads={planLoads} selection={selection} fontM={font} labels={layers.labels} labelScale={loadText} onContextMenu={onContextMenu} />
             </g>
           )}
           {draft && (
@@ -1723,7 +1768,6 @@ function Dimension({
   const span = Math.hypot(dx, dy) || 1;
   const nx = (-dy / span) * fontM * 0.22;
   const ny = (dx / span) * fontM * 0.22;
-  const maskW = Math.max(fontM * 2.2, fontM * 0.58 * label.length);
   const vertical = Math.abs(dy) > Math.abs(dx);
   return (
     <g stroke={DIM} strokeWidth={HAIR}>
@@ -1731,7 +1775,6 @@ function Dimension({
       <line x1={x1 - nx} y1={y1 - ny} x2={x1 + nx} y2={y1 + ny} vectorEffect="non-scaling-stroke" />
       <line x1={x2 - nx} y1={y2 - ny} x2={x2 + nx} y2={y2 + ny} vectorEffect="non-scaling-stroke" />
       <g transform={`translate(${midX} ${midY}) scale(1,-1)${vertical ? ' rotate(-90)' : ''}`}>
-        <rect x={-maskW / 2} y={-fontM * 0.55} width={maskW} height={fontM * 1.1} fill={PAPER} stroke="none" />
         <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.85} fill={DIM} stroke="none">
           {label}
         </text>
@@ -1930,6 +1973,18 @@ function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
     return { name: 'Unit', roof };
   }
   if (product?.category === 'exhaust-fan' || product?.category === 'bathroom-exhaust') return { name: 'Fan', roof };
+  if (product?.category === 'air-path') {
+    if (/mix/i.test(product.name)) return { name: 'Mix', roof: false };
+    if (/filter/i.test(product.name)) return { name: 'Filter', roof: false };
+    if (/cool/i.test(product.name)) return { name: 'CC', roof: false };
+    if (/heat/i.test(product.name)) return { name: 'HC', roof: false };
+    if (/sensor/i.test(product.name)) return { name: 'Sensor', roof: false };
+    if (/relief/i.test(product.name)) return { name: 'Relief', roof: false };
+    if (/return-air/i.test(product.name)) return { name: 'RA', roof: false };
+    if (/outdoor-air/i.test(product.name)) return { name: 'OA', roof: false };
+    if (/fan/i.test(product.name)) return { name: 'SF', roof: false };
+    return { name: 'AHU', roof: false };
+  }
   return { name: 'Unit', roof };
 }
 
@@ -1938,6 +1993,7 @@ function DuctLayer({
   selection,
   tool,
   fontM,
+  labelScale: textScale = 1,
   showSize,
   onSelect,
   onContextMenu,
@@ -1946,6 +2002,7 @@ function DuctLayer({
   selection: Selection;
   tool: EditorTool;
   fontM: number;
+  labelScale?: number;
   showSize: boolean;
   onSelect: (selection: Selection) => void;
   onContextMenu: (selection: Selection, x: number, y: number) => void;
@@ -1955,7 +2012,7 @@ function DuctLayer({
     : [];
   return (
     <g>
-      {(project.ducts ?? []).map(run => {
+      {(project.ducts ?? []).filter(run => ductViewOf(run) === 'plan').map(run => {
         const system = project.systems.find(item => item.id === run.systemId);
         const color = (system && streamFor(system.kind, run.service)?.color) || '#5e6368';
         const active = selection.kind === 'duct' && selection.id === run.id;
@@ -1963,6 +2020,7 @@ function DuctLayer({
         const crossings = ductCrossings(run.points, project.rooms, project.wallRuns ?? []);
         const label = labelSegment(run.points);
         const rise = [endRise(project, run, 'start'), endRise(project, run, 'end')];
+        const design = streamDesignLabel(run.streamDesign, project.units);
         return (
           <g key={run.id}>
             <polyline
@@ -2009,8 +2067,8 @@ function DuctLayer({
             })}
             {label && (
               <g transform={`translate(${label.x + label.nx * fontM * 1.15} ${label.y + label.ny * fontM * 1.15}) scale(1,-1) rotate(${label.deg})`} pointerEvents="none">
-                <text textAnchor="middle" fontSize={fontM * 0.62} fill={color} fontWeight={600}>
-                  {ductSizeLabel(run, project.units)}
+                <text textAnchor="middle" fontSize={fontM * 0.62 * textScale} fill={color} fontWeight={600}>
+                  {design ?? ductSizeLabel(run, project.units)}
                 </text>
               </g>
             )}
@@ -2121,6 +2179,7 @@ function EquipmentMark({
   active,
   tool,
   fontM,
+  labelScale: textScale = 1,
   systemName,
   color,
   onSelect,
@@ -2130,6 +2189,7 @@ function EquipmentMark({
   active: boolean;
   tool: EditorTool;
   fontM: number;
+  labelScale?: number;
   systemName?: string;
   color?: string;
   onSelect: (selection: Selection) => void;
@@ -2143,7 +2203,6 @@ function EquipmentMark({
   const label = item.quantity > 1 ? `${name} ×${item.quantity}` : name;
   const stroke = size.stated ? color ?? MARK_COLOR.equipment : '#c4a574';
   const fill = active ? SELECT_FILL : size.stated ? 'rgba(31,78,95,0.12)' : 'rgba(196,165,116,0.18)';
-  const chipW = Math.max(fontM * 1.7, fontM * 0.56 * Math.max(label.length, systemName?.length ?? 0));
   const chipH = systemName ? fontM * 1.7 : fontM * 0.95;
   const iconM = Math.min(length, width, fontM * 1.6) * 1.1;
   const showIcon = Math.min(length, width) >= fontM * 1.1;
@@ -2188,12 +2247,11 @@ function EquipmentMark({
         </g>
       )}
       <g transform={`translate(${item.xM} ${item.yM + width / 2 + chipH / 2 + fontM * 0.1}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
-        <rect x={-chipW / 2} y={-chipH / 2} width={chipW} height={chipH} fill={PAPER} stroke="none" />
-        <text textAnchor="middle" dominantBaseline="middle" y={systemName ? -chipH * 0.18 : 0} fontSize={fontM * 0.62} fill={active ? SELECT : stroke}>
+        <text textAnchor="middle" dominantBaseline="middle" y={systemName ? -chipH * 0.18 : 0} fontSize={fontM * 0.62 * textScale} fill={active ? SELECT : stroke}>
           {label}
         </text>
         {systemName && (
-          <text textAnchor="middle" dominantBaseline="middle" y={chipH * 0.28} fontSize={fontM * 0.52} fill={active ? SELECT : stroke}>
+          <text textAnchor="middle" dominantBaseline="middle" y={chipH * 0.28} fontSize={fontM * 0.52 * textScale} fill={active ? SELECT : stroke}>
             {systemName}
           </text>
         )}

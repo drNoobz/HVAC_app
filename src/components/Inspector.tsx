@@ -23,7 +23,7 @@ import {
   updateSystem,
 } from '@/domain/projectOps';
 import { getDuctProduct, roughnessLabel, servicesFor, streamFor, systemsForProduct } from '@/domain/ductCatalog';
-import { ductCrossings, ductSizeLabel, DUCT_SERVICES, endRise, linkedPort, polylineLength } from '@/domain/ducts';
+import { ductCrossings, ductSizeLabel, ductViewOf, DUCT_SERVICES, endRise, linkedPort, polylineLength } from '@/domain/ducts';
 import { doorDirection, hingeEnds, setDoorDirection, type DoorHinge } from '@/domain/doorSwing';
 import { placeBeside, resizeSpan, slideOpeningOffset } from '@/domain/spanFit';
 import {
@@ -41,7 +41,7 @@ import {
   type SurfaceFace,
   type WallFace,
 } from '@/domain/types';
-import { formatArea, formatFlow, formatLength, formatNumber, formatPower, lengthToM, lengthUnit, mToLength } from '@/domain/units';
+import { formatArea, formatFlow, formatLength, formatNumber, formatPower, lengthToM, lengthUnit, mToLength, M3S_PER_CFM } from '@/domain/units';
 import { basisLabel, getLoadProduct, LOAD_CATEGORY_LABEL, loadGroups } from '@/domain/loadCatalog';
 import { blankOverride, gainUnit, hoodOver, LOAD_METHOD_NOTES, loadGains, loadLabel, removeLoad, roomAreaM2, roomLoads, sumLoads, updateLoad, type LoadTotals } from '@/domain/loads';
 import { polygonArea } from '@/domain/wallDraw';
@@ -121,7 +121,15 @@ export function Inspector({
           onSelect={onSelect}
         />
       )}
-      {selection.kind === 'system' && <SystemFields project={project} systemId={selection.id} onChange={onChange} onSelect={onSelect} nameFocus={nameFocus} />}
+      {selection.kind === 'system' && (
+        <SystemFields
+          project={project}
+          systemId={selection.id}
+          onChange={onChange}
+          onSelect={onSelect}
+          nameFocus={nameFocus}
+        />
+      )}
       {selection.kind === 'equipment' && (
         <EquipmentFields project={project} equipmentId={selection.id} onChange={onChange} onSelect={onSelect} />
       )}
@@ -1352,9 +1360,16 @@ function DuctFields({
   const services = ductProduct && system ? servicesFor(ductProduct, system.kind) : DUCT_SERVICES.map(item => item.id);
   const stream = system ? streamFor(system.kind, run.service) : null;
   const unit = lengthUnit(project.units);
-  const start = linkedPort(project, run.start);
-  const end = linkedPort(project, run.end);
-  const crossings = ductCrossings(run.points, project.rooms, project.wallRuns ?? []).length;
+  const view = ductViewOf(run);
+  const start = linkedPort(project, run.start, view);
+  const end = linkedPort(project, run.end, view);
+  const crossings = view === 'plan' ? ductCrossings(run.points, project.rooms, project.wallRuns ?? []).length : 0;
+  const design = run.streamDesign ?? { flowM3s: null, dbC: null, wbC: null, rh: null };
+  const setDesign = (patch: Partial<typeof design>) => {
+    const next = { ...design, ...patch };
+    const empty = next.flowM3s == null && next.dbC == null && next.wbC == null && next.rh == null;
+    onChange(updateDuct(project, run.id, { streamDesign: empty ? undefined : next }));
+  };
   const endLabel = (which: 'start' | 'end') => {
     const link = which === 'start' ? start : end;
     if (!link) return 'Open end';
@@ -1455,6 +1470,71 @@ function DuctFields({
           }}
         />
       </label>
+      </section>
+      <section className="prop-block">
+        <p className="prop-section">Stream design</p>
+        <p className="muted">Labels only. ThermoNode solve is not wired yet.</p>
+        <label className="field">
+          <span>{project.units === 'IP' ? 'Flow (CFM)' : 'Flow (L/s)'}</span>
+          <input
+            key={`flow-${run.id}-${design.flowM3s}`}
+            defaultValue={design.flowM3s == null ? '' : formatNumber(project.units === 'IP' ? design.flowM3s / M3S_PER_CFM : design.flowM3s * 1000, 0)}
+            inputMode="decimal"
+            onBlur={event => {
+              const raw = event.target.value.trim();
+              if (!raw) {
+                setDesign({ flowM3s: null });
+                return;
+              }
+              const n = Number(raw);
+              if (!Number.isFinite(n)) return;
+              setDesign({ flowM3s: project.units === 'IP' ? n * M3S_PER_CFM : n / 1000 });
+            }}
+          />
+        </label>
+        <label className="field">
+          <span>Dry bulb (°C)</span>
+          <input
+            key={`db-${run.id}-${design.dbC}`}
+            defaultValue={design.dbC == null ? '' : formatNumber(design.dbC, 1)}
+            inputMode="decimal"
+            onBlur={event => {
+              const raw = event.target.value.trim();
+              setDesign({ dbC: raw ? Number(raw) : null });
+            }}
+          />
+        </label>
+        <label className="field">
+          <span>Wet bulb (°C)</span>
+          <input
+            key={`wb-${run.id}-${design.wbC}`}
+            defaultValue={design.wbC == null ? '' : formatNumber(design.wbC, 1)}
+            inputMode="decimal"
+            onBlur={event => {
+              const raw = event.target.value.trim();
+              setDesign({ wbC: raw ? Number(raw) : null });
+            }}
+          />
+        </label>
+        <label className="field">
+          <span>RH (%)</span>
+          <input
+            key={`rh-${run.id}-${design.rh}`}
+            defaultValue={design.rh == null ? '' : formatNumber(design.rh * 100, 0)}
+            inputMode="decimal"
+            onBlur={event => {
+              const raw = event.target.value.trim();
+              if (!raw) {
+                setDesign({ rh: null });
+                return;
+              }
+              const n = Number(raw);
+              if (!Number.isFinite(n)) return;
+              setDesign({ rh: n / 100 });
+            }}
+          />
+        </label>
+        <p className="muted">View: {view === 'schematic' ? 'Schematic' : 'Plan'}</p>
       </section>
       <section className="prop-block">
         <p className="prop-section">Connections</p>

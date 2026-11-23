@@ -46,15 +46,18 @@ export const DUCT_STREAMS: {
   { id: 'makeup-air', label: 'Make-up air', color: '#0e6e66', kind: 'makeup-air', service: 'supply' },
   { id: 'comfort-supply', label: 'Comfort supply', color: '#1d4e89', kind: 'comfort', service: 'supply' },
   { id: 'comfort-return', label: 'Comfort return', color: '#c47b12', kind: 'comfort', service: 'return' },
+  { id: 'comfort-outdoor', label: 'Outdoor air', color: '#2f7d32', kind: 'comfort', service: 'outdoor' },
+  { id: 'comfort-relief', label: 'Relief', color: '#7a4a2b', kind: 'comfort', service: 'relief' },
   { id: 'restroom-exhaust', label: 'Restroom exhaust', color: '#6b3d6e', kind: 'restroom-exhaust', service: 'exhaust' },
   { id: 'ventilation-outdoor', label: 'Outdoor air', color: '#2f7d32', kind: 'ventilation', service: 'outdoor' },
   { id: 'ventilation-supply', label: 'Ventilation supply', color: '#1a7a8c', kind: 'ventilation', service: 'supply' },
   { id: 'ventilation-return', label: 'Ventilation return', color: '#5c6b2f', kind: 'ventilation', service: 'return' },
   { id: 'ventilation-exhaust', label: 'Ventilation exhaust', color: '#a33b6b', kind: 'ventilation', service: 'exhaust' },
+  { id: 'ventilation-relief', label: 'Relief', color: '#7a4a2b', kind: 'ventilation', service: 'relief' },
 ];
 
 const HVAC_KINDS: SystemKind[] = ['makeup-air', 'comfort', 'restroom-exhaust', 'ventilation'];
-const HVAC_SERVICES: DuctService[] = ['supply', 'return', 'exhaust', 'outdoor'];
+const HVAC_SERVICES: DuctService[] = ['supply', 'return', 'exhaust', 'outdoor', 'relief'];
 
 function inches(values: number[]): DuctCatalogSize[] {
   return values.map(n => ({

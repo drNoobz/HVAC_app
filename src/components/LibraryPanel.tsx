@@ -32,6 +32,7 @@ import {
   type ConstructionMaterial,
 } from '@/domain/constructionLibrary';
 import { DUCT_CATALOG, roughnessLabel, sizeSummary, streamLabels, type DuctProduct } from '@/domain/ductCatalog';
+import { SYSTEM_PACKAGES } from '@/domain/systemPackages';
 import { StackEditor } from './StackEditor';
 
 const EMPTY_DRAFT = {
@@ -49,7 +50,7 @@ const EMPTY_DRAFT = {
 };
 
 type Draft = typeof EMPTY_DRAFT;
-type LibrarySection = 'construction' | EquipmentFamily | 'ducts';
+type LibrarySection = 'construction' | EquipmentFamily | 'ducts' | 'packages';
 type DuctGroup = DuctProduct['group'] | 'all';
 type ConstructionMode = 'components' | 'layers';
 
@@ -271,12 +272,14 @@ export function LibraryPanel({
     return haystack.includes(query.trim().toLowerCase());
   });
   const navCategory = section === 'construction' ? category : section === 'ducts' ? ductGroup : equipmentCategory;
-  const navCounts = section === 'construction' ? constructionCounts : section === 'ducts' ? ductCounts : equipmentCounts;
+  const navCounts = section === 'construction' ? constructionCounts : section === 'ducts' ? ductCounts : section === 'packages' ? { all: SYSTEM_PACKAGES.length } : equipmentCounts;
   const navItems = section === 'construction'
     ? (constructionMode === 'components' ? ASSEMBLY_CATEGORIES : CONSTRUCTION_CATEGORIES)
     : section === 'ducts'
       ? ductGroups
-      : familyCategories;
+      : section === 'packages'
+        ? []
+        : familyCategories;
   const selectedAssembly = visibleAssemblies.find(item => item.id === selectedAssemblyId) ?? null;
 
   return (
@@ -290,6 +293,9 @@ export function LibraryPanel({
         </button>
           <button type="button" className={section === 'system' ? 'active' : ''} onClick={() => switchSection('system')}>
             System equipment
+          </button>
+          <button type="button" className={section === 'packages' ? 'active' : ''} onClick={() => switchSection('packages')}>
+            Packages
           </button>
           <button type="button" className={section === 'ducts' ? 'active' : ''} onClick={() => switchSection('ducts')}>
             Ducts
@@ -675,6 +681,36 @@ export function LibraryPanel({
                       <td colSpan={9}>No materials match.</td>
                     </tr>
                   )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {section === 'packages' && (
+            <div className="table-wrap library-table">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Package</th>
+                    <th>System kind</th>
+                    <th>Members</th>
+                    <th>Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {SYSTEM_PACKAGES.filter(item =>
+                    `${item.name} ${item.description}`.toLowerCase().includes(query.trim().toLowerCase()),
+                  ).map(item => (
+                    <tr key={item.id}>
+                      <td>
+                        <strong>{item.name}</strong>
+                        <div className="cell-sub">Drag from Equipment catalog onto the plan</div>
+                      </td>
+                      <td>{item.systemKind}</td>
+                      <td>{item.members.length}</td>
+                      <td>{item.description}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

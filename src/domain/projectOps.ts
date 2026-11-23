@@ -441,7 +441,8 @@ export function roomAtPoint(rooms: readonly Room[], xM: number, yM: number): Roo
 export function buildPlacement(
   product: CatalogProduct,
   room: Room | null,
-  point: { xM: number; yM: number }
+  point: { xM: number; yM: number },
+  schematic: { x: number; y: number } | null = null,
 ): PlacedEquipment {
   return {
     id: createId('eq'),
@@ -455,6 +456,7 @@ export function buildPlacement(
     quantity: 1,
     notes: '',
     assumption: true,
+    schematic,
   };
 }
 
@@ -502,13 +504,17 @@ export function addDuct(
     widthM: number;
     heightM: number | null;
     points: { x: number; y: number; equipmentId?: string; portId?: string }[];
+    view?: DuctRun['view'];
+    streamDesign?: DuctRun['streamDesign'];
   },
 ): Project {
   const system = project.systems.find(item => item.id === input.systemId);
   const product = getDuctProduct(input.catalogId);
   if (!system || !product || !ductPairAllowed(product, system.kind, input.service)) return project;
   if (product.sizes && !product.sizes.some(size => Math.abs(size.widthM - input.widthM) < 0.002)) return project;
-  if (input.points.length < 2 || polylineLength(input.points) < 0.2) return project;
+  const view = input.view === 'schematic' ? 'schematic' : 'plan';
+  const minLen = view === 'schematic' ? 0.05 : 0.2;
+  if (input.points.length < 2 || polylineLength(input.points) < minLen) return project;
   if (!(input.widthM > 0.05)) return project;
   const start = input.points[0];
   const end = input.points[input.points.length - 1];
@@ -529,6 +535,8 @@ export function addDuct(
       points: input.points.map(point => ({ x: Number(point.x.toFixed(3)), y: Number(point.y.toFixed(3)) })),
       ...ends,
       penetrations: [],
+      view,
+      ...(input.streamDesign ? { streamDesign: input.streamDesign } : {}),
     },
     project,
   );
@@ -540,7 +548,11 @@ export function addDuct(
   };
 }
 
-export function updateDuct(project: Project, id: string, patch: Partial<Pick<DuctRun, 'systemId' | 'service' | 'shape' | 'widthM' | 'heightM' | 'zM'>>): Project {
+export function updateDuct(
+  project: Project,
+  id: string,
+  patch: Partial<Pick<DuctRun, 'systemId' | 'service' | 'shape' | 'widthM' | 'heightM' | 'zM' | 'streamDesign' | 'view'>>,
+): Project {
   return {
     ...project,
     ducts: (project.ducts ?? []).map(run => {
@@ -564,9 +576,10 @@ export function removeDuct(project: Project, id: string): Project {
 export function syncDuctPorts(project: Project): Project {
   const ducts = (project.ducts ?? []).map(run => {
     if (run.points.length < 2) return run;
+    const view = run.view === 'schematic' ? 'schematic' : 'plan';
     const points = run.points.map(point => ({ ...point }));
-    const start = linkedPort(project, run.start);
-    const end = linkedPort(project, run.end);
+    const start = linkedPort(project, run.start, view);
+    const end = linkedPort(project, run.end, view);
     if (start) points[0] = { x: Number(start.x.toFixed(3)), y: Number(start.y.toFixed(3)) };
     if (end) points[points.length - 1] = { x: Number(end.x.toFixed(3)), y: Number(end.y.toFixed(3)) };
     return sealDuct({ ...run, points }, project);

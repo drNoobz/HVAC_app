@@ -18,6 +18,7 @@ import {
   type EquipmentCategory,
   type EquipmentFamily,
 } from '@/domain/catalog';
+import { applySystemPackage, SYSTEM_PACKAGES } from '@/domain/systemPackages';
 import { downloadText, fileSlug } from '@/domain/download';
 import {
   addDuct,
@@ -529,6 +530,17 @@ export function Studio({
     setLastProductId(product.id);
     select({ kind: 'equipment', id: item.id });
   };
+  const placePackage = (point: { xM: number; yM: number }, packageId: string) => {
+    const before = new Set(project.systems.map(system => system.id));
+    const next = applySystemPackage(project, packageId, point);
+    if (next === project) return;
+    edit(next);
+    const created = next.systems.find(system => !before.has(system.id));
+    setScene('plan');
+    setView('model');
+    if (step !== 'check') setStep('equipment');
+    if (created) select({ kind: 'system', id: created.id });
+  };
   const placeLoad = (point: { xM: number; yM: number }, id: string) => {
     const next = addLoad(project, id, point);
     if (next === project) return;
@@ -549,7 +561,7 @@ export function Studio({
     if (tool.kind === 'duct') return 'Click to bend the run. Esc finishes.';
     if (step === 'spaces') return 'Drag a wall type, door, or window onto a wall.';
     if (step === 'loads') return 'Set climate, then drag loads into a space.';
-    if (step === 'equipment') return 'Drag equipment onto the plan.';
+    if (step === 'equipment') return 'Drag equipment or a system package onto the plan.';
     if (step === 'ducts') return 'Drag a duct onto the plan to start.';
     return checks.length === 0 ? 'No issues found.' : 'Select an issue on the left to see it on the plan.';
   };
@@ -1114,7 +1126,7 @@ export function Studio({
                       if (created) select({ kind: 'wallRun', id: created.id });
                     }}
                     onDrawDuct={draft => {
-                      const next = addDuct(project, draft);
+                      const next = addDuct(project, { ...draft, view: 'plan' });
                       if (next === project) return;
                       const created = (next.ducts ?? [])[(next.ducts ?? []).length - 1];
                       edit(next);
@@ -1146,6 +1158,7 @@ export function Studio({
                       if (created) select({ kind: 'wallOpening', wallId: spot.wallId, id: created.id });
                     }}
                     onPlace={placeEquipment}
+                    onPlacePackage={placePackage}
                     onPlaceLoad={placeLoad}
                     onBeginDuct={armDuct}
                     onPaintWall={paintWall}
@@ -1242,6 +1255,7 @@ export function Studio({
                       type="button"
                       className={scene === 'plan' ? 'active' : ''}
                       onClick={() => {
+                        setScene('plan');
                         if (scene === '3d') setCameraPose('top');
                       }}
                     >
@@ -1503,6 +1517,7 @@ function CatalogTree({
   const families = ductsOnly ? [] : FAMILY_ORDER.filter(item => family === 'all' || item === family);
   const ductNeedle = query.trim().toLowerCase();
   const ductProducts = DUCT_CATALOG.filter(product => `${product.name} ${product.manufacturer} ${product.model} ${product.supplier} ${product.group}`.toLowerCase().includes(ductNeedle));
+  const packages = SYSTEM_PACKAGES.filter(item => `${item.name} ${item.description}`.toLowerCase().includes(needle));
   if (ductsOnly) {
     return (
       <ul className="tn-tree">
@@ -1522,6 +1537,26 @@ function CatalogTree({
   }
   return (
     <ul className="tn-tree">
+      {!ductsOnly && (
+        <TreeNode
+          collapsed={closed('packages')}
+          toggleLabel="Packages"
+          onToggle={() => toggle('packages')}
+          onSelect={() => toggle('packages')}
+          content={<><span className="tree-label">Packages</span><span className="tree-meta">{packages.length}</span></>}
+        >
+          {packages.length === 0 && <li className="tree-empty">No packages match.</li>}
+          {packages.map(item => (
+            <TreeNode
+              key={item.id}
+              dragId={catalogToken({ kind: 'package', id: item.id })}
+              title={item.description}
+              onSelect={() => {}}
+              content={<><span className="tree-label">{item.name}</span><span className="tree-meta">Drop on plan</span></>}
+            />
+          ))}
+        </TreeNode>
+      )}
       {showDucts && (
         <TreeNode
           collapsed={closed('ducts')}

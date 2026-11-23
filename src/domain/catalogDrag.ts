@@ -3,6 +3,7 @@ export type CatalogDrag =
   | { kind: 'load'; id: string }
   | { kind: 'duct'; id: string }
   | { kind: 'wall'; id: string }
+  | { kind: 'package'; id: string }
   | { kind: 'opening'; opening: 'door' | 'window' };
 
 export function catalogToken(drag: CatalogDrag): string {
@@ -15,7 +16,7 @@ export function parseCatalogDrag(token: string): CatalogDrag | null {
   const kind = token.slice(0, split);
   const id = token.slice(split + 1);
   if (!id) return null;
-  if (kind === 'equipment' || kind === 'load' || kind === 'duct' || kind === 'wall') return { kind, id };
+  if (kind === 'equipment' || kind === 'load' || kind === 'duct' || kind === 'wall' || kind === 'package') return { kind, id };
   if (kind === 'opening' && (id === 'door' || id === 'window')) return { kind: 'opening', opening: id };
   return null;
 }

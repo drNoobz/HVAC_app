@@ -7,7 +7,8 @@ export type EquipmentCategory =
   | 'bathroom-exhaust'
   | 'system-equipment'
   | 'heating-cooling'
-  | 'energy-recovery';
+  | 'energy-recovery'
+  | 'air-path';
 
 /** Top-level catalog family. Add families here when the library grows. */
 export type EquipmentFamily = 'space' | 'system';
@@ -75,6 +76,7 @@ export const CATEGORY_LABEL: Record<EquipmentCategory, string> = {
   'system-equipment': 'System equipment',
   'heating-cooling': 'Heating and cooling',
   'energy-recovery': 'Energy recovery',
+  'air-path': 'Air path',
 };
 
 export const FAMILY_LABEL: Record<EquipmentFamily, string> = {
@@ -87,8 +89,13 @@ export const FAMILY_ORDER: EquipmentFamily[] = ['space', 'system'];
 /** Categories under each family. Subdivide by appending here later. */
 export const FAMILY_CATEGORIES: Record<EquipmentFamily, EquipmentCategory[]> = {
   space: ['kitchen-hood', 'exhaust-fan', 'makeup-air', 'bathroom-exhaust'],
-  system: ['system-equipment', 'heating-cooling', 'energy-recovery'],
+  system: ['system-equipment', 'heating-cooling', 'energy-recovery', 'air-path'],
 };
+
+/** Kept so older call sites compile. Air-path equipment is drawn on the plan. */
+export function isSchematicOnly(_product: CatalogProduct | undefined | null): boolean {
+  return false;
+}
 
 export function familyForCategory(category: EquipmentCategory): EquipmentFamily {
   for (const family of FAMILY_ORDER) {
@@ -385,6 +392,186 @@ export const CATALOG: CatalogProduct[] = [
       'No product image in this app.',
     ],
   },
+  {
+    id: 'damper-oa',
+    manufacturer: 'Generic',
+    model: 'OA-DMP',
+    name: 'Outdoor-air damper',
+    category: 'air-path',
+    supplier: 'Planning schematic',
+    mount: 'ceiling',
+    dimensions: inches(24, 12, 12, 'Schematic node 24 in × 12 in'),
+    airflow: null,
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'In / out air path. NC/NO and actuator options are not selected here.',
+    documentUrl: null,
+    image: null,
+    source: 'Schematic air-path component for system diagrams.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Planning node only; confirm damper type and actuator on a submittal.'],
+  },
+  {
+    id: 'damper-ra',
+    manufacturer: 'Generic',
+    model: 'RA-DMP',
+    name: 'Return-air damper',
+    category: 'air-path',
+    supplier: 'Planning schematic',
+    mount: 'ceiling',
+    dimensions: inches(24, 12, 12, 'Schematic node 24 in × 12 in'),
+    airflow: null,
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'In / out air path.',
+    documentUrl: null,
+    image: null,
+    source: 'Schematic air-path component for system diagrams.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Planning node only.'],
+  },
+  {
+    id: 'damper-relief',
+    manufacturer: 'Generic',
+    model: 'RLF-DMP',
+    name: 'Relief / exhaust damper',
+    category: 'air-path',
+    supplier: 'Planning schematic',
+    mount: 'ceiling',
+    dimensions: inches(24, 12, 12, 'Schematic node 24 in × 12 in'),
+    airflow: null,
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'In / out air path.',
+    documentUrl: null,
+    image: null,
+    source: 'Schematic air-path component for system diagrams.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Planning node only.'],
+  },
+  {
+    id: 'mix-plenum',
+    manufacturer: 'Generic',
+    model: 'MIX-BOX',
+    name: 'Mixing plenum',
+    category: 'air-path',
+    supplier: 'Planning schematic',
+    mount: 'ceiling',
+    dimensions: inches(36, 24, 24, 'Schematic node 36 in × 24 in'),
+    airflow: null,
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'OA and RA inlets, mixed-air outlet.',
+    documentUrl: null,
+    image: null,
+    source: 'Schematic air-path component for system diagrams.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Planning node only.'],
+  },
+  {
+    id: 'filter-panel',
+    manufacturer: 'Generic',
+    model: 'FIL-2IN',
+    name: 'Filter section',
+    category: 'air-path',
+    supplier: 'Planning schematic',
+    mount: 'ceiling',
+    dimensions: inches(24, 18, 24, 'Schematic node 24 in × 18 in'),
+    airflow: null,
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'In / out air path.',
+    documentUrl: null,
+    image: null,
+    source: 'Schematic air-path component for system diagrams.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Planning node only; MERV and pressure drop not stated.'],
+  },
+  {
+    id: 'coil-cool',
+    manufacturer: 'Generic',
+    model: 'CC-DX',
+    name: 'Cooling coil',
+    category: 'air-path',
+    supplier: 'Planning schematic',
+    mount: 'ceiling',
+    dimensions: inches(30, 18, 24, 'Schematic node 30 in × 18 in'),
+    airflow: null,
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'In / out air path. Refrigerant or CHW connections not modeled.',
+    documentUrl: null,
+    image: null,
+    source: 'Schematic air-path component for system diagrams.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Planning node only; capacity is not stated.'],
+  },
+  {
+    id: 'coil-heat',
+    manufacturer: 'Generic',
+    model: 'HC-HW',
+    name: 'Heating coil',
+    category: 'air-path',
+    supplier: 'Planning schematic',
+    mount: 'ceiling',
+    dimensions: inches(30, 18, 24, 'Schematic node 30 in × 18 in'),
+    airflow: null,
+    cooling: null,
+    heating: null,
+    electrical: null,
+    connections: 'In / out air path. Hot water or electric heat not modeled.',
+    documentUrl: null,
+    image: null,
+    source: 'Schematic air-path component for system diagrams.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Planning node only; capacity is not stated.'],
+  },
+  {
+    id: 'sensor-air',
+    manufacturer: 'Generic',
+    model: 'SNS-AIR',
+    name: 'Air-stream sensor',
+    category: 'air-path',
+    supplier: 'Planning schematic',
+    mount: 'ceiling',
+    dimensions: inches(10, 10, 6, 'Schematic node 10 in × 10 in'),
+    airflow: null,
+    cooling: null,
+    heating: null,
+    electrical: 'Low-voltage sensor. Confirm protocol on submittal.',
+    connections: 'In / out pass-through on the air path.',
+    documentUrl: null,
+    image: null,
+    source: 'Schematic air-path component for system diagrams.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Planning node only; measured quantity is noted by the user.'],
+  },
+  {
+    id: 'fan-supply',
+    manufacturer: 'Generic',
+    model: 'SF-AHU',
+    name: 'Supply fan section',
+    category: 'air-path',
+    supplier: 'Planning schematic',
+    mount: 'ceiling',
+    dimensions: inches(30, 24, 24, 'Schematic node 30 in × 24 in'),
+    airflow: flow(2000, '2000 CFM planning point'),
+    cooling: null,
+    heating: null,
+    electrical: 'Fan motor package. Confirm voltage and BHP on submittal.',
+    connections: 'In / out air path.',
+    documentUrl: null,
+    image: null,
+    source: 'Schematic air-path component for system diagrams.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Planning node only; fan curve is not stated.'],
+  },
 ];
 
 const BY_ID = new Map(CATALOG.map(item => [item.id, item]));
@@ -400,6 +587,37 @@ export function getProduct(id: string): CatalogProduct | undefined {
 export function catalogPorts(product: CatalogProduct): CatalogPort[] {
   const name = `${product.name} ${product.model}`;
   if (/condens/i.test(name)) return [];
+  if (product.category === 'air-path') {
+    if (/mix/i.test(name)) {
+      return [
+        { id: 'oa', service: 'outdoor', u: -1, v: 0.55 },
+        { id: 'ra', service: 'return', u: -1, v: -0.55 },
+        { id: 'out', service: 'supply', u: 1, v: 0 },
+      ];
+    }
+    if (/relief|exhaust damper/i.test(name)) {
+      return [
+        { id: 'in', service: 'relief', u: -1, v: 0 },
+        { id: 'out', service: 'relief', u: 1, v: 0 },
+      ];
+    }
+    if (/outdoor-air damper|OA-DMP/i.test(name) || product.id === 'damper-oa') {
+      return [
+        { id: 'in', service: 'outdoor', u: -1, v: 0 },
+        { id: 'out', service: 'outdoor', u: 1, v: 0 },
+      ];
+    }
+    if (/return-air damper|RA-DMP/i.test(name) || product.id === 'damper-ra') {
+      return [
+        { id: 'in', service: 'return', u: -1, v: 0 },
+        { id: 'out', service: 'return', u: 1, v: 0 },
+      ];
+    }
+    return [
+      { id: 'in', service: 'supply', u: -1, v: 0 },
+      { id: 'out', service: 'supply', u: 1, v: 0 },
+    ];
+  }
   if (product.category === 'kitchen-hood') return [{ id: 'exhaust', service: 'exhaust', u: 0, v: 0 }];
   if (product.category === 'bathroom-exhaust') return [{ id: 'exhaust', service: 'exhaust', u: 0, v: 0 }];
   if (product.category === 'exhaust-fan') {
