@@ -50,6 +50,8 @@ export function categoryIcon(category: string): EquipmentIconName {
       return 'air';
     case 'air-handling':
       return 'hvac';
+    case 'plant':
+      return 'heat_pump';
     case 'humidifier':
       return 'humidity_percentage';
     default:
@@ -61,6 +63,7 @@ export function equipmentIconFor(product: { id: string; name: string; category: 
   const name = product.name;
   if (product.category === 'air-terminal') return 'air';
   if (product.category === 'air-handling') return 'hvac';
+  if (product.category === 'plant') return 'heat_pump';
   if (product.category === 'kitchen-hood' || /hood/i.test(name)) return 'range_hood';
   if (/upblast/i.test(name)) return 'mode_fan';
   if (product.category === 'exhaust-fan' || product.category === 'bathroom-exhaust' || /exhaust fan/i.test(name)) return 'mode_fan_2';

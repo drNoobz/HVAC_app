@@ -1,13 +1,12 @@
 import { blankSite } from './climate';
 import { builtinAssembly, cloneLayers } from './constructionLibrary';
-import { equipmentSizeM, getProduct } from './catalog';
-import { defaultSections, placedPorts } from './airUnits';
-import { getDuctProduct } from './ductCatalog';
+import { getProduct } from './catalog';
+import { defaultSections } from './airUnits';
 import { createId, nowIso } from './ids';
 import { getLoadProduct } from './loadCatalog';
-import { addDuct, placementZ } from './projectOps';
+import { placementZ } from './projectOps';
 import { applySystemPackage } from './systemPackages';
-import type { DuctService, DuctNode, HvacSystem, LoadItem, Opening, PlacedEquipment, Project, Room, SiteClimate, SurfaceAssignment, SystemKind } from './types';
+import type { HvacSystem, LoadItem, Opening, PlacedEquipment, Project, Room, SiteClimate, SurfaceAssignment, SystemKind } from './types';
 import { interfaceTargets, isOutsideInterfaceKey, repeatedWalls, separateSharedWalls } from './walls';
 
 const PLANNING_NOTE = 'Planning default from the restaurant construction library. The stack is copied onto this surface. Confirm the climate zone and the tested assembly before design use.';
@@ -106,13 +105,6 @@ function place(
   };
 }
 
-const CFM = 0.0004719474432;
-
-/** Same placement with a design airflow, CFM. */
-function rated(item: PlacedEquipment, cfm: number): PlacedEquipment {
-  return { ...item, designFlowM3s: cfm * CFM };
-}
-
 const EXAMPLE = 'Example from the full-service template. Confirm the selection before design use.';
 
 function load(loadId: string, host: Room, xM: number, yM: number, quantity = 1, yawDeg = 0): LoadItem {
@@ -132,74 +124,6 @@ function load(loadId: string, host: Room, xM: number, yM: number, quantity = 1, 
     override: null,
     notes: EXAMPLE,
   };
-}
-
-function ductDiameter(catalogId: string, inches: number): number {
-  const size = getDuctProduct(catalogId)?.sizes?.find(item => item.id === String(inches));
-  if (!size) throw new Error(`No ${inches} in size on ${catalogId}`);
-  return size.widthM;
-}
-
-function portPoint(item: PlacedEquipment, portId: string): { x: number; y: number; equipmentId: string; portId: string } {
-  const product = getProduct(item.catalogId);
-  const port = product ? placedPorts(item).find(entry => entry.id === portId) : undefined;
-  if (!product || !port) throw new Error(`No port ${portId} on ${item.catalogId}`);
-  const size = equipmentSizeM(product);
-  const yaw = (item.yawDeg * Math.PI) / 180;
-  const lx = (port.u * size.lengthM) / 2;
-  const ly = (port.v * size.widthM) / 2;
-  const c = Math.cos(yaw);
-  const s = Math.sin(yaw);
-  return { x: item.xM + lx * c - ly * s, y: item.yM + lx * s + ly * c, equipmentId: item.id, portId };
-}
-
-function connect(
-  project: Project,
-  catalogId: string,
-  systemId: string,
-  service: DuctService,
-  inches: number,
-  points: { x: number; y: number; equipmentId?: string; portId?: string; nodeId?: string }[],
-): Project {
-  const next = addDuct(project, { catalogId, systemId, service, shape: 'round', widthM: ductDiameter(catalogId, inches), heightM: null, points });
-  if (next === project) throw new Error(`Could not add ${service} duct ${catalogId}`);
-  return next;
-}
-
-/** Junction where a trunk tees into branches. */
-function junction(project: Project, systemId: string, service: DuctService, x: number, y: number): { project: Project; point: { x: number; y: number; nodeId: string } } {
-  const node: DuctNode = { id: createId('node'), systemId, service, x, y };
-  return { project: { ...project, ductNodes: [...(project.ductNodes ?? []), node] }, point: { x, y, nodeId: node.id } };
-}
-
-/** Duct from an equipment port out to a free terminal (outlet / discharge / diffuser). */
-function fromPort(
-  project: Project,
-  item: PlacedEquipment,
-  portId: string,
-  catalogId: string,
-  systemId: string,
-  service: DuctService,
-  inches: number,
-  end: { x: number; y: number },
-  via: { x: number; y: number }[] = [],
-): Project {
-  return connect(project, catalogId, systemId, service, inches, [portPoint(item, portId), ...via, end]);
-}
-
-/** Duct from a free terminal into an equipment port (inlet / capture / outdoor intake). */
-function toPort(
-  project: Project,
-  start: { x: number; y: number },
-  item: PlacedEquipment,
-  portId: string,
-  catalogId: string,
-  systemId: string,
-  service: DuctService,
-  inches: number,
-  via: { x: number; y: number }[] = [],
-): Project {
-  return connect(project, catalogId, systemId, service, inches, [start, ...via, portPoint(item, portId)]);
 }
 
 function base(
@@ -308,108 +232,30 @@ function fullServiceSite(): SiteClimate {
 
 export function createFullServiceProject(): Project {
   const plan = fullServiceRooms();
-  const exhaust = system(
-    'Kitchen exhaust',
-    'kitchen-exhaust',
-    'Type I hood (1,600 CFM) → listed grease duct → roof upblast fan selected at the hood airflow. The fan discharges to outdoors on its own.',
-  );
-  const makeup = system(
-    'Make-up air',
-    'makeup-air',
-    'Rooftop direct-fired MAU with its intake hood on the unit. Supply trunk tees to two diffusers ahead of the cooking line. Set to the hood exhaust so the kitchen is close to neutral.',
-  );
-  const restroomSys = system(
-    'Restroom exhaust',
-    'restroom-exhaust',
-    'Ceiling fan in each restroom (the grille is the fan face) → duct → gravity relief hood on the roof.',
-  );
-  const dishSys = system(
-    'Dish exhaust',
-    'ventilation',
-    'Exhaust grille over the dish machine → inline fan → gravity relief hood on the roof.',
-  );
-  const ervSys = system(
-    'Office ERV',
-    'ventilation',
-    'Rooftop ERV with outdoor-air and exhaust hoods on the casing. Supply diffuser and return grille in the office.',
-  );
-  const hood = place('hood-wall-8', plan.kitchen, 3.6, 15.39, exhaust.id, `${EXAMPLE} Wall canopy on the back wall.`);
-  const fan = rated(place('fan-upblast-30', plan.kitchen, 7.6, 12.2, exhaust.id, `${EXAMPLE} Roof upblast fan selected at the hood airflow.`), 1600);
-  const mauBase = place('mau-40', plan.prep, 13.2, 11.2, makeup.id, `${EXAMPLE} Rooftop MAU. Intake hood on the unit; supply faces the kitchen.`, 180);
-  const mau: PlacedEquipment = {
-    ...mauBase,
-    sections: (mauBase.sections ?? []).map(section =>
-      section.kind === 'supply-fan' || section.kind === 'oa-damper' ? { ...section, flowM3s: 1600 * CFM } : section,
-    ),
-  };
-  const mauDiffA = rated(place('diff-sq-24', plan.kitchen, 1.6, 13.4, makeup.id, `${EXAMPLE} Make-up air diffuser ahead of the line.`), 800);
-  const mauDiffB = rated(place('diff-sq-24', plan.kitchen, 6.0, 13.4, makeup.id, `${EXAMPLE} Make-up air diffuser ahead of the line.`), 800);
-  const dishFan = rated(
-    place('fan-inline-8', plan.dish, 12.2, 14.5, dishSys.id, `${EXAMPLE} Inline fan. Inlet toward the dish grille; outlet to the roof hood.`, 180),
-    400,
-  );
-  const dishGrille = rated(place('grille-exh-12', plan.dish, 15.2, 15.2, dishSys.id, `${EXAMPLE} Exhaust grille over the dish machine.`), 400);
-  const dishRelief = place('hood-relief-roof', plan.dish, 11.2, 15.6, dishSys.id, `${EXAMPLE} Roof discharge.`);
-  const bathA = place('bath-fan-150', plan.restroomA, 13.1, 6.5, restroomSys.id, `${EXAMPLE} Ceiling fan — grille is the inlet.`);
-  const bathB = place('bath-fan-150', plan.restroomB, 15.3, 6.5, restroomSys.id, `${EXAMPLE} Ceiling fan — grille is the inlet.`);
-  const bathReliefA = place('hood-relief-roof', plan.restroomA, 13.1, 7.45, restroomSys.id, `${EXAMPLE} Roof discharge for restroom A.`);
-  const bathReliefB = place('hood-relief-roof', plan.restroomB, 15.3, 7.45, restroomSys.id, `${EXAMPLE} Roof discharge for restroom B.`);
-  const ervBase = place('erv-20', plan.office, 19.0, 7.0, ervSys.id, `${EXAMPLE} Rooftop ERV. Outdoor-air and exhaust hoods are on the casing.`, 180);
-  const erv: PlacedEquipment = {
-    ...ervBase,
-    sections: (ervBase.sections ?? []).map(section =>
-      section.kind === 'oa-damper' || section.kind === 'exhaust-damper' ? { ...section, ducted: false } : section,
-    ),
-  };
-  const ervDiff = rated(place('diff-sq-24', plan.office, 17.2, 5.4, ervSys.id, `${EXAMPLE} Office supply diffuser.`), 800);
-  const ervGrille = rated(place('grille-ret-24', plan.office, 17.2, 8.6, ervSys.id, `${EXAMPLE} Office return grille.`), 800);
   const project = base(
     'Full-service restaurant',
     'full-service',
     { kind: 'template', templateId: 'full-service', label: 'Full-service restaurant template' },
     `${TEMPLATE_DETAILS} Equipment, loads, and ducts are planning placements, not a design.`,
     plan.rooms,
-    [exhaust, makeup, restroomSys, dishSys, ervSys],
-    [hood, fan, mau, mauDiffA, mauDiffB, dishFan, dishGrille, dishRelief, bathA, bathB, bathReliefA, bathReliefB, erv, ervDiff, ervGrille],
+    [],
+    [],
   );
 
-  // Kitchen exhaust: hood collar → grease duct → upblast fan inlet.
-  const hoodPort = portPoint(hood, 'exhaust');
-  const fanIn = portPoint(fan, 'in');
-  let next = connect(project, 'captiveaire-dw', exhaust.id, 'exhaust', 16, [hoodPort, { x: hoodPort.x, y: fanIn.y }, fanIn]);
-
-  // Make-up air: MAU supply → trunk → tee → two diffusers.
-  const tee = junction(next, makeup.id, 'supply', 6.0, 11.2);
-  next = tee.project;
-  next = connect(next, 'esm-sw-round', makeup.id, 'supply', 16, [portPoint(mau, 'supply'), tee.point]);
-  next = connect(next, 'esm-sw-round', makeup.id, 'supply', 12, [tee.point, portPoint(mauDiffB, 'neck')]);
-  next = connect(next, 'esm-sw-round', makeup.id, 'supply', 12, [tee.point, { x: 1.6, y: 11.2 }, portPoint(mauDiffA, 'neck')]);
-
-  // Dining comfort: rooftop unit with a ducted supply trunk and return main.
-  const beforeSystems = new Set(next.systems.map(item => item.id));
-  next = applySystemPackage(next, 'rtu-ducted', { xM: 4.6, yM: 4 });
-  const comfort = next.systems.find(item => !beforeSystems.has(item.id));
-  if (!comfort) throw new Error('Dining comfort package failed to create a system');
-  next = {
-    ...next,
-    systems: next.systems.map(item => (item.id === comfort.id ? { ...item, name: 'Dining comfort' } : item)),
-    equipment: next.equipment.map(item => (item.systemId === comfort.id && !item.notes ? { ...item, notes: EXAMPLE } : item)),
+  // Each air system is a catalogue system template, dropped where it serves.
+  let next = project;
+  const drop = (packageId: string, xM: number, yM: number, rename?: string) => {
+    const before = new Set(next.systems.map(item => item.id));
+    const placed = applySystemPackage(next, packageId, { xM, yM });
+    if (placed === next) throw new Error(`System template ${packageId} did not apply`);
+    next = rename ? { ...placed, systems: placed.systems.map(item => (before.has(item.id) ? item : { ...item, name: rename })) } : placed;
   };
-
-  // Dish exhaust: grille → inline fan → roof relief hood.
-  next = connect(next, 'esm-sw-round', dishSys.id, 'exhaust', 10, [portPoint(dishGrille, 'collar'), { x: 15.2, y: 14.5 }, portPoint(dishFan, 'in')]);
-  const dishOut = portPoint(dishFan, 'out');
-  next = connect(next, 'esm-sw-round', dishSys.id, 'exhaust', 10, [dishOut, { x: dishOut.x, y: 15.6 }, portPoint(dishRelief, 'throat')]);
-
-  // Restroom exhaust: each fan → roof relief hood.
-  next = connect(next, 'esm-sw-round', restroomSys.id, 'exhaust', 6, [portPoint(bathA, 'exhaust'), portPoint(bathReliefA, 'throat')]);
-  next = connect(next, 'esm-sw-round', restroomSys.id, 'exhaust', 6, [portPoint(bathB, 'exhaust'), portPoint(bathReliefB, 'throat')]);
-
-  // Office ERV: supply to the diffuser, return from the grille.
-  const ervSa = portPoint(erv, 'sa');
-  const ervRa = portPoint(erv, 'ra');
-  next = connect(next, 'esm-sw-round', ervSys.id, 'supply', 10, [ervSa, { x: 17.2, y: ervSa.y }, portPoint(ervDiff, 'neck')]);
-  next = connect(next, 'esm-sw-round', ervSys.id, 'return', 10, [portPoint(ervGrille, 'collar'), { x: 17.2, y: ervRa.y }, ervRa]);
+  drop('kitchen-hood-mau', 3.6, 15.39);
+  drop('restroom-exhaust-2', 13.1, 6.5);
+  drop('general-exhaust-inline', 12.2, 14.5);
+  drop('erv-small-room', 19.0, 7.0);
+  drop('rtu-ducted', 4.6, 4, 'Dining comfort');
+  next = { ...next, equipment: next.equipment.map(item => ({ ...item, notes: item.notes ? `${EXAMPLE} ${item.notes}` : EXAMPLE })) };
 
   return {
     ...next,

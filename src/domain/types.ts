@@ -161,13 +161,61 @@ export type UnitSectionKind =
   | 'supply-fan'
   | 'cooling-coil'
   | 'heating-coil'
-  | 'humidifier';
+  | 'humidifier'
+  /** Packaged DX units: outdoor coil and condenser fans. Outside the supply airstream; its fans discharge up. */
+  | 'condenser';
 
 /** Fail position of a damper actuator. */
 export type DamperPosition = 'NO' | 'NC';
 
 /** What a coil exchanges heat with. */
 export type CoilMedium = 'dx' | 'co2-dx' | 'chilled-water' | 'hot-water' | 'glycol' | 'steam' | 'gas' | 'electric';
+
+/** Fluid in a plant loop. */
+export type LoopFluid = 'water' | 'propylene-glycol' | 'ethylene-glycol' | 'steam' | 'co2' | 'refrigerant';
+
+/** Heating, cooling, or refrigerant loop that serves coils. Temperatures °C. */
+export interface PlantLoop {
+  id: string;
+  name: string;
+  fluid: LoopFluid;
+  /** Glycol concentration by volume, 0–1. */
+  glycolFraction?: number | null;
+  /** Supply temperature, or saturated suction temperature for refrigerant. */
+  supplyC: number | null;
+  /** Design return temperature. Null for refrigerant. */
+  returnC: number | null;
+  /** Boiler, chiller, rack, or exchanger placement that feeds the loop. */
+  plantEquipmentId?: string | null;
+  notes: string;
+}
+
+export type ValveKind = 'two-way' | 'three-way' | 'solenoid' | 'back-pressure' | 'expansion';
+
+/** Valve on a coil connection. */
+export interface CoilValve {
+  id: string;
+  kind: ValveKind;
+  /** Drawing tag, such as V-3. */
+  tag: string;
+  note?: string;
+}
+
+export type SensorKind = 'temperature' | 'humidity' | 'co2' | 'pressure' | 'static-pressure' | 'airflow';
+
+/** Where a sensor sits: after a unit section, or in a room. */
+export type SensorLocation =
+  | { kind: 'station'; equipmentId: string; sectionId: string }
+  | { kind: 'room'; roomId: string; equipmentId: string | null };
+
+/** Sensor point for controls. Tagged as on the drawings, such as TAF or HR. */
+export interface ControlPoint {
+  id: string;
+  tag: string;
+  sensor: SensorKind;
+  location: SensorLocation;
+  note?: string;
+}
 
 /** Design season for schematic conditions. */
 export type DesignSeason = 'cooling' | 'heating';
@@ -194,6 +242,14 @@ export interface UnitSection {
   medium?: CoilMedium;
   /** Coil capacity, W. */
   capacityW?: number | null;
+  /** Coils: plant loop the coil is piped to. */
+  loopId?: string | null;
+  /** Coils: design fluid flow, m³/s. */
+  fluidFlowM3s?: number | null;
+  /** Coils: valves on the coil piping. */
+  valves?: CoilValve[];
+  /** Condenser: number of condenser fans. */
+  fanCount?: number;
   note?: string;
 }
 
@@ -361,6 +417,10 @@ export interface Project {
   ducts?: DuctRun[];
   /** Duct junctions. Missing on projects saved before branching ducts. */
   ductNodes?: DuctNode[];
+  /** Heating, cooling, and refrigerant loops serving coils. */
+  plantLoops?: PlantLoop[];
+  /** Sensors for controls. Valves sit on coil sections; damper actuators and fans come from the sections. */
+  controlPoints?: ControlPoint[];
   loads?: LoadItem[];
   site?: SiteClimate;
   /** One stack per interface stretch, shared or outside air. The adapter checks the envelope and does not write these stacks into GeometryDocument. */
@@ -391,7 +451,13 @@ export type Selection =
   | { kind: 'wallRun'; id: string }
   | { kind: 'wallOpening'; wallId: string; id: string }
   | { kind: 'duct'; id: string }
-  | { kind: 'load'; id: string };
+  | { kind: 'load'; id: string }
+  | { kind: 'loop'; id: string }
+  | { kind: 'point'; id: string }
+  /** One section inside a unit, picked on the plan's unit internals or the unit inspector. */
+  | { kind: 'section'; equipmentId: string; id: string }
+  /** One duct inside a unit, between two of its sections or a section and a casing connection. */
+  | { kind: 'unit-duct'; equipmentId: string; id: string };
 
 export type EditorTool =
   | { kind: 'select' }

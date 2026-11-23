@@ -32,7 +32,10 @@ import {
   type ConstructionMaterial,
 } from '@/domain/constructionLibrary';
 import { DUCT_CATALOG, roughnessLabel, sizeSummary, streamLabels, type DuctProduct } from '@/domain/ductCatalog';
-import { SYSTEM_PACKAGES } from '@/domain/systemPackages';
+import { PACKAGE_GROUPS, packageSummary } from '@/domain/systemPackages';
+import { deleteUserPackage } from '@/domain/systemTemplates';
+import { useSystemPackages } from './useSystemPackages';
+import { SYSTEM_KINDS } from '@/domain/types';
 import { StackEditor } from './StackEditor';
 
 const EMPTY_DRAFT = {
@@ -91,6 +94,7 @@ export function LibraryPanel({
   const assemblies = useMemo(() => mergeAssemblies(addedAssemblies), [addedAssemblies]);
   const fileRef = useRef<HTMLInputElement>(null);
   const [section, setSection] = useState<LibrarySection>('construction');
+  const packages = useSystemPackages();
   const [constructionMode, setConstructionMode] = useState<ConstructionMode>('components');
   const [category, setCategory] = useState<ConstructionCategory | 'all'>('all');
   const [equipmentCategory, setEquipmentCategory] = useState<EquipmentCategory | 'all'>('all');
@@ -272,7 +276,7 @@ export function LibraryPanel({
     return haystack.includes(query.trim().toLowerCase());
   });
   const navCategory = section === 'construction' ? category : section === 'ducts' ? ductGroup : equipmentCategory;
-  const navCounts = section === 'construction' ? constructionCounts : section === 'ducts' ? ductCounts : section === 'packages' ? { all: SYSTEM_PACKAGES.length } : equipmentCounts;
+  const navCounts = section === 'construction' ? constructionCounts : section === 'ducts' ? ductCounts : section === 'packages' ? { all: packages.length } : equipmentCounts;
   const navItems = section === 'construction'
     ? (constructionMode === 'components' ? ASSEMBLY_CATEGORIES : CONSTRUCTION_CATEGORIES)
     : section === 'ducts'
@@ -295,7 +299,7 @@ export function LibraryPanel({
             System equipment
           </button>
           <button type="button" className={section === 'packages' ? 'active' : ''} onClick={() => switchSection('packages')}>
-            Packages
+            System templates
           </button>
           <button type="button" className={section === 'ducts' ? 'active' : ''} onClick={() => switchSection('ducts')}>
             Ducts
@@ -688,29 +692,48 @@ export function LibraryPanel({
 
           {section === 'packages' && (
             <div className="table-wrap library-table">
+              <p className="muted library-note">
+                Ready-made air systems: unit, terminals, branch ducts, loops, and sensors. Drag one from the Build catalogue onto the plan. Save your own from any system in its inspector.
+              </p>
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Package</th>
-                    <th>System kind</th>
-                    <th>Members</th>
+                    <th>Template</th>
+                    <th>Systems</th>
+                    <th>Contents</th>
                     <th>Description</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {SYSTEM_PACKAGES.filter(item =>
-                    `${item.name} ${item.description}`.toLowerCase().includes(query.trim().toLowerCase()),
-                  ).map(item => (
-                    <tr key={item.id}>
-                      <td>
-                        <strong>{item.name}</strong>
-                        <div className="cell-sub">Drag from Equipment catalog onto the plan</div>
-                      </td>
-                      <td>{item.systemKind}</td>
-                      <td>{item.members.length}</td>
-                      <td>{item.description}</td>
-                    </tr>
-                  ))}
+                  {PACKAGE_GROUPS.map(group => {
+                    const rows = packages.filter(item => item.group === group && `${item.name} ${item.description}`.toLowerCase().includes(query.trim().toLowerCase()));
+                    if (rows.length === 0) return null;
+                    return (
+                      <Fragment key={group}>
+                        <tr className="group-row">
+                          <td colSpan={4}>{group}</td>
+                        </tr>
+                        {rows.map(item => (
+                          <tr key={item.id}>
+                            <td>
+                              <strong>{item.name}</strong>
+                              {item.user && (
+                                <div className="cell-sub">
+                                  Saved {item.savedAt ? new Date(item.savedAt).toLocaleDateString() : ''} ·{' '}
+                                  <button type="button" className="link-button" onClick={() => deleteUserPackage(item.id)}>
+                                    Delete
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                            <td>{item.systems.map(system => `${system.name} (${SYSTEM_KINDS.find(kind => kind.id === system.kind)?.label ?? system.kind})`).join(', ')}</td>
+                            <td>{packageSummary(item)}</td>
+                            <td>{item.description}</td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

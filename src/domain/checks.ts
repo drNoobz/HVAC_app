@@ -1,5 +1,6 @@
 import { getProduct } from './catalog';
 import { designFlow, placedPorts, unitFlows, unitSections } from './airUnits';
+import { isLiquidLoop, isPiped } from './controls';
 import { siteMissing, siteOf } from './climate';
 import { getDuctProduct, streamFor } from './ductCatalog';
 import { DUCT_SERVICE_LABEL, ductAreaM2, ductFlows, ductViewOf, isOpenEnd, openPorts } from './ducts';
@@ -9,7 +10,7 @@ import { getLoadProduct } from './loadCatalog';
 import { hoodOver } from './loads';
 import type { DuctService, Project, Selection } from './types';
 
-export type BuildStep = 'spaces' | 'loads' | 'equipment' | 'ducts' | 'check';
+export type BuildStep = 'spaces' | 'loads' | 'systems' | 'check';
 
 export type CheckFix =
   | { kind: 'select' }
@@ -41,9 +42,12 @@ export function stepForSelection(selection: Selection): Exclude<BuildStep, 'chec
       return 'loads';
     case 'equipment':
     case 'system':
-      return 'equipment';
+    case 'loop':
+    case 'point':
+    case 'section':
+    case 'unit-duct':
     case 'duct':
-      return 'ducts';
+      return 'systems';
     default:
       return null;
   }
@@ -67,7 +71,7 @@ export function buildChecks(
   for (const row of planningIssues(project)) {
     issues.push({
       id: row.id,
-      step: row.id.startsWith('hood-') ? 'equipment' : 'spaces',
+      step: row.id.startsWith('hood-') ? 'systems' : 'spaces',
       severity: 'planning',
       message: row.message,
       selection: row.selection,
@@ -129,7 +133,7 @@ export function buildChecks(
     if (!product || item.systemId || placedPorts(item).length === 0) continue;
     issues.push({
       id: `eq-system-${item.id}`,
-      step: 'equipment',
+      step: 'systems',
       severity: 'planning',
       message: `${product.model} is not in a system.`,
       selection: { kind: 'equipment', id: item.id },
@@ -143,7 +147,7 @@ export function buildChecks(
     if (!item || !system || !streamFor(system.kind, hit.service)) continue;
     issues.push({
       id: `port-${hit.equipmentId}-${hit.portId}`,
-      step: 'ducts',
+      step: 'systems',
       severity: 'planning',
       message: `${equipmentName(project, hit.equipmentId)} ${hit.portId} port has no ${DUCT_SERVICE_LABEL[hit.service].toLowerCase()} duct.`,
       selection: { kind: 'equipment', id: item.id },
@@ -152,6 +156,44 @@ export function buildChecks(
     });
   }
   issues.push(...airIssues(project));
+  issues.push(...controlIssues(project));
+  return issues;
+}
+
+/** Coil piping and controls: loops, valves, and tags. Coil performance is left to the solver. */
+function controlIssues(project: Project): CheckIssue[] {
+  const issues: CheckIssue[] = [];
+  const loops = project.plantLoops ?? [];
+  const tags = new Map<string, number>();
+  const count = (tag: string) => {
+    const key = tag.trim().toUpperCase();
+    if (key) tags.set(key, (tags.get(key) ?? 0) + 1);
+  };
+  for (const item of project.equipment) {
+    const product = getProduct(item.catalogId);
+    if (!product?.unit) continue;
+    const sections = unitSections(item);
+    for (const section of sections) {
+      for (const valve of section.valves ?? []) count(valve.tag);
+      if (section.kind !== 'cooling-coil' && section.kind !== 'heating-coil') continue;
+      const name = `${section.kind === 'cooling-coil' ? 'Cooling' : 'Heating'} coil on ${product.model}`;
+      const show = { kind: 'equipment' as const, id: item.id };
+      // A DX coil without a loop is the unit's own refrigerant circuit, as on a packaged rooftop.
+      if (isPiped(section.medium) && section.medium !== 'dx' && !section.loopId) {
+        issues.push({ id: `coil-loop-${item.id}-${section.id}`, step: 'systems', severity: 'planning', message: `${name} is not piped to a plant loop.`, selection: show, fix: { kind: 'select' }, fixLabel: 'Show' });
+        continue;
+      }
+      const loop = loops.find(entry => entry.id === section.loopId);
+      if (loop && isLiquidLoop(loop) && !(section.valves ?? []).some(valve => valve.kind === 'two-way' || valve.kind === 'three-way')) {
+        issues.push({ id: `coil-valve-${item.id}-${section.id}`, step: 'systems', severity: 'planning', message: `${name} has no 2-way or 3-way control valve.`, selection: show, fix: { kind: 'select' }, fixLabel: 'Show' });
+      }
+    }
+  }
+  for (const point of project.controlPoints ?? []) count(point.tag);
+  for (const [tag, uses] of tags) {
+    if (uses < 2) continue;
+    issues.push({ id: `tag-${tag}`, step: 'systems', severity: 'warning', message: `Control tag ${tag} is used ${uses} times.`, selection: null, fix: { kind: 'select' }, fixLabel: 'Show' });
+  }
   return issues;
 }
 
@@ -170,7 +212,7 @@ function airIssues(project: Project): CheckIssue[] {
     if (open > 0) {
       issues.push({
         id: `duct-open-${run.id}`,
-        step: 'ducts',
+        step: 'systems',
         severity: 'planning',
         message: `${label} duct has ${open === 2 ? 'two open ends' : 'an open end'}. End it at a terminal, a unit port, or another run.`,
         selection: { kind: 'duct', id: run.id },
@@ -185,7 +227,7 @@ function airIssues(project: Project): CheckIssue[] {
       if (product?.group === 'Grease' && velocity < 500 * FPM) {
         issues.push({
           id: `duct-grease-${run.id}`,
-          step: 'ducts',
+          step: 'systems',
           severity: 'warning',
           message: `Grease duct velocity is ${Math.round(velocity / FPM)} fpm. NFPA 96 asks for at least 500 fpm; use a smaller duct.`,
           selection: { kind: 'duct', id: run.id },
@@ -195,7 +237,7 @@ function airIssues(project: Project): CheckIssue[] {
       } else if (product?.group !== 'Grease' && velocity > 2000 * FPM) {
         issues.push({
           id: `duct-fast-${run.id}`,
-          step: 'ducts',
+          step: 'systems',
           severity: 'planning',
           message: `${label} duct runs at ${Math.round(velocity / FPM)} fpm for ${formatFlow(flow, units)}. Low-pressure duct is usually kept under about 1,500–2,000 fpm.`,
           selection: { kind: 'duct', id: run.id },
@@ -213,7 +255,7 @@ function airIssues(project: Project): CheckIssue[] {
     const product = item ? getProduct(item.catalogId) : undefined;
     issues.push({
       id: `air-balance-${source.equipmentId}-${source.portId}`,
-      step: 'ducts',
+      step: 'systems',
       severity: 'warning',
       message: `${product?.model ?? 'Unit'} ${source.portId} is set to ${formatFlow(source.portM3s, units)}, but ${source.terminals === 1 ? 'its terminal takes' : `its ${source.terminals} terminals add up to`} ${formatFlow(source.terminalsM3s, units)}.`,
       selection: { kind: 'equipment', id: source.equipmentId },
@@ -237,7 +279,7 @@ function airIssues(project: Project): CheckIssue[] {
   if (exhaust > 0 && outdoor > 0 && exhaust > outdoor * 1.02) {
     issues.push({
       id: 'air-building-balance',
-      step: 'equipment',
+      step: 'systems',
       severity: 'warning',
       message: `Exhaust fans remove ${formatFlow(exhaust, units)} but units bring in only ${formatFlow(outdoor, units)} of outdoor air. The building runs negative; raise make-up or outdoor air.`,
       selection: null,
@@ -247,7 +289,7 @@ function airIssues(project: Project): CheckIssue[] {
   } else if (exhaust > 0 && outdoor > 0) {
     issues.push({
       id: 'air-building-balance',
-      step: 'equipment',
+      step: 'systems',
       severity: 'planning',
       message: `Outdoor air ${formatFlow(outdoor, units)} against exhaust ${formatFlow(exhaust, units)}: building is ${outdoor - exhaust > 0 ? `positive by ${formatFlow(outdoor - exhaust, units)}` : 'balanced'}. Planning values only.`,
       selection: null,

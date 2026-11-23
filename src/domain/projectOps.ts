@@ -5,6 +5,7 @@ import { defaultSections } from './airUnits';
 import { ductElevation, linkedPort, nearestNode, nearestRun, polylineLength, sealDuct } from './ducts';
 import { createId, nowIso } from './ids';
 import type {
+  ControlPoint,
   DuctEnd,
   DuctNode,
   DuctRun,
@@ -18,6 +19,7 @@ import type {
   Room,
   SurfaceAssignment,
   SystemKind,
+  UnitSection,
   WallFace,
   WallRun,
 } from './types';
@@ -211,6 +213,20 @@ export function cloneProject(source: Project, overrides?: Partial<Project>): Pro
     wallRuns,
     ducts,
     ductNodes,
+    plantLoops: (source.plantLoops ?? []).map(loop => ({
+      ...loop,
+      plantEquipmentId: loop.plantEquipmentId ? (equipmentIds.get(loop.plantEquipmentId) ?? null) : null,
+    })),
+    controlPoints: (source.controlPoints ?? []).flatMap((point): ControlPoint[] => {
+      const location = point.location;
+      if (location.kind === 'station') {
+        const equipmentId = equipmentIds.get(location.equipmentId);
+        return equipmentId ? [{ ...point, id: createId('pt'), location: { ...location, equipmentId } }] : [];
+      }
+      const roomId = roomIds.get(location.roomId);
+      if (!roomId) return [];
+      return [{ ...point, id: createId('pt'), location: { ...location, roomId, equipmentId: location.equipmentId ? (equipmentIds.get(location.equipmentId) ?? null) : null } }];
+    }),
     loads: (source.loads ?? []).flatMap(item => {
       const roomId = item.roomId ? roomIds.get(item.roomId) : undefined;
       if (!roomId) return [];
@@ -405,6 +421,7 @@ export function removeRoom(project: Project, roomId: string): Project {
     rooms: project.rooms.filter(room => room.id !== roomId),
     equipment: project.equipment.map(item => (item.roomId === roomId ? { ...item, roomId: null } : item)),
     loads: (project.loads ?? []).filter(item => item.roomId !== roomId),
+    controlPoints: (project.controlPoints ?? []).filter(point => !(point.location.kind === 'room' && point.location.roomId === roomId)),
   };
 }
 
@@ -492,10 +509,34 @@ export function assignEquipmentRoom(project: Project, id: string, roomId: string
 export function duplicateEquipment(project: Project, id: string): Project {
   const item = project.equipment.find(entry => entry.id === id);
   if (!item) return project;
+  const copyId = createId('eq');
+  const sectionIds = new Map<string, string>();
+  const sections = item.sections?.map(section => {
+    const next = createId('sec');
+    sectionIds.set(section.id, next);
+    return { ...section, id: next, valves: section.valves?.map(valve => ({ ...valve, id: createId('valve') })) };
+  });
+  const points = (project.controlPoints ?? []).flatMap(point => {
+    const location = point.location;
+    if (location.kind !== 'station' || location.equipmentId !== id || !sectionIds.has(location.sectionId)) return [];
+    return [{ ...point, id: createId('pt'), location: { kind: 'station' as const, equipmentId: copyId, sectionId: sectionIds.get(location.sectionId)! } }];
+  });
   return {
     ...project,
-    equipment: [...project.equipment, { ...item, id: createId('eq'), xM: item.xM + 0.5, sections: item.sections?.map(section => ({ ...section, id: createId('sec') })) }],
+    equipment: [...project.equipment, { ...item, id: copyId, xM: item.xM + 0.5, sections }],
+    controlPoints: [...(project.controlPoints ?? []), ...points],
   };
+}
+
+/** Replace a unit's sections and drop sensors that sat after a removed section. */
+export function setUnitSections(project: Project, id: string, sections: UnitSection[]): Project {
+  const kept = new Set(sections.map(section => section.id));
+  return syncDuctPorts({
+    ...updateEquipment(project, id, { sections }),
+    controlPoints: (project.controlPoints ?? []).filter(
+      point => !(point.location.kind === 'station' && point.location.equipmentId === id && !kept.has(point.location.sectionId)),
+    ),
+  });
 }
 
 export function removeEquipment(project: Project, id: string): Project {
@@ -504,6 +545,11 @@ export function removeEquipment(project: Project, id: string): Project {
     ...project,
     equipment: project.equipment.filter(item => item.id !== id),
     ducts: (project.ducts ?? []).map(run => sealDuct({ ...run, start: open(run.start), end: open(run.end) }, project)),
+    plantLoops: (project.plantLoops ?? []).map(loop => (loop.plantEquipmentId === id ? { ...loop, plantEquipmentId: null } : loop)),
+    controlPoints: (project.controlPoints ?? []).flatMap(point => {
+      if (point.location.kind === 'station') return point.location.equipmentId === id ? [] : [point];
+      return [point.location.equipmentId === id ? { ...point, location: { ...point.location, equipmentId: null } } : point];
+    }),
   };
 }
 

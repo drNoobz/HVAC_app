@@ -155,6 +155,8 @@ export interface RunFlow {
   flowM3s: number | null;
   /** True when an open end or a terminal without airflow sits beyond the run. */
   partial: boolean;
+  /** The end the air moves toward, from the unit or fan port's direction. Null when the network has no single source. */
+  toward: 'start' | 'end' | null;
 }
 
 export interface SourcePortFlow {
@@ -238,6 +240,8 @@ export function ductFlows(project: Project): { runs: Map<string, RunFlow>; sourc
     if (sourceKeys.length !== 1) continue;
     const root = sourceKeys[0];
     const rootRole = roles.get(root)!;
+    // Air leaves an outlet port and walks outward with the search; it walks inward toward an inlet port.
+    const outward = placedPorts(rootRole.item!).find(port => port.id === rootRole.portId)?.direction !== 'in';
     const outdoorOpen = component.filter(vertex => roles.get(vertex)?.kind === 'outdoor' && roles.get(vertex)!.flow == null);
     const roomCount = component.filter(vertex => roles.get(vertex)?.kind === 'room').length;
     if (outdoorOpen.length > 0 && roomCount === 0 && rootRole.flow != null) {
@@ -261,7 +265,9 @@ export function ductFlows(project: Project): { runs: Map<string, RunFlow>; sourc
         if (visited.has(edge.other)) continue;
         visited.add(edge.other);
         const below = walk(edge.other);
-        runs.set(edge.run.id, { flowM3s: below.flow > 0 ? below.flow : below.partial ? null : 0, partial: below.partial });
+        const away: 'start' | 'end' = key(edge.run, 'end') === edge.other ? 'end' : 'start';
+        const toward = outward ? away : away === 'end' ? 'start' : 'end';
+        runs.set(edge.run.id, { flowM3s: below.flow > 0 ? below.flow : below.partial ? null : 0, partial: below.partial, toward });
         flow += below.flow;
         partial = partial || below.partial;
         terminals += below.terminals;

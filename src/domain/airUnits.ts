@@ -14,6 +14,7 @@ export const SECTION_LABEL: Record<UnitSectionKind, string> = {
   'cooling-coil': 'Cooling coil',
   'heating-coil': 'Heating coil',
   humidifier: 'Humidifier',
+  condenser: 'Condenser (outdoor coil and fans)',
 };
 
 /** Short tag drawn inside the unit footprint. */
@@ -29,6 +30,7 @@ export const SECTION_TAG: Record<UnitSectionKind, string> = {
   'cooling-coil': 'CC',
   'heating-coil': 'HC',
   humidifier: 'H',
+  condenser: 'CU',
 };
 
 export const SECTION_KINDS: UnitSectionKind[] = [
@@ -43,6 +45,7 @@ export const SECTION_KINDS: UnitSectionKind[] = [
   'cooling-coil',
   'heating-coil',
   'humidifier',
+  'condenser',
 ];
 
 export const COIL_MEDIUM_LABEL: Record<CoilMedium, string> = {
@@ -82,6 +85,7 @@ export function newSection(kind: UnitSectionKind): UnitSection {
   }
   if (kind === 'cooling-coil') section.medium = 'dx';
   if (kind === 'heating-coil') section.medium = 'hot-water';
+  if (kind === 'condenser') section.fanCount = 1;
   return section;
 }
 
@@ -185,5 +189,16 @@ export function sectionSummary(section: UnitSection): string {
   if (section.position) bits.push(section.position);
   if (section.medium) bits.push(COIL_MEDIUM_LABEL[section.medium]);
   if (section.ducted === false) bits.push('on casing');
+  if (section.kind === 'condenser') bits.push(`${section.fanCount ?? 1} fan${(section.fanCount ?? 1) === 1 ? '' : 's'}`);
   return bits.join(' · ');
+}
+
+/** Sections on the outdoor, return, and exhaust branches. Everything else is on the supply path after mixing. */
+export const BRANCH_KINDS: UnitSectionKind[] = ['oa-damper', 'ra-damper', 'exhaust-damper', 'relief-fan'];
+
+/** Sections with their own outdoor air path, outside the unit's supply airstream. */
+export const OFF_AIRSTREAM_KINDS: UnitSectionKind[] = ['condenser'];
+
+export function isBranch(section: Pick<UnitSection, 'kind'>): boolean {
+  return BRANCH_KINDS.includes(section.kind);
 }

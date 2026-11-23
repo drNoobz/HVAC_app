@@ -10,6 +10,7 @@ export type EquipmentCategory =
   | 'energy-recovery'
   | 'air-handling'
   | 'air-terminal'
+  | 'plant'
   | 'air-path';
 
 /** Top-level catalog family. Add families here when the library grows. */
@@ -103,6 +104,7 @@ export const CATEGORY_LABEL: Record<EquipmentCategory, string> = {
   'energy-recovery': 'Energy recovery',
   'air-handling': 'Air-handling unit',
   'air-terminal': 'Air terminal',
+  plant: 'Plant (boilers, chillers, racks)',
   'air-path': 'Air path (legacy)',
 };
 
@@ -116,7 +118,7 @@ export const FAMILY_ORDER: EquipmentFamily[] = ['space', 'system'];
 /** Categories under each family. Subdivide by appending here later. */
 export const FAMILY_CATEGORIES: Record<EquipmentFamily, EquipmentCategory[]> = {
   space: ['kitchen-hood', 'exhaust-fan', 'makeup-air', 'bathroom-exhaust', 'air-terminal'],
-  system: ['air-handling', 'system-equipment', 'heating-cooling', 'energy-recovery'],
+  system: ['air-handling', 'system-equipment', 'heating-cooling', 'energy-recovery', 'plant'],
 };
 
 /** Kept so older call sites compile. Air-path equipment is drawn on the plan. */
@@ -787,6 +789,66 @@ export const CATALOG: CatalogProduct[] = [
     reviewStatus: 'needs-confirmation',
     gaps: ['Not for grease-laden air.', 'No product image in this app.'],
   },
+  {
+    id: 'boiler-crest-1500',
+    manufacturer: 'Lochinvar',
+    model: 'Crest FBN1501',
+    name: 'Condensing hot-water boiler, 1,500 MBH',
+    category: 'plant',
+    supplier: 'Lochinvar (USA)',
+    mount: 'grade',
+    dimensions: inches(30, 59, 80, 'Planning envelope ~30 in × 59 in × 80 in'),
+    airflow: null,
+    cooling: null,
+    heating: kBtu(1500, '1,500 MBH input; output depends on return water temperature'),
+    electrical: 'Controls and pump power per Lochinvar submittal.',
+    connections: 'Hot-water supply and return, gas, flue, condensate. Glycol use needs a manufacturer review.',
+    documentUrl: 'https://www.lochinvar.com/products/commercial-boilers/crest/',
+    image: null,
+    source: 'Lochinvar Crest condensing boiler family, 750–6,000 MBH.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Output and efficiency depend on return water temperature and glycol concentration.', 'No product image in this app.'],
+  },
+  {
+    id: 'chiller-ascend-100',
+    manufacturer: 'Trane',
+    model: 'Ascend ACR (100 ton class)',
+    name: 'Air-cooled scroll chiller, 100 ton',
+    category: 'plant',
+    supplier: 'Trane Technologies (USA)',
+    mount: 'grade',
+    dimensions: feet(16, 7.5, 8, 'Planning envelope ~16 ft × 7.5 ft × 8 ft'),
+    airflow: null,
+    cooling: tons(100, '100 ton nominal'),
+    heating: null,
+    electrical: 'Voltage / MCA / MOCP from Trane product data.',
+    connections: 'Chilled-water supply and return. Service clearance on all sides.',
+    documentUrl: 'https://www.trane.com/commercial/north-america/us/en/products-systems/chillers/air-cooled-chillers.html',
+    image: null,
+    source: 'Trane Ascend air-cooled chiller family.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Capacity at the design leaving water and ambient comes from Trane selection.', 'No product image in this app.'],
+  },
+  {
+    id: 'co2-rack-advansor',
+    manufacturer: 'Hillphoenix',
+    model: 'Advansor',
+    name: 'CO₂ transcritical booster rack',
+    category: 'plant',
+    supplier: 'Hillphoenix (USA)',
+    mount: 'grade',
+    dimensions: feet(12, 4, 7, 'Planning envelope ~12 ft × 4 ft × 7 ft; gas cooler is separate'),
+    airflow: null,
+    cooling: null,
+    heating: null,
+    electrical: 'Compressor and controls per Hillphoenix submittal.',
+    connections: 'CO₂ liquid and suction lines to evaporators and AHU coils. Gas cooler on the roof.',
+    documentUrl: 'https://www.hillphoenix.com/refrigeration-systems/co2-systems/',
+    image: null,
+    source: 'Hillphoenix Advansor CO₂ (R-744) transcritical booster systems.',
+    reviewStatus: 'needs-confirmation',
+    gaps: ['Medium-temperature suction and capacity come from the rack selection.', 'No product image in this app.'],
+  },
 ];
 
 const CFM_M3S = 0.0004719474432;
@@ -829,7 +891,7 @@ const SIDE_PORTS: UnitSpec['portAt'] = {
 };
 
 /** Packaged rooftop: horizontal supply and return. Economizer hood and barometric relief sit on the casing. */
-function rooftop(cfm: number, heatingW: number, coolingW: number): UnitSpec {
+function rooftop(cfm: number, heatingW: number, coolingW: number, condenserFans: number): UnitSpec {
   return {
     sections: [
       { kind: 'oa-damper', position: 'NC', ducted: false, flowM3s: cfm * 0.2 * CFM_M3S, note: 'Economizer outdoor-air hood. Minimum outdoor air is a planning value.' },
@@ -840,6 +902,7 @@ function rooftop(cfm: number, heatingW: number, coolingW: number): UnitSpec {
       { kind: 'cooling-coil', medium: 'dx', capacityW: coolingW },
       { kind: 'heating-coil', medium: 'gas', capacityW: heatingW },
       { kind: 'supply-fan', flowM3s: cfm * CFM_M3S },
+      { kind: 'condenser', fanCount: condenserFans, note: 'Condenser fans draw outdoor air across the outdoor coil and discharge up. Fan count is a planning value.' },
     ],
     portAt: {
       oa: { id: 'oa', u: -1, v: 0.6 },
@@ -851,8 +914,8 @@ function rooftop(cfm: number, heatingW: number, coolingW: number): UnitSpec {
 }
 
 const UNITS: Record<string, UnitSpec> = {
-  'rtu-12': rooftop(3750, 200 * 293.07107, 12.5 * 3516.85),
-  'rtu-75': rooftop(2650, 150 * 293.07107, 7.5 * 3516.85),
+  'rtu-12': rooftop(3750, 200 * 293.07107, 12.5 * 3516.85, 2),
+  'rtu-75': rooftop(2650, 150 * 293.07107, 7.5 * 3516.85, 1),
   'mau-40': {
     sections: [
       { kind: 'oa-damper', position: 'NC', ducted: false, flowM3s: 4000 * CFM_M3S, note: 'Intake hood with bird screen on the unit.' },

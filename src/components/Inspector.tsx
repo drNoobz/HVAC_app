@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import { CATEGORY_LABEL, getProduct, type CatalogProduct } from '@/domain/catalog';
 import {
   addOpening,
@@ -22,7 +22,7 @@ import {
   updateEquipment,
   updateRoom,
   updateSystem,
-  syncDuctPorts,
+  setUnitSections,
 } from '@/domain/projectOps';
 import { getDuctProduct, roughnessLabel, servicesFor, streamFor, systemsForProduct } from '@/domain/ductCatalog';
 import { ductAreaM2, ductCrossings, ductFlows, ductSizeLabel, ductViewOf, DUCT_SERVICES, DUCT_SERVICE_LABEL, endRise, linkedPort, nodeRuns, polylineLength } from '@/domain/ducts';
@@ -31,12 +31,18 @@ import {
   COOLING_MEDIA,
   HEATING_MEDIA,
   newSection,
+  OFF_AIRSTREAM_KINDS,
   placedPorts,
   portFlow,
   SECTION_KINDS,
   SECTION_LABEL,
+  SECTION_TAG,
   unitSections,
 } from '@/domain/airUnits';
+import { fluidsFor, isLiquidLoop, isPiped, LOOP_FLUID_LABEL, newControlPoint, newPlantLoop, SENSOR_LABEL, SENSOR_SYMBOL, VALVE_LABEL } from '@/domain/controls';
+import { createId } from '@/domain/ids';
+import { packageFromSystem } from '@/domain/systemPackages';
+import { saveUserPackage } from '@/domain/systemTemplates';
 import { doorDirection, hingeEnds, setDoorDirection, type DoorHinge } from '@/domain/doorSwing';
 import { placeBeside, resizeSpan, slideOpeningOffset } from '@/domain/spanFit';
 import {
@@ -54,6 +60,10 @@ import {
   type SurfaceFace,
   type WallFace,
   type AirState,
+  type LoopFluid,
+  type PlantLoop,
+  type SensorKind,
+  type ValveKind,
   type CoilMedium,
   type DesignSeason,
   type DamperPosition,
@@ -83,6 +93,8 @@ import { PLAN_SIDES, WALL_TYPES, edgePortions, facePortions, findInterface, inte
 import { StackEditor } from './StackEditor';
 import { TextField, UnitField } from './Fields';
 import { SiteClimateFields } from './SiteClimateFields';
+import { PointsTable } from './PointsTable';
+import { nodeName, nodeSectionId, UNIT_STREAM_LABEL, unitDuctFlow, unitNetwork } from '@/domain/unitNetwork';
 
 export function Inspector({
   project,
@@ -93,6 +105,9 @@ export function Inspector({
   onSelect,
   onDeleteProject,
   nameFocus = 0,
+  expandedUnits,
+  internalsLayer = false,
+  onToggleInternals,
 }: {
   project: Project;
   selection: Selection;
@@ -102,6 +117,9 @@ export function Inspector({
   onSelect: (selection: Selection) => void;
   onDeleteProject: () => void;
   nameFocus?: number;
+  expandedUnits?: ReadonlySet<string>;
+  internalsLayer?: boolean;
+  onToggleInternals?: (equipmentId: string) => void;
 }) {
   return (
     <aside className="inspector">
@@ -151,7 +169,14 @@ export function Inspector({
         />
       )}
       {selection.kind === 'equipment' && (
-        <EquipmentFields project={project} equipmentId={selection.id} onChange={onChange} onSelect={onSelect} />
+        <EquipmentFields
+          project={project}
+          equipmentId={selection.id}
+          onChange={onChange}
+          onSelect={onSelect}
+          internals={internalsLayer ? 'layer' : expandedUnits?.has(selection.id) ? 'open' : 'closed'}
+          onToggleInternals={onToggleInternals}
+        />
       )}
       {selection.kind === 'wallRun' && <WallRunFields project={project} wallId={selection.id} onChange={onChange} onSelect={onSelect} />}
       {selection.kind === 'duct' && <DuctFields project={project} ductId={selection.id} onChange={onChange} onSelect={onSelect} />}
@@ -159,6 +184,10 @@ export function Inspector({
         <WallOpeningFields project={project} wallId={selection.wallId} openingId={selection.id} onChange={onChange} onSelect={onSelect} />
       )}
       {selection.kind === 'load' && <LoadFields project={project} loadId={selection.id} onChange={onChange} onSelect={onSelect} />}
+      {selection.kind === 'loop' && <PlantLoopFields project={project} loopId={selection.id} onChange={onChange} onSelect={onSelect} />}
+      {selection.kind === 'unit-duct' && <UnitDuctFields project={project} equipmentId={selection.equipmentId} linkId={selection.id} onSelect={onSelect} />}
+      {selection.kind === 'section' && <SectionFields project={project} equipmentId={selection.equipmentId} sectionId={selection.id} onChange={onChange} onSelect={onSelect} />}
+      {selection.kind === 'point' && <ControlPointFields project={project} pointId={selection.id} onChange={onChange} onSelect={onSelect} />}
     </aside>
   );
 }
@@ -1127,6 +1156,43 @@ function OpeningFields({
   );
 }
 
+/** Keep a system as a reusable template in this browser's catalogue. */
+function SaveSystemTemplate({ project, systemId, defaultName }: { project: Project; systemId: string; defaultName: string }) {
+  const [name, setName] = useState('');
+  const [saved, setSaved] = useState<string | null>(null);
+  const empty = !project.equipment.some(item => item.systemId === systemId);
+  return (
+    <section className="prop-block">
+      <p className="prop-section">System template</p>
+      <div className="mini-row">
+        <input className="grow-input" aria-label="Template name" placeholder={defaultName} value={name} onChange={event => setName(event.target.value)} />
+        <button
+          type="button"
+          className="btn small"
+          disabled={empty}
+          onClick={() => {
+            const label = name.trim() || defaultName;
+            const pack = packageFromSystem(project, systemId, label);
+            if (!pack) return;
+            saveUserPackage(pack);
+            setSaved(label);
+            setName('');
+          }}
+        >
+          Save as template
+        </button>
+      </div>
+      <p className="muted">
+        {saved
+          ? `Saved “${saved}” under System templates › My templates. Drag it onto any project's plan.`
+          : empty
+            ? 'Add equipment to this system to save it as a template.'
+            : 'Saves the units, terminals, ducts, loops, and sensors, placed relative to each other.'}
+      </p>
+    </section>
+  );
+}
+
 function SystemFields({
   project,
   systemId,
@@ -1204,6 +1270,8 @@ function SystemFields({
         </div>
       </dl>
       <TextField label="Notes" value={system.notes} multiline onCommit={notes => onChange(updateSystem(project, system.id, { notes }))} />
+      <PointsTable project={project} systemId={system.id} />
+      <SaveSystemTemplate project={project} systemId={system.id} defaultName={system.name} />
       <ul className="plain-list">
         {members.map(item => {
           const product = getProduct(item.catalogId);
@@ -1270,15 +1338,20 @@ function EquipmentFields({
   equipmentId,
   onChange,
   onSelect,
+  internals = 'closed',
+  onToggleInternals,
 }: {
   project: Project;
   equipmentId: string;
   onChange: (project: Project) => void;
   onSelect: (selection: Selection) => void;
+  internals?: 'layer' | 'open' | 'closed';
+  onToggleInternals?: (equipmentId: string) => void;
 }) {
   const item = project.equipment.find(entry => entry.id === equipmentId);
   if (!item) return <p>Equipment not found.</p>;
   const product = getProduct(item.catalogId);
+  if (product?.unit) return <UnitFields project={project} item={item} onChange={onChange} onSelect={onSelect} internals={internals} onToggleInternals={onToggleInternals} />;
   return (
     <div className="stack props">
       <header className="prop-head">
@@ -1301,7 +1374,6 @@ function EquipmentFields({
           )}
         </dl>
       )}
-      {product?.unit && <UnitSectionsEditor project={project} item={item} onChange={onChange} />}
       {product && !product.unit && placedPorts(item).length > 0 && (
         <section className="prop-block">
           <p className="prop-section">Design airflow</p>
@@ -1316,6 +1388,23 @@ function EquipmentFields({
         </section>
       )}
       <PortFlows project={project} item={item} />
+      {product?.category === 'plant' && (
+        <section className="prop-block">
+          <p className="prop-section">Loops</p>
+          {(project.plantLoops ?? []).filter(loop => loop.plantEquipmentId === item.id).length === 0 ? (
+            <p className="muted">No loop names this plant. Pick it on a loop.</p>
+          ) : (
+            <ul className="link-list">
+              {(project.plantLoops ?? []).filter(loop => loop.plantEquipmentId === item.id).map(loop => (
+                <li key={loop.id}>
+                  <button type="button" className="link-btn" onClick={() => onSelect({ kind: 'loop', id: loop.id })}>{loop.name}</button>
+                  <span className="muted">{LOOP_FLUID_LABEL[loop.fluid]}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
       <label className="field">
         <span>Space</span>
         <select value={item.roomId ?? ''} onChange={event => onChange(assignEquipmentRoom(project, item.id, event.target.value || null))}>
@@ -1452,17 +1541,444 @@ function PortFlows({ project, item }: { project: Project; item: PlacedEquipment 
   );
 }
 
+const GPM_M3S = 0.0000630902;
+
+function tempText(c: number | null | undefined, units: Project['units']): string {
+  return c == null ? '' : formatNumber(units === 'IP' ? c * 1.8 + 32 : c, 1);
+}
+
+function readTemp(text: string, units: Project['units']): number | null | undefined {
+  const raw = text.trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return undefined;
+  return units === 'IP' ? (n - 32) / 1.8 : n;
+}
+
+/** Loop, fluid flow, and valves for a piped coil. A loop is shared project-wide and edited here. */
+function CoilPipingFields({
+  project,
+  section,
+  onSection,
+  onProject,
+}: {
+  project: Project;
+  section: UnitSection;
+  onSection: (change: Partial<UnitSection>) => void;
+  onProject: (project: Project) => void;
+}) {
+  const fluids = fluidsFor(section.medium);
+  const loops = (project.plantLoops ?? []).filter(loop => fluids.includes(loop.fluid));
+  const loop = (project.plantLoops ?? []).find(entry => entry.id === section.loopId);
+  const units = project.units;
+  const ip = units === 'IP';
+  const valves = section.valves ?? [];
+  return (
+    <div className="coil-piping">
+      <label className="field">
+        <span>Plant loop</span>
+        <select
+          value={loop?.id ?? ''}
+          onChange={event => {
+            const value = event.target.value;
+            if (value === '__new') {
+              const created = newPlantLoop(fluids[0], `${section.kind === 'cooling-coil' ? 'Cooling' : 'Heating'} loop ${(project.plantLoops ?? []).length + 1}`);
+              onProject(updateSectionInProject({ ...project, plantLoops: [...(project.plantLoops ?? []), created] }, section.id, { loopId: created.id }));
+              return;
+            }
+            onSection({ loopId: value || null });
+          }}
+        >
+          <option value="">Not piped</option>
+          {loops.map(entry => (
+            <option key={entry.id} value={entry.id}>{entry.name}</option>
+          ))}
+          <option value="__new">New loop…</option>
+        </select>
+      </label>
+      {loop && <LoopFields project={project} loop={loop} fluids={fluids} onChange={onProject} />}
+      {loop && isLiquidLoop(loop) && (
+        <label className="field">
+          <span>Coil fluid flow ({ip ? 'GPM' : 'L/s'})</span>
+          <input
+            key={`ff-${section.id}-${section.fluidFlowM3s}`}
+            defaultValue={section.fluidFlowM3s == null ? '' : formatNumber(ip ? section.fluidFlowM3s / GPM_M3S : section.fluidFlowM3s * 1000, ip ? 1 : 2)}
+            inputMode="decimal"
+            onBlur={event => {
+              const raw = event.target.value.trim();
+              const n = Number(raw);
+              if (!raw) onSection({ fluidFlowM3s: null });
+              else if (Number.isFinite(n) && n > 0) onSection({ fluidFlowM3s: ip ? n * GPM_M3S : n / 1000 });
+            }}
+          />
+        </label>
+      )}
+      <div className="mini-list">
+        <span className="mini-title">Valves</span>
+        {valves.map(valve => (
+          <div key={valve.id} className="mini-row">
+            <input
+              key={`tag-${valve.id}-${valve.tag}`}
+              className="mini-tag"
+              aria-label="Valve tag"
+              defaultValue={valve.tag}
+              onBlur={event => {
+                const tag = event.target.value.trim();
+                if (tag !== valve.tag) onSection({ valves: valves.map(entry => (entry.id === valve.id ? { ...entry, tag } : entry)) });
+              }}
+            />
+            <select
+              aria-label="Valve type"
+              value={valve.kind}
+              onChange={event => onSection({ valves: valves.map(entry => (entry.id === valve.id ? { ...entry, kind: event.target.value as ValveKind } : entry)) })}
+            >
+              {(Object.keys(VALVE_LABEL) as ValveKind[]).map(kind => (
+                <option key={kind} value={kind}>{VALVE_LABEL[kind]}</option>
+              ))}
+            </select>
+            <button type="button" className="btn ghost small" aria-label="Remove valve" onClick={() => onSection({ valves: valves.filter(entry => entry.id !== valve.id) })}>✕</button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="btn small"
+          onClick={() => onSection({ valves: [...valves, { id: createId('valve'), kind: section.medium === 'co2-dx' || section.medium === 'dx' ? 'solenoid' : section.kind === 'heating-coil' ? 'three-way' : 'two-way', tag: `V-${countValves(project) + 1}` }] })}
+        >
+          + Valve
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Shared plant loop fields. A loop is project-wide, so edits here change every coil on it. */
+function LoopFields({ project, loop, fluids, onChange }: { project: Project; loop: PlantLoop; fluids: LoopFluid[]; onChange: (project: Project) => void }) {
+  const units = project.units;
+  const tempLabel = units === 'IP' ? '°F' : '°C';
+  const plant = project.equipment.filter(entry => getProduct(entry.catalogId)?.category === 'plant');
+  const setLoop = (patch: Partial<PlantLoop>) => {
+    onChange({ ...project, plantLoops: (project.plantLoops ?? []).map(entry => (entry.id === loop.id ? { ...entry, ...patch } : entry)) });
+  };
+  return (
+    <div className="loop-fields">
+      <TextField label="Loop name" value={loop.name} onCommit={name => setLoop({ name })} />
+      <label className="field">
+        <span>Fluid</span>
+        <select value={loop.fluid} onChange={event => setLoop({ fluid: event.target.value as LoopFluid })}>
+          {fluids.map(fluid => (
+            <option key={fluid} value={fluid}>{LOOP_FLUID_LABEL[fluid]}</option>
+          ))}
+        </select>
+      </label>
+      {(loop.fluid === 'propylene-glycol' || loop.fluid === 'ethylene-glycol') && (
+        <label className="field">
+          <span>Glycol (% by volume)</span>
+          <input
+            key={`gly-${loop.id}-${loop.glycolFraction}`}
+            defaultValue={loop.glycolFraction == null ? '' : formatNumber(loop.glycolFraction * 100, 0)}
+            inputMode="decimal"
+            onBlur={event => {
+              const n = Number(event.target.value);
+              if (Number.isFinite(n) && n >= 0 && n <= 60) setLoop({ glycolFraction: n / 100 });
+            }}
+          />
+        </label>
+      )}
+      <label className="field">
+        <span>{isLiquidLoop(loop) || loop.fluid === 'steam' ? `Supply (${tempLabel})` : `Saturated suction (${tempLabel})`}</span>
+        <input
+          key={`sup-${loop.id}-${loop.supplyC}`}
+          defaultValue={tempText(loop.supplyC, units)}
+          inputMode="decimal"
+          onBlur={event => {
+            const value = readTemp(event.target.value, units);
+            if (value !== undefined) setLoop({ supplyC: value });
+          }}
+        />
+      </label>
+      {isLiquidLoop(loop) && (
+        <label className="field">
+          <span>Return ({tempLabel})</span>
+          <input
+            key={`ret-${loop.id}-${loop.returnC}`}
+            defaultValue={tempText(loop.returnC, units)}
+            inputMode="decimal"
+            onBlur={event => {
+              const value = readTemp(event.target.value, units);
+              if (value !== undefined) setLoop({ returnC: value });
+            }}
+          />
+        </label>
+      )}
+      <label className="field">
+        <span>Plant equipment</span>
+        <select value={loop.plantEquipmentId ?? ''} onChange={event => setLoop({ plantEquipmentId: event.target.value || null })}>
+          <option value="">Not placed</option>
+          {plant.map(entry => (
+            <option key={entry.id} value={entry.id}>{getProduct(entry.catalogId)?.name ?? 'Plant'}</option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
+/** Coils on a loop, with the unit that holds them. */
+function loopCoils(project: Project, loopId: string): { item: PlacedEquipment; section: UnitSection }[] {
+  return project.equipment.flatMap(item => (item.sections ?? []).filter(section => section.loopId === loopId).map(section => ({ item, section })));
+}
+
+function PlantLoopFields({ project, loopId, onChange, onSelect }: { project: Project; loopId: string; onChange: (project: Project) => void; onSelect: (selection: Selection) => void }) {
+  const loop = (project.plantLoops ?? []).find(entry => entry.id === loopId);
+  if (!loop) return <p>Loop not found.</p>;
+  const coils = loopCoils(project, loop.id);
+  const ip = project.units === 'IP';
+  const totalFlow = coils.reduce((sum, coil) => sum + (coil.section.fluidFlowM3s ?? 0), 0);
+  const plant = loop.plantEquipmentId ? project.equipment.find(entry => entry.id === loop.plantEquipmentId) : undefined;
+  return (
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">Plant loop</p>
+        <h2>{loop.name}</h2>
+      </header>
+      <LoopFields project={project} loop={loop} fluids={Object.keys(LOOP_FLUID_LABEL) as LoopFluid[]} onChange={onChange} />
+      <section className="prop-block">
+        <p className="prop-section">Coils on this loop</p>
+        {coils.length === 0 ? (
+          <p className="muted">No coil is piped to this loop. Pick it on a coil in a unit's sections.</p>
+        ) : (
+          <ul className="link-list">
+            {coils.map(({ item, section }) => (
+              <li key={section.id}>
+                <button type="button" className="link-btn" onClick={() => onSelect({ kind: 'equipment', id: item.id })}>
+                  {getProduct(item.catalogId)?.model ?? 'Unit'} · {SECTION_LABEL[section.kind]}
+                </button>
+                <span className="muted">{section.fluidFlowM3s == null ? '' : ip ? `${formatNumber(section.fluidFlowM3s / GPM_M3S, 1)} GPM` : `${formatNumber(section.fluidFlowM3s * 1000, 2)} L/s`}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {isLiquidLoop(loop) && totalFlow > 0 && (
+          <p className="muted">Total coil flow {ip ? `${formatNumber(totalFlow / GPM_M3S, 1)} GPM` : `${formatNumber(totalFlow * 1000, 2)} L/s`}.</p>
+        )}
+      </section>
+      {plant && (
+        <button type="button" className="btn" onClick={() => onSelect({ kind: 'equipment', id: plant.id })}>
+          Show {getProduct(plant.catalogId)?.model ?? 'plant'}
+        </button>
+      )}
+      <TextField label="Notes" value={loop.notes} multiline onCommit={notes => onChange({ ...project, plantLoops: (project.plantLoops ?? []).map(entry => (entry.id === loop.id ? { ...entry, notes } : entry)) })} />
+      <div className="button-row">
+        <button
+          type="button"
+          className="btn danger"
+          onClick={() => {
+            onChange({
+              ...project,
+              plantLoops: (project.plantLoops ?? []).filter(entry => entry.id !== loop.id),
+              equipment: project.equipment.map(item =>
+                item.sections?.some(section => section.loopId === loop.id)
+                  ? { ...item, sections: item.sections.map(section => (section.loopId === loop.id ? { ...section, loopId: null } : section)) }
+                  : item,
+              ),
+            });
+            onSelect({ kind: 'project' });
+          }}
+        >
+          Remove loop
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ControlPointFields({ project, pointId, onChange, onSelect }: { project: Project; pointId: string; onChange: (project: Project) => void; onSelect: (selection: Selection) => void }) {
+  const point = (project.controlPoints ?? []).find(entry => entry.id === pointId);
+  if (!point) return <p>Sensor not found.</p>;
+  const location = point.location;
+  const set = (patch: Partial<typeof point>) => onChange({ ...project, controlPoints: (project.controlPoints ?? []).map(entry => (entry.id === point.id ? { ...entry, ...patch } : entry)) });
+  const unitId = location.kind === 'station' ? location.equipmentId : location.equipmentId;
+  const unit = unitId ? project.equipment.find(entry => entry.id === unitId) : undefined;
+  const section = location.kind === 'station' && unit ? unitSections(unit).find(entry => entry.id === location.sectionId) : undefined;
+  const room = location.kind === 'room' ? project.rooms.find(entry => entry.id === location.roomId) : undefined;
+  return (
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">Sensor</p>
+        <h2>{point.tag}</h2>
+      </header>
+      <TextField label="Tag" value={point.tag} onCommit={tag => set({ tag: tag.trim() || point.tag })} />
+      <label className="field">
+        <span>Type</span>
+        <select value={point.sensor} onChange={event => set({ sensor: event.target.value as SensorKind })}>
+          {(Object.keys(SENSOR_LABEL) as SensorKind[]).map(kind => (
+            <option key={kind} value={kind}>{SENSOR_LABEL[kind]}</option>
+          ))}
+        </select>
+      </label>
+      {location.kind === 'room' && (
+        <label className="field">
+          <span>Space</span>
+          <select value={location.roomId} onChange={event => set({ location: { ...location, roomId: event.target.value } })}>
+            {project.rooms.map(entry => (
+              <option key={entry.id} value={entry.id}>{entry.name}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      <dl className="spec-list">
+        <div>
+          <dt>Location</dt>
+          <dd>{location.kind === 'room' ? `In ${room?.name ?? 'space'}` : `In the airstream after the ${section ? SECTION_LABEL[section.kind].toLowerCase() : 'section'}`}</dd>
+        </div>
+        <div>
+          <dt>Point</dt>
+          <dd>AI</dd>
+        </div>
+      </dl>
+      {unit && (
+        <button type="button" className="btn" onClick={() => onSelect({ kind: 'equipment', id: unit.id })}>
+          Show {getProduct(unit.catalogId)?.model ?? 'unit'}
+        </button>
+      )}
+      <div className="button-row">
+        <button
+          type="button"
+          className="btn danger"
+          onClick={() => {
+            onChange({ ...project, controlPoints: (project.controlPoints ?? []).filter(entry => entry.id !== point.id) });
+            onSelect({ kind: 'project' });
+          }}
+        >
+          Remove sensor
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function countValves(project: Project): number {
+  return project.equipment.reduce((sum, item) => sum + (item.sections ?? []).reduce((inner, section) => inner + (section.valves?.length ?? 0), 0), 0);
+}
+
+function updateSectionInProject(project: Project, sectionId: string, change: Partial<UnitSection>): Project {
+  return {
+    ...project,
+    equipment: project.equipment.map(item =>
+      item.sections?.some(section => section.id === sectionId)
+        ? { ...item, sections: item.sections.map(section => (section.id === sectionId ? { ...section, ...change } : section)) }
+        : item,
+    ),
+  };
+}
+
+const SENSOR_KINDS = Object.keys(SENSOR_LABEL) as SensorKind[];
+
+/** Tagged sensors in the airstream after a section. */
+function StationSensors({ project, item, section, onChange }: { project: Project; item: PlacedEquipment; section: UnitSection; onChange: (project: Project) => void }) {
+  const points = (project.controlPoints ?? []).filter(point => point.location.kind === 'station' && point.location.equipmentId === item.id && point.location.sectionId === section.id);
+  const [tag, setTag] = useState('');
+  const [sensor, setSensor] = useState<SensorKind>('temperature');
+  return (
+    <div className="mini-list">
+      <span className="mini-title">Sensors after this section</span>
+      {points.map(point => (
+        <div key={point.id} className="mini-row">
+          <span className="mini-chip">{point.tag}</span>
+          <span className="muted">{SENSOR_LABEL[point.sensor]}</span>
+          <button type="button" className="btn ghost small" aria-label={`Remove ${point.tag}`} onClick={() => onChange({ ...project, controlPoints: (project.controlPoints ?? []).filter(entry => entry.id !== point.id) })}>✕</button>
+        </div>
+      ))}
+      {(
+        <div className="mini-row">
+          <input className="mini-tag" aria-label="Sensor tag" placeholder="Tag" value={tag} onChange={event => setTag(event.target.value)} />
+          <select aria-label="Sensor type" value={sensor} onChange={event => setSensor(event.target.value as SensorKind)}>
+            {SENSOR_KINDS.filter(kind => kind !== 'co2' || section.kind === 'ra-damper').map(kind => (
+              <option key={kind} value={kind}>{SENSOR_LABEL[kind]}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn small"
+            onClick={() => {
+              const label = tag.trim() || `${SENSOR_SYMBOL[sensor].replace('%', '')}-${(project.controlPoints ?? []).length + 1}`;
+              const base = item.sections ? project : updateEquipment(project, item.id, { sections: unitSections(item) });
+              onChange({ ...base, controlPoints: [...(base.controlPoints ?? []), newControlPoint(label, sensor, { kind: 'station', equipmentId: item.id, sectionId: section.id })] });
+              setTag('');
+            }}
+          >
+            Add
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Room thermostats and sensors that this unit is controlled from. */
+function RoomSensorsEditor({ project, item, onChange }: { project: Project; item: PlacedEquipment; onChange: (project: Project) => void }) {
+  const points = (project.controlPoints ?? []).filter(point => point.location.kind === 'room' && point.location.equipmentId === item.id);
+  const [roomId, setRoomId] = useState(item.roomId ?? project.rooms[0]?.id ?? '');
+  const [sensor, setSensor] = useState<SensorKind>('temperature');
+  const [tag, setTag] = useState('');
+  return (
+    <div className="mini-list room-sensors">
+      <span className="mini-title">Room sensors</span>
+      {points.map(point => {
+        const location = point.location;
+        const room = location.kind === 'room' ? project.rooms.find(entry => entry.id === location.roomId) : undefined;
+        return (
+          <div key={point.id} className="mini-row">
+            <span className="mini-chip">{point.tag}</span>
+            <span className="muted">{`${SENSOR_LABEL[point.sensor]} · ${room?.name ?? 'Room'}`}</span>
+            <button type="button" className="btn ghost small" aria-label={`Remove ${point.tag}`} onClick={() => onChange({ ...project, controlPoints: (project.controlPoints ?? []).filter(entry => entry.id !== point.id) })}>✕</button>
+          </div>
+        );
+      })}
+      {project.rooms.length === 0 ? (
+        <span className="muted">Add a space to place room sensors.</span>
+      ) : (
+        <div className="mini-row">
+          <input className="mini-tag" aria-label="Room sensor tag" placeholder="Tag" value={tag} onChange={event => setTag(event.target.value)} />
+          <select aria-label="Room" value={roomId} onChange={event => setRoomId(event.target.value)}>
+            {project.rooms.map(room => (
+              <option key={room.id} value={room.id}>{room.name}</option>
+            ))}
+          </select>
+          <select aria-label="Room sensor type" value={sensor} onChange={event => setSensor(event.target.value as SensorKind)}>
+            {(['temperature', 'humidity', 'co2'] as SensorKind[]).map(kind => (
+              <option key={kind} value={kind}>{SENSOR_LABEL[kind]}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn small"
+            disabled={!roomId}
+            onClick={() => {
+              const label = tag.trim() || SENSOR_SYMBOL[sensor];
+              onChange({ ...project, controlPoints: [...(project.controlPoints ?? []), newControlPoint(label, sensor, { kind: 'room', roomId, equipmentId: item.id })] });
+              setTag('');
+            }}
+          >
+            Add
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const STATE_LABEL: Partial<Record<UnitSectionKind, string>> = {
-  'oa-damper': 'Outdoor air (blank uses site climate)',
-  'ra-damper': 'Return air (blank uses indoor targets)',
-  'mixing-box': 'Mixed air (blank is calculated)',
-  'cooling-coil': 'Leaving air',
-  'heating-coil': 'Leaving air',
-  'heat-recovery': 'Leaving air',
-  humidifier: 'Leaving air',
+  'oa-damper': 'Outdoor air design condition',
+  'ra-damper': 'Return air design condition',
+  'mixing-box': 'Mixed air design condition',
+  'cooling-coil': 'Leaving air design condition',
+  'heating-coil': 'Leaving air design condition',
+  'heat-recovery': 'Leaving air design condition',
+  humidifier: 'Leaving air design condition',
 };
 
-/** Entered dry bulb, wet bulb, and RH for each design season. Blank fields are carried or calculated. */
+/** Design dry bulb, wet bulb, and RH for each season, as on the drawings. Inputs for the solver; nothing is derived here. */
 function StateFields({
   label,
   units,
@@ -1544,118 +2060,362 @@ function StateFields({
   );
 }
 
-/** Sections of an air-handling unit in airflow order. Ports and port flows follow from them. */
-function UnitSectionsEditor({ project, item, onChange }: { project: Project; item: PlacedEquipment; onChange: (project: Project) => void }) {
+/** Supply airflow on the supply fan and minimum outdoor air on the outdoor damper: the two unit inputs changed most. */
+function setSectionFlow(project: Project, item: PlacedEquipment, kind: UnitSectionKind, flowM3s: number | null): Project {
   const sections = unitSections(item);
-  const save = (next: UnitSection[]) => onChange(syncDuctPorts(updateEquipment(project, item.id, { sections: next })));
-  const patch = (id: string, change: Partial<UnitSection>) => save(sections.map(section => (section.id === id ? { ...section, ...change } : section)));
-  const move = (index: number, delta: number) => {
+  if (!sections.some(section => section.kind === kind)) return project;
+  return setUnitSections(project, item.id, sections.map(section => (section.kind === kind ? { ...section, flowM3s } : section)));
+}
+
+/**
+ * A unit with its own internal network (RTU, AHU, MAU, ERV): only the inputs changed most, and its sections as a list.
+ * Each section opens on its own, here or on the plan, so the inspector never shows every section at once.
+ */
+function UnitFields({
+  project,
+  item,
+  onChange,
+  onSelect,
+  internals,
+  onToggleInternals,
+}: {
+  project: Project;
+  item: PlacedEquipment;
+  onChange: (project: Project) => void;
+  onSelect: (selection: Selection) => void;
+  internals: 'layer' | 'open' | 'closed';
+  onToggleInternals?: (equipmentId: string) => void;
+}) {
+  const product = getProduct(item.catalogId)!;
+  const sections = unitSections(item);
+  const supply = sections.find(section => section.kind === 'supply-fan');
+  const outdoor = sections.find(section => section.kind === 'oa-damper');
+  const roomPoints = (project.controlPoints ?? []).filter(point => point.location.kind === 'room' && point.location.equipmentId === item.id);
+  return (
+    <div className="stack props">
+      <header className="prop-head">
+        <p className="prop-kicker">{CATEGORY_LABEL[product.category] ?? 'Unit'}</p>
+        <h2>{product.model}</h2>
+        <p className="muted">{product.name}</p>
+      </header>
+      <label className="field">
+        <span>System</span>
+        <select value={item.systemId ?? ''} onChange={event => onChange(updateEquipment(project, item.id, { systemId: event.target.value || null }))}>
+          <option value="">Unassigned</option>
+          {project.systems.map(system => (
+            <option key={system.id} value={system.id}>{system.name}</option>
+          ))}
+        </select>
+      </label>
+      {supply && (
+        <FlowInput label="Supply airflow" units={project.units} value={supply.flowM3s ?? null} onCommit={value => onChange(setSectionFlow(project, item, 'supply-fan', value))} />
+      )}
+      {outdoor && (
+        <FlowInput label="Minimum outdoor air" units={project.units} value={outdoor.flowM3s ?? null} onCommit={value => onChange(setSectionFlow(project, item, 'oa-damper', value))} />
+      )}
+      <section className="prop-block">
+        <div className="prop-row">
+          <p className="prop-section">Sections</p>
+          {internals === 'layer' ? (
+            <span className="muted">Shown on the plan</span>
+          ) : (
+            <button type="button" className="btn small" onClick={() => onToggleInternals?.(item.id)}>
+              {internals === 'open' ? 'Close on plan' : 'Open on plan'}
+            </button>
+          )}
+        </div>
+        <ol className="section-rows">
+          {sections.map(section => (
+            <li key={section.id}>
+              <button type="button" onClick={() => onSelect({ kind: 'section', equipmentId: item.id, id: section.id })}>
+                <span className="mini-chip">{SECTION_TAG[section.kind]}</span>
+                <span className="section-row-name">{SECTION_LABEL[section.kind]}</span>
+                <span className="muted">{sectionBrief(project, section)}</span>
+              </button>
+            </li>
+          ))}
+        </ol>
+        <label className="field">
+          <span>Add section</span>
+          <select
+            value=""
+            onChange={event => {
+              const kind = event.target.value as UnitSectionKind;
+              if (!kind) return;
+              const created = newSection(kind);
+              onChange(setUnitSections(project, item.id, [...sections, created]));
+              onSelect({ kind: 'section', equipmentId: item.id, id: created.id });
+            }}
+          >
+            <option value="">Choose…</option>
+            {SECTION_KINDS.map(kind => (
+              <option key={kind} value={kind}>{SECTION_LABEL[kind]}</option>
+            ))}
+          </select>
+        </label>
+      </section>
+      <details className="prop-more">
+        <summary>Room sensors{roomPoints.length > 0 ? ` · ${roomPoints.length}` : ''}</summary>
+        <RoomSensorsEditor project={project} item={item} onChange={onChange} />
+      </details>
+      <details className="prop-more">
+        <summary>Placement and notes</summary>
+        <label className="field">
+          <span>Space</span>
+          <select value={item.roomId ?? ''} onChange={event => onChange(assignEquipmentRoom(project, item.id, event.target.value || null))}>
+            <option value="">Unassigned</option>
+            {project.rooms.map(room => (
+              <option key={room.id} value={room.id}>{room.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Quantity</span>
+          <input
+            key={`${item.id}-${item.quantity}`}
+            inputMode="numeric"
+            defaultValue={item.quantity}
+            onBlur={event => {
+              const quantity = Number(event.target.value);
+              if (Number.isInteger(quantity) && quantity >= 1) onChange(updateEquipment(project, item.id, { quantity }));
+              else event.target.value = String(item.quantity);
+            }}
+          />
+        </label>
+        <TextField label="Notes" value={item.notes} multiline onCommit={notes => onChange(updateEquipment(project, item.id, { notes }))} />
+      </details>
+      <details className="prop-more">
+        <summary>Product data</summary>
+        <dl className="spec-list">
+          {productSpecRows(product, project.units).map(row => (
+            <div key={row.label}>
+              <dt>{row.label}</dt>
+              <dd>{row.value}</dd>
+            </div>
+          ))}
+          {product.gaps.length > 0 && (
+            <div>
+              <dt>Gaps</dt>
+              <dd>{product.gaps.join(' ')}</dd>
+            </div>
+          )}
+        </dl>
+        <PortFlows project={project} item={item} />
+      </details>
+      <div className="button-row">
+        <button type="button" className="btn" onClick={() => onChange(duplicateEquipment(project, item.id))}>
+          Duplicate
+        </button>
+        <button
+          type="button"
+          className="btn danger"
+          onClick={() => {
+            onChange(removeEquipment(project, item.id));
+            onSelect({ kind: 'project' });
+          }}
+        >
+          Remove
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** One line per section in the unit list: the inputs that tell sections apart. */
+function sectionBrief(project: Project, section: UnitSection): string {
+  const bits: string[] = [];
+  if (section.position) bits.push(section.position);
+  if (section.medium) bits.push(COIL_MEDIUM_LABEL[section.medium]);
+  if (section.flowM3s != null) bits.push(formatFlow(section.flowM3s, project.units));
+  const loop = section.loopId ? (project.plantLoops ?? []).find(entry => entry.id === section.loopId) : undefined;
+  if (loop) bits.push(loop.name);
+  if ((section.valves ?? []).length > 0) bits.push((section.valves ?? []).map(valve => valve.tag).join(' '));
+  return bits.join(' · ');
+}
+
+/** One duct inside a unit: which stream it carries, between what, and its design airflow. Nothing to enter. */
+function UnitDuctFields({ project, equipmentId, linkId, onSelect }: { project: Project; equipmentId: string; linkId: string; onSelect: (selection: Selection) => void }) {
+  const item = project.equipment.find(entry => entry.id === equipmentId);
+  if (!item) return <p>Unit not found.</p>;
+  const link = unitNetwork(item).links.find(entry => entry.id === linkId);
+  if (!link) return <p>Duct not found.</p>;
+  const product = getProduct(item.catalogId);
+  const flow = unitDuctFlow(item, link);
+  const end = (nodeId: string) => {
+    const sectionId = nodeSectionId(nodeId);
+    return sectionId ? (
+      <button type="button" className="link-btn" onClick={() => onSelect({ kind: 'section', equipmentId: item.id, id: sectionId })}>
+        {nodeName(item, nodeId)}
+      </button>
+    ) : (
+      nodeName(item, nodeId)
+    );
+  };
+  return (
+    <div className="stack props">
+      <header className="prop-head">
+        <button type="button" className="link-btn prop-back" onClick={() => onSelect({ kind: 'equipment', id: item.id })}>
+          ‹ {product?.model ?? 'Unit'}
+        </button>
+        <p className="prop-kicker">Duct inside the unit</p>
+        <h2>{UNIT_STREAM_LABEL[link.stream]}</h2>
+      </header>
+      <dl className="spec-list">
+        <div>
+          <dt>From</dt>
+          <dd>{end(link.from)}</dd>
+        </div>
+        <div>
+          <dt>To</dt>
+          <dd>{end(link.to)}</dd>
+        </div>
+        <div>
+          <dt>Design airflow</dt>
+          <dd>{flow != null ? formatFlow(flow, project.units) : 'Set the fan and damper airflows'}</dd>
+        </div>
+      </dl>
+      <p className="muted">Airflow follows from the supply fan, outdoor-air, and relief inputs on the unit.</p>
+    </div>
+  );
+}
+
+/** One unit section: its inputs only. Opened from the unit's section list or by clicking it on the plan. */
+function SectionFields({
+  project,
+  equipmentId,
+  sectionId,
+  onChange,
+  onSelect,
+}: {
+  project: Project;
+  equipmentId: string;
+  sectionId: string;
+  onChange: (project: Project) => void;
+  onSelect: (selection: Selection) => void;
+}) {
+  const item = project.equipment.find(entry => entry.id === equipmentId);
+  if (!item) return <p>Unit not found.</p>;
+  const sections = unitSections(item);
+  const index = sections.findIndex(entry => entry.id === sectionId);
+  const section = sections[index];
+  if (!section) return <p>Section not found.</p>;
+  const product = getProduct(item.catalogId);
+  const save = (next: UnitSection[]) => onChange(setUnitSections(project, item.id, next));
+  const patch = (change: Partial<UnitSection>) => save(sections.map(entry => (entry.id === section.id ? { ...entry, ...change } : entry)));
+  const move = (delta: number) => {
     const target = index + delta;
     if (target < 0 || target >= sections.length) return;
     const next = [...sections];
     [next[index], next[target]] = [next[target], next[index]];
     save(next);
   };
+  const damper = section.kind === 'oa-damper' || section.kind === 'ra-damper' || section.kind === 'exhaust-damper';
+  const coil = section.kind === 'cooling-coil' || section.kind === 'heating-coil';
+  const offAirstream = OFF_AIRSTREAM_KINDS.includes(section.kind);
+  const flowed = section.kind === 'supply-fan' || section.kind === 'relief-fan' || section.kind === 'oa-damper' || section.kind === 'exhaust-damper';
   const powerLabel = project.units === 'IP' ? 'kBtu/h' : 'kW';
   const toPower = (watts: number | null | undefined) => (watts == null ? '' : formatNumber(project.units === 'IP' ? watts / 293.07107 : watts / 1000, 1));
   return (
-    <section className="prop-block">
-      <p className="prop-section">Unit sections</p>
-      <p className="muted">In airflow order, outdoor and return side first. Air connections follow from the sections.</p>
-      <ol className="section-list">
-        {sections.map((section, index) => {
-          const damper = section.kind === 'oa-damper' || section.kind === 'ra-damper' || section.kind === 'exhaust-damper';
-          const coil = section.kind === 'cooling-coil' || section.kind === 'heating-coil';
-          const flowed = section.kind === 'supply-fan' || section.kind === 'relief-fan' || section.kind === 'oa-damper' || section.kind === 'exhaust-damper';
-          return (
-            <li key={section.id} className="section-item">
-              <div className="section-head">
-                <strong>{SECTION_LABEL[section.kind]}</strong>
-                <span className="section-tools">
-                  <button type="button" className="btn ghost small" aria-label="Move up" disabled={index === 0} onClick={() => move(index, -1)}>↑</button>
-                  <button type="button" className="btn ghost small" aria-label="Move down" disabled={index === sections.length - 1} onClick={() => move(index, 1)}>↓</button>
-                  <button type="button" className="btn ghost small" aria-label="Remove section" onClick={() => save(sections.filter(entry => entry.id !== section.id))}>✕</button>
-                </span>
-              </div>
-              {damper && (
-                <label className="field">
-                  <span>Fail position</span>
-                  <select value={section.position ?? 'NC'} onChange={event => patch(section.id, { position: event.target.value as DamperPosition })}>
-                    <option value="NC">Normally closed (NC)</option>
-                    <option value="NO">Normally open (NO)</option>
-                  </select>
-                </label>
-              )}
-              {(section.kind === 'oa-damper' || section.kind === 'exhaust-damper') && (
-                <label className="field check">
-                  <input type="checkbox" checked={section.ducted !== false} onChange={event => patch(section.id, { ducted: event.target.checked })} />
-                  <span>Ducted connection (off: hood on the casing)</span>
-                </label>
-              )}
-              {coil && (
-                <label className="field">
-                  <span>Medium</span>
-                  <select value={section.medium ?? ''} onChange={event => patch(section.id, { medium: event.target.value as CoilMedium })}>
-                    {(section.kind === 'cooling-coil' ? COOLING_MEDIA : HEATING_MEDIA).map(medium => (
-                      <option key={medium} value={medium}>{COIL_MEDIUM_LABEL[medium]}</option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {coil && (
-                <label className="field">
-                  <span>Capacity ({powerLabel})</span>
-                  <input
-                    key={`cap-${section.id}-${section.capacityW}`}
-                    defaultValue={toPower(section.capacityW)}
-                    placeholder="Not selected"
-                    inputMode="decimal"
-                    onBlur={event => {
-                      const raw = event.target.value.trim();
-                      const n = Number(raw);
-                      if (!raw) patch(section.id, { capacityW: null });
-                      else if (Number.isFinite(n) && n > 0) patch(section.id, { capacityW: project.units === 'IP' ? n * 293.07107 : n * 1000 });
-                    }}
-                  />
-                </label>
-              )}
-              {flowed && (
-                <FlowInput
-                  label={section.kind === 'oa-damper' ? 'Minimum outdoor air' : 'Airflow'}
-                  units={project.units}
-                  value={section.flowM3s ?? null}
-                  onCommit={value => patch(section.id, { flowM3s: value })}
-                />
-              )}
-              {STATE_LABEL[section.kind] && (
-                <StateFields
-                  label={STATE_LABEL[section.kind]!}
-                  units={project.units}
-                  states={section.states}
-                  onChange={states => patch(section.id, { states })}
-                />
-              )}
-              {section.note && <p className="muted">{section.note}</p>}
-            </li>
-          );
-        })}
-      </ol>
-      <label className="field">
-        <span>Add section</span>
-        <select
-          value=""
-          onChange={event => {
-            const kind = event.target.value as UnitSectionKind;
-            if (kind) save([...sections, newSection(kind)]);
-          }}
-        >
-          <option value="">Choose…</option>
-          {SECTION_KINDS.map(kind => (
-            <option key={kind} value={kind}>{SECTION_LABEL[kind]}</option>
-          ))}
-        </select>
-      </label>
-    </section>
+    <div className="stack props">
+      <header className="prop-head">
+        <button type="button" className="link-btn prop-back" onClick={() => onSelect({ kind: 'equipment', id: item.id })}>
+          ‹ {product?.model ?? 'Unit'}
+        </button>
+        <p className="prop-kicker">Section {index + 1} of {sections.length}</p>
+        <h2>{SECTION_LABEL[section.kind]}</h2>
+      </header>
+      {damper && (
+        <label className="field">
+          <span>Fail position</span>
+          <select value={section.position ?? 'NC'} onChange={event => patch({ position: event.target.value as DamperPosition })}>
+            <option value="NC">Normally closed (NC)</option>
+            <option value="NO">Normally open (NO)</option>
+          </select>
+        </label>
+      )}
+      {(section.kind === 'oa-damper' || section.kind === 'exhaust-damper') && (
+        <label className="field check">
+          <input type="checkbox" checked={section.ducted !== false} onChange={event => patch({ ducted: event.target.checked })} />
+          <span>Ducted connection (off: hood on the casing)</span>
+        </label>
+      )}
+      {coil && (
+        <label className="field">
+          <span>Medium</span>
+          <select value={section.medium ?? ''} onChange={event => patch({ medium: event.target.value as CoilMedium })}>
+            {(section.kind === 'cooling-coil' ? COOLING_MEDIA : HEATING_MEDIA).map(medium => (
+              <option key={medium} value={medium}>{COIL_MEDIUM_LABEL[medium]}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {coil && (
+        <label className="field">
+          <span>Selected capacity ({powerLabel})</span>
+          <input
+            key={`cap-${section.id}-${section.capacityW}`}
+            defaultValue={toPower(section.capacityW)}
+            placeholder="Not selected"
+            inputMode="decimal"
+            onBlur={event => {
+              const raw = event.target.value.trim();
+              const n = Number(raw);
+              if (!raw) patch({ capacityW: null });
+              else if (Number.isFinite(n) && n > 0) patch({ capacityW: project.units === 'IP' ? n * 293.07107 : n * 1000 });
+            }}
+          />
+        </label>
+      )}
+      {section.kind === 'condenser' && (
+        <label className="field">
+          <span>Condenser fans</span>
+          <input
+            key={`fans-${section.id}-${section.fanCount ?? 1}`}
+            inputMode="numeric"
+            defaultValue={section.fanCount ?? 1}
+            onBlur={event => {
+              const count = Number(event.target.value);
+              if (Number.isInteger(count) && count >= 1 && count <= 6) patch({ fanCount: count });
+              else event.target.value = String(section.fanCount ?? 1);
+            }}
+          />
+        </label>
+      )}
+      {flowed && (
+        <FlowInput
+          label={section.kind === 'oa-damper' ? 'Minimum outdoor air' : 'Airflow'}
+          units={project.units}
+          value={section.flowM3s ?? null}
+          onCommit={value => patch({ flowM3s: value })}
+        />
+      )}
+      {coil && isPiped(section.medium) && (
+        <CoilPipingFields project={project} section={section} onSection={change => patch(change)} onProject={onChange} />
+      )}
+      {STATE_LABEL[section.kind] && (
+        <StateFields label={STATE_LABEL[section.kind]!} units={project.units} states={section.states} onChange={states => patch({ states })} />
+      )}
+      {!offAirstream && <StationSensors project={project} item={item} section={section} onChange={onChange} />}
+      {section.note && <p className="muted">{section.note}</p>}
+      {!offAirstream && <div className="button-row">
+        <button type="button" className="btn" disabled={index === 0} onClick={() => move(-1)}>
+          Move toward intake
+        </button>
+        <button type="button" className="btn" disabled={index === sections.length - 1} onClick={() => move(1)}>
+          Move toward supply
+        </button>
+      </div>}
+      <button
+        type="button"
+        className="btn danger"
+        onClick={() => {
+          save(sections.filter(entry => entry.id !== section.id));
+          onSelect({ kind: 'equipment', id: item.id });
+        }}
+      >
+        Remove section
+      </button>
+    </div>
   );
 }
 

@@ -5,6 +5,8 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type M
 import { catalogToken } from '@/domain/catalogDrag';
 import { buildChecks, stepForSelection, type BuildStep, type CheckIssue } from '@/domain/checks';
 import { siteMissing, siteOf } from '@/domain/climate';
+import { LOOP_FLUID_LABEL, newPlantLoop, SENSOR_LABEL } from '@/domain/controls';
+import { SECTION_LABEL, unitSections } from '@/domain/airUnits';
 import { getLoadProduct, LOAD_CATEGORY_LABEL, LOAD_CATEGORY_ORDER, loadGroups, type LoadCategory } from '@/domain/loadCatalog';
 import { addLoad, loadLabel, loadSpec, removeLoad, roomLoads, sumLoads, updateLoad } from '@/domain/loads';
 import {
@@ -18,7 +20,8 @@ import {
   type EquipmentCategory,
   type EquipmentFamily,
 } from '@/domain/catalog';
-import { applySystemPackage, SYSTEM_PACKAGES } from '@/domain/systemPackages';
+import { applySystemPackage, PACKAGE_GROUPS, packageSummary } from '@/domain/systemPackages';
+import { useSystemPackages } from './useSystemPackages';
 import { downloadText, fileSlug } from '@/domain/download';
 import {
   addDuct,
@@ -63,7 +66,6 @@ import { EquipmentIcon, categoryIcon, equipmentIconFor } from './EquipmentIcon';
 import { LoadIcon } from './LoadIcon';
 import { Inspector } from './Inspector';
 import { LibraryPanel } from './LibraryPanel';
-import { SchematicPanel } from './SchematicPanel';
 import { SchedulePanel } from './SchedulePanel';
 
 const Viewport = dynamic(() => import('./Viewport'), {
@@ -71,11 +73,10 @@ const Viewport = dynamic(() => import('./Viewport'), {
   loading: () => <div className="viewport-loading">Loading 3D workspace…</div>,
 });
 
-type CenterView = 'model' | 'schematic' | 'schedule' | 'library' | 'boundary';
+type CenterView = 'model' | 'schedule' | 'library' | 'boundary';
 
 const CENTER_VIEWS: { id: CenterView; label: string }[] = [
   { id: 'model', label: 'Build' },
-  { id: 'schematic', label: 'Schematic' },
   { id: 'schedule', label: 'Schedule' },
   { id: 'library', label: 'Library' },
   { id: 'boundary', label: 'Thermonode' },
@@ -84,8 +85,7 @@ const CENTER_VIEWS: { id: CenterView; label: string }[] = [
 const STEPS: { id: BuildStep; label: string }[] = [
   { id: 'spaces', label: 'Spaces' },
   { id: 'loads', label: 'Loads' },
-  { id: 'equipment', label: 'Equipment' },
-  { id: 'ducts', label: 'Ducts' },
+  { id: 'systems', label: 'Systems' },
   { id: 'check', label: 'Check' },
 ];
 
@@ -94,10 +94,18 @@ type ToolKind = 'select' | 'wall' | 'draw' | 'door' | 'window' | 'load' | 'place
 const STEP_TOOLS: Record<BuildStep, ToolKind[]> = {
   spaces: ['select', 'wall', 'draw'],
   loads: ['select'],
-  equipment: ['select'],
-  ducts: ['select'],
+  systems: ['select'],
   check: ['select'],
 };
+
+/** Layers inside the Systems phase, toggled from the options strip. */
+const SYSTEM_LAYERS: { key: 'equipment' | 'ducts' | 'piping' | 'controls' | 'internals'; label: string; hint: string }[] = [
+  { key: 'equipment', label: 'Equipment', hint: 'Units, fans, terminals, and plant' },
+  { key: 'ducts', label: 'Ducts', hint: 'Duct runs and junctions' },
+  { key: 'piping', label: 'Piping', hint: 'Plant loops from plant to coils' },
+  { key: 'controls', label: 'Controls', hint: 'Room sensors' },
+  { key: 'internals', label: 'Unit internals', hint: 'Sections, valves, and duct sensors inside every unit, at plan scale' },
+];
 
 const TOOL_LABEL: Record<ToolKind, string> = {
   select: 'Select',
@@ -110,20 +118,10 @@ const TOOL_LABEL: Record<ToolKind, string> = {
   duct: 'Draw duct',
 };
 
-/** Selections that keep the current step. Others switch to their own step. */
-const STEP_SELECTIONS: Record<BuildStep, Selection['kind'][]> = {
-  spaces: ['room', 'surface', 'interface', 'opening', 'wallRun', 'wallOpening'],
-  loads: ['load', 'room', 'site'],
-  equipment: ['equipment', 'system'],
-  ducts: ['duct', 'equipment', 'system'],
-  check: [],
-};
-
 function toolStep(tool: EditorTool): BuildStep | null {
   if (tool.kind === 'wall' || tool.kind === 'draw' || tool.kind === 'door' || tool.kind === 'window') return 'spaces';
   if (tool.kind === 'load') return 'loads';
-  if (tool.kind === 'place') return 'equipment';
-  if (tool.kind === 'duct') return 'ducts';
+  if (tool.kind === 'place' || tool.kind === 'duct') return 'systems';
   return null;
 }
 
@@ -170,13 +168,30 @@ export function Studio({
   const [step, setStep] = useState<BuildStep>('spaces');
   const [layers, setLayers] = useState<PlanLayers>(DEFAULT_LAYERS);
   const [layersOpen, setLayersOpen] = useState(false);
+  // Lock positions: clicks only select; nothing on the plan can be dragged. Remembered between visits.
+  const [positionsLocked, setPositionsLocked] = useState(false);
+  useEffect(() => {
+    setPositionsLocked(window.localStorage.getItem(LOCK_KEY) === '1');
+  }, []);
+  const toggleLock = () =>
+    setPositionsLocked(locked => {
+      window.localStorage.setItem(LOCK_KEY, locked ? '0' : '1');
+      return !locked;
+    });
+  const [expandedUnits, setExpandedUnits] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleInternals = (id: string) =>
+    setExpandedUnits(current => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const [fitToken, setFitToken] = useState(0);
   const [query, setQuery] = useState('');
   const [catalogFamily, setCatalogFamily] = useState<EquipmentFamily | 'all'>('all');
   const [lastProductId, setLastProductId] = useState<string | null>(null);
   const [targetSystemId, setTargetSystemId] = useState('');
   const [loadQuery, setLoadQuery] = useState('');
-  const [ductQuery, setDuctQuery] = useState('');
   const [spaceQuery, setSpaceQuery] = useState('');
   const [loadCategory, setLoadCategory] = useState<LoadCategory | 'all'>('all');
   const [sidePanel, setSidePanel] = useState<'project' | 'catalog'>('project');
@@ -237,7 +252,8 @@ export function Studio({
   const select = (next: Selection) => {
     setSelection(next);
     const target = stepForSelection(next);
-    if (target && step !== 'check' && !STEP_SELECTIONS[step].includes(next.kind)) changeStep(target);
+    // Selecting an item always moves to the phase that owns it (Check keeps its issue list open).
+    if (target && step !== 'check' && target !== step) changeStep(target);
   };
   const soleInterface = (roomId: string, anchor: string) => {
     const matches = interfaceTargets(project.rooms).filter(target => target.sides.some(side => side.roomId === roomId && side.anchor === anchor));
@@ -308,6 +324,7 @@ export function Studio({
     setView('model');
     setFitToken(token => token + 1);
     setTemplateName(`${project.name} template`);
+    setExpandedUnits(new Set());
     past.current = [];
     future.current = [];
     setHistoryTick({ undo: false, redo: false });
@@ -511,7 +528,7 @@ export function Studio({
     const next = { kind: 'duct' as const, catalogId: product.id, systemId: system?.id ?? '', service, shape: product.shape, widthM, heightM };
     setTool(next);
     setView('model');
-    if (step !== 'check') setStep('ducts');
+    if (step !== 'check') setStep('systems');
     return next;
   };
   const pickTool = (kind: ToolKind) => {
@@ -540,7 +557,7 @@ export function Studio({
     const created = next.systems.find(system => !before.has(system.id));
     setScene('plan');
     setView('model');
-    if (step !== 'check') setStep('equipment');
+    if (step !== 'check') setStep('systems');
     if (created) select({ kind: 'system', id: created.id });
   };
   const placeLoad = (point: { xM: number; yM: number }, id: string) => {
@@ -553,8 +570,7 @@ export function Studio({
   const stepCount = (id: BuildStep): string => {
     if (id === 'spaces') return `${project.rooms.length}`;
     if (id === 'loads') return `${(project.loads ?? []).length}`;
-    if (id === 'equipment') return `${project.equipment.length}`;
-    if (id === 'ducts') return `${(project.ducts ?? []).length}`;
+    if (id === 'systems') return `${project.equipment.length}`;
     return checks.length === 0 ? 'OK' : `${checks.length}`;
   };
   const toolHint = (): string => {
@@ -563,8 +579,7 @@ export function Studio({
     if (tool.kind === 'duct') return 'Click to bend the run. Esc finishes.';
     if (step === 'spaces') return 'Drag a wall type, door, or window onto a wall.';
     if (step === 'loads') return 'Set climate, then drag loads into a space.';
-    if (step === 'equipment') return 'Drag equipment or a system package onto the plan.';
-    if (step === 'ducts') return 'Drag a duct onto the plan to start.';
+    if (step === 'systems') return 'Drag equipment, a system template, or a duct onto the plan. Double-click a unit to open its internals.';
     return checks.length === 0 ? 'No issues found.' : 'Select an issue on the left to see it on the plan.';
   };
 
@@ -583,7 +598,6 @@ export function Studio({
       : project.units === 'IP'
         ? `${formatNumber((site.heatingDbC * 9) / 5 + 32, 0)} °F`
         : `${formatNumber(site.heatingDbC, 1)} °C`;
-  const lastProduct = lastProductId ? getProduct(lastProductId) : undefined;
   const wallType = wallTypeId ? WALL_TYPES.find(item => item.id === wallTypeId) : undefined;
   const spaceNeedle = spaceQuery.trim().toLowerCase();
   const spaceWalls = WALL_TYPES.filter(type => `${type.label} ${type.detail}`.toLowerCase().includes(spaceNeedle));
@@ -735,7 +749,7 @@ export function Studio({
           ))}
         </nav>
       )}
-      <div className={`studio-body${view === 'model' ? '' : view === 'schematic' ? ' is-schematic' : ' is-wide'}`}>
+      <div className={`studio-body${view === 'model' ? '' : ' is-wide'}`}>
         {view === 'model' && (
           <aside className="side" aria-label={`${stepLabel} panel`}>
             <div className="side-tabs" role="tablist" aria-label="Project and catalogue">
@@ -776,7 +790,7 @@ export function Studio({
                   {project.rooms.length === 0 ? (
                     <p className="panel-empty">Draw walls or a room on the plan, or add a space by size.</p>
                   ) : (
-                    <ProjectTree scope="spaces" project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} />
+                    <ProjectTree scope="spaces" project={project} selection={selection} onSelect={select} onContextMenu={openMenu} />
                   )}
                 </section>
               )}
@@ -815,7 +829,7 @@ export function Studio({
                           const totals = sumLoads(project, items);
                           return (
                             <li key={room.id}>
-                              <button type="button" className={`space-row${selection.kind === 'room' && selection.id === room.id ? ' active' : ''}`} onClick={() => setSelection({ kind: 'room', id: room.id })}>
+                              <button type="button" className={`space-row${selection.kind === 'room' && selection.id === room.id ? ' active' : ''}`} onClick={() => select({ kind: 'room', id: room.id })}>
                                 <span className="space-name">{room.name || 'Space'}</span>
                                 <span className="panel-meta">{items.length ? `${formatPower(totals.sensibleW, project.units)} S · ${formatPower(totals.latentW, project.units)} L` : 'No loads'}</span>
                               </button>
@@ -828,7 +842,7 @@ export function Studio({
                                         <button
                                           type="button"
                                           className={selection.kind === 'load' && selection.id === item.id ? 'active' : ''}
-                                          onClick={() => setSelection({ kind: 'load', id: item.id })}
+                                          onClick={() => select({ kind: 'load', id: item.id })}
                                           onContextMenu={event => {
                                             event.preventDefault();
                                             openMenu({ kind: 'load', id: item.id }, event.clientX, event.clientY);
@@ -851,31 +865,40 @@ export function Studio({
                   </section>
                 </>
               )}
-              {sidePanel === 'project' && step === 'equipment' && (
-                <section className="panel-section">
-                  <header className="panel-head">
-                    <h3>Systems</h3>
-                    <button
-                      type="button"
-                      className="panel-btn"
-                      onClick={event => {
-                        const rect = event.currentTarget.getBoundingClientRect();
-                        openSystemMenu(rect.left, rect.bottom + 4);
-                      }}
-                    >
-                      + Add system
-                    </button>
-                  </header>
-                  {project.systems.length === 0 && project.equipment.length === 0 ? (
-                    <p className="panel-empty">Add a system, such as kitchen exhaust or make-up air, then place its equipment.</p>
-                  ) : (
-                    <ProjectTree scope="systems" project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} />
-                  )}
-                </section>
-              )}
-              {sidePanel === 'project' && step === 'ducts' && (
+              {sidePanel === 'project' && step === 'systems' && (
                 <>
                   <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Systems</h3>
+                      <button
+                        type="button"
+                        className="panel-btn"
+                        onClick={event => {
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          openSystemMenu(rect.left, rect.bottom + 4);
+                        }}
+                      >
+                        + Add system
+                      </button>
+                    </header>
+                    {project.systems.length === 0 && project.equipment.length === 0 ? (
+                      <p className="panel-empty">Add a system, such as kitchen exhaust or make-up air, then place its equipment.</p>
+                    ) : (
+                      <ProjectTree scope="systems" project={project} selection={selection} onSelect={select} onContextMenu={openMenu} />
+                    )}
+                  </section>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Duct runs</h3>
+                      <span className="panel-meta">{(project.ducts ?? []).length}</span>
+                    </header>
+                    {(project.ducts ?? []).length === 0 ? (
+                      <p className="panel-empty">No ducts yet. Drag a product from Catalogue onto the plan.</p>
+                    ) : (
+                      <ProjectTree scope="ducts" project={project} selection={selection} onSelect={select} onContextMenu={openMenu} />
+                    )}
+                  </section>
+                                  <section className="panel-section">
                     <header className="panel-head">
                       <h3>Open ports</h3>
                       <span className="panel-meta">{ductPorts.length}</span>
@@ -889,7 +912,7 @@ export function Studio({
                             <button
                               type="button"
                               title="Select this equipment"
-                              onClick={() => setSelection({ kind: 'equipment', id: port.hit.equipmentId })}
+                              onClick={() => select({ kind: 'equipment', id: port.hit.equipmentId })}
                             >
                               <i className="pick-swatch" style={{ background: port.color }} />
                               <span>
@@ -904,16 +927,56 @@ export function Studio({
                   </section>
                   <section className="panel-section">
                     <header className="panel-head">
-                      <h3>Duct runs</h3>
-                      <span className="panel-meta">{(project.ducts ?? []).length}</span>
+                      <h3>Piping</h3>
+                      <button
+                        type="button"
+                        className="panel-btn"
+                        onClick={() => {
+                          const created = newPlantLoop('water', `Loop ${(project.plantLoops ?? []).length + 1}`);
+                          edit({ ...project, plantLoops: [...(project.plantLoops ?? []), created] });
+                          setSelection({ kind: 'loop', id: created.id });
+                        }}
+                      >
+                        + Loop
+                      </button>
                     </header>
-                    {(project.ducts ?? []).length === 0 ? (
-                      <p className="panel-empty">No ducts yet. Drag a product from Catalogue onto the plan.</p>
+                    {(project.plantLoops ?? []).length === 0 ? (
+                      <p className="panel-empty">No plant loops. Pipe a coil from its unit, or add a loop.</p>
                     ) : (
-                      <ProjectTree scope="ducts" project={project} selection={selection} onSelect={setSelection} onContextMenu={openMenu} />
+                      <ul className="pick-list">
+                        {(project.plantLoops ?? []).map(loop => (
+                          <li key={loop.id}>
+                            <button type="button" className={selection.kind === 'loop' && selection.id === loop.id ? 'active' : ''} onClick={() => select({ kind: 'loop', id: loop.id })}>
+                              <i className="pick-swatch" style={{ background: loopSwatch(loop) }} />
+                              <span>{loop.name}</span>
+                              <span className="pick-meta">{LOOP_FLUID_LABEL[loop.fluid]}</span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
                     )}
                   </section>
-                </>
+                  <section className="panel-section">
+                    <header className="panel-head">
+                      <h3>Controls</h3>
+                      <span className="panel-meta">{(project.controlPoints ?? []).length}</span>
+                    </header>
+                    {(project.controlPoints ?? []).length === 0 ? (
+                      <p className="panel-empty">No sensors. Add them on a unit's sections or room sensors.</p>
+                    ) : (
+                      <ul className="pick-list">
+                        {(project.controlPoints ?? []).map(point => (
+                          <li key={point.id}>
+                            <button type="button" className={selection.kind === 'point' && selection.id === point.id ? 'active' : ''} onClick={() => select({ kind: 'point', id: point.id })}>
+                              <span>{`${point.tag} · ${SENSOR_LABEL[point.sensor]}`}</span>
+                              <span className="pick-meta">{pointPlace(project, point)}</span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                                </>
               )}
               {sidePanel === 'project' && step === 'check' && (
                 <>
@@ -923,7 +986,7 @@ export function Studio({
                       <span className="panel-meta">{checks.length}</span>
                     </header>
                     <div className="chip-row" role="group" aria-label="Issue group">
-                      {(['all', 'spaces', 'loads', 'equipment', 'ducts'] as const).map(id => {
+                      {(['all', 'spaces', 'loads', 'systems'] as const).map(id => {
                         const count = id === 'all' ? checks.length : checks.filter(issue => issue.step === id).length;
                         return (
                           <button
@@ -1053,12 +1116,12 @@ export function Studio({
                   <p className="panel-note">Drag a load into a space. Defaults are from ASHRAE Handbook—Fundamentals 2025, Ch. 18.</p>
                 </section>
               )}
-              {sidePanel === 'catalog' && step === 'equipment' && (
+              {sidePanel === 'catalog' && step === 'systems' && (
                 <section className="panel-section">
                   <header className="panel-head">
-                    <h3>Equipment</h3>
+                    <h3>Equipment and ducts</h3>
                   </header>
-                  <input className="panel-search" placeholder="Search equipment" aria-label="Search equipment" value={query} onChange={event => setQuery(event.target.value)} />
+                  <input className="panel-search" placeholder="Search equipment, templates, ducts" aria-label="Search equipment and ducts" value={query} onChange={event => setQuery(event.target.value)} />
                   <div className="chip-row" role="group" aria-label="Equipment family">
                     {(['all', ...FAMILY_ORDER] as const).map(id => (
                       <button key={id} type="button" className={catalogFamily === id ? 'active' : ''} aria-pressed={catalogFamily === id} onClick={() => setCatalogFamily(id)}>
@@ -1071,31 +1134,12 @@ export function Studio({
                     family={catalogFamily}
                     category="all"
                     armedId={null}
-                    showDucts={false}
+                    showDucts={catalogFamily === 'all'}
                     ductsOnly={false}
                     onArm={() => {}}
                     onArmDuct={() => {}}
                   />
-                  <p className="panel-note">Drag equipment onto the plan.</p>
-                </section>
-              )}
-              {sidePanel === 'catalog' && step === 'ducts' && (
-                <section className="panel-section">
-                  <header className="panel-head">
-                    <h3>Ducts</h3>
-                  </header>
-                  <input className="panel-search" placeholder="Search ducts" aria-label="Search ducts" value={ductQuery} onChange={event => setDuctQuery(event.target.value)} />
-                  <CatalogTree
-                    query={ductQuery}
-                    family="all"
-                    category="all"
-                    armedId={null}
-                    showDucts
-                    ductsOnly
-                    onArm={() => {}}
-                    onArmDuct={() => {}}
-                  />
-                  <p className="panel-note">Drag a duct onto the plan to start a run, then click to bend.</p>
+                  <p className="panel-note">Drag equipment or a template onto the plan. Drag a duct to start a run, then click to bend.</p>
                 </section>
               )}
             </div>
@@ -1108,11 +1152,14 @@ export function Studio({
                 {scene === 'plan' ? (
                   <PlanView
                     project={project}
+                    locked={positionsLocked}
                     selection={selection}
                     tool={tool}
                     fitToken={fitToken}
                     step={step}
                     layers={layers}
+                    expandedUnits={expandedUnits}
+                    onToggleInternals={toggleInternals}
                     onSelect={chooseView}
                     onDrawRoom={rect => {
                       const room = buildDrawnRoom(rect, project.rooms.length);
@@ -1250,6 +1297,18 @@ export function Studio({
                       <span>{TOOL_LABEL[kind]}</span>
                     </button>
                   ))}
+                  {scene === 'plan' && (
+                    <button
+                      type="button"
+                      className={['lock-toggle', positionsLocked ? 'active' : ''].filter(Boolean).join(' ')}
+                      aria-pressed={positionsLocked}
+                      title={positionsLocked ? 'Positions locked: click to select only. Click to unlock moving.' : 'Lock positions: stop anything from being moved by dragging'}
+                      onClick={toggleLock}
+                    >
+                      <LockIcon locked={positionsLocked} />
+                      <span>{positionsLocked ? 'Locked' : 'Lock'}</span>
+                    </button>
+                  )}
                 </div>
                 <div className="canvas-float canvas-view">
                   <div className="seg" role="group" aria-label="View">
@@ -1304,31 +1363,37 @@ export function Studio({
                     </button>
                   </span>
                 )}
-                {step === 'equipment' && (
-                  <>
-                    <label className="opt">
-                      <span>Place into</span>
-                      <select value={targetSystemId} onChange={event => setTargetSystemId(event.target.value)}>
-                        <option value="">No system</option>
-                        {project.systems.map(system => (
-                          <option key={system.id} value={system.id}>
-                            {system.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    {lastProduct && (
-                      <span className="opt-spec">
-                        {lastProduct.manufacturer} {lastProduct.model}
-                      </span>
-                    )}
-                  </>
-                )}
-                {step === 'ducts' &&
+                {step === 'systems' &&
                   (tool.kind === 'duct' ? (
                     <DuctBar project={project} tool={tool} showSize={layers.ductWidth} onShowSize={show => setLayers(current => ({ ...current, ductWidth: show }))} onChange={setTool} />
                   ) : (
-                    <DuctLegend />
+                    <>
+                      <label className="opt">
+                        <span>Place into</span>
+                        <select value={targetSystemId} onChange={event => setTargetSystemId(event.target.value)}>
+                          <option value="">No system</option>
+                          {project.systems.map(system => (
+                            <option key={system.id} value={system.id}>
+                              {system.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="chip-row layer-chips" role="group" aria-label="Systems layers">
+                        {SYSTEM_LAYERS.map(entry => (
+                          <button
+                            key={entry.key}
+                            type="button"
+                            className={layers[entry.key] ? 'active' : ''}
+                            aria-pressed={layers[entry.key]}
+                            title={entry.hint}
+                            onClick={() => setLayers(current => ({ ...current, [entry.key]: !current[entry.key] }))}
+                          >
+                            {entry.label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
                   ))}
                 {step === 'check' && (
                   <>
@@ -1338,19 +1403,24 @@ export function Studio({
                     <DuctLegend />
                   </>
                 )}
+                {tool.kind !== 'duct' && (
+                  <label className="opt opt-check">
+                    <input type="checkbox" checked={layers.labels} onChange={event => setLayers(current => ({ ...current, labels: event.target.checked }))} />
+                    <span>Details on all items</span>
+                  </label>
+                )}
                 </div>
                 <span className="opt-hint" title={toolHint()}>{toolHint()}</span>
               </div>
               </div>
             </>
           )}
-          {view === 'schematic' && <SchematicPanel project={project} selection={selection} onSelect={setSelection} />}
           {view === 'schedule' && <SchedulePanel project={project} assemblies={assemblies} materials={materials} />}
           {view === 'library' && <LibraryPanel added={addedMaterials} onChange={onLibraryChange} addedAssemblies={addedAssemblies} onAssembliesChange={onAssembliesChange} />}
           {view === 'boundary' && <BoundaryPanel project={project} />}
         </section>
-        {(view === 'model' || view === 'schematic') && (
-          <Inspector project={project} selection={selection} materials={materials} assemblies={assemblies} onChange={edit} onSelect={view === 'schematic' ? setSelection : select} onDeleteProject={onDeleteProject} nameFocus={nameFocus} />
+        {view === 'model' && (
+          <Inspector project={project} selection={selection} materials={materials} assemblies={assemblies} onChange={edit} onSelect={select} onDeleteProject={onDeleteProject} nameFocus={nameFocus} expandedUnits={expandedUnits} internalsLayer={layers.internals} onToggleInternals={toggleInternals} />
         )}
       </div>
       <footer className="statusbar">
@@ -1520,7 +1590,8 @@ function CatalogTree({
   const families = ductsOnly ? [] : FAMILY_ORDER.filter(item => family === 'all' || item === family);
   const ductNeedle = query.trim().toLowerCase();
   const ductProducts = DUCT_CATALOG.filter(product => `${product.name} ${product.manufacturer} ${product.model} ${product.supplier} ${product.group}`.toLowerCase().includes(ductNeedle));
-  const packages = SYSTEM_PACKAGES.filter(item => `${item.name} ${item.description}`.toLowerCase().includes(needle));
+  const allPackages = useSystemPackages();
+  const packages = allPackages.filter(item => `${item.name} ${item.description}`.toLowerCase().includes(needle));
   if (ductsOnly) {
     return (
       <ul className="tn-tree">
@@ -1543,21 +1614,36 @@ function CatalogTree({
       {!ductsOnly && (
         <TreeNode
           collapsed={closed('packages')}
-          toggleLabel="Packages"
+          toggleLabel="System templates"
           onToggle={() => toggle('packages')}
           onSelect={() => toggle('packages')}
-          content={<><span className="tree-label">Packages</span><span className="tree-meta">{packages.length}</span></>}
+          content={<><span className="tree-label">System templates</span><span className="tree-meta">{packages.length}</span></>}
         >
-          {packages.length === 0 && <li className="tree-empty">No packages match.</li>}
-          {packages.map(item => (
-            <TreeNode
-              key={item.id}
-              dragId={catalogToken({ kind: 'package', id: item.id })}
-              title={item.description}
-              onSelect={() => {}}
-              content={<><span className="tree-label">{item.name}</span><span className="tree-meta">Drop on plan</span></>}
-            />
-          ))}
+          {packages.length === 0 && <li className="tree-empty">No system templates match.</li>}
+          {PACKAGE_GROUPS.map(group => {
+            const rows = packages.filter(item => item.group === group);
+            if (rows.length === 0) return null;
+            return (
+              <TreeNode
+                key={group}
+                collapsed={closed(`packages:${group}`)}
+                toggleLabel={group}
+                onToggle={() => toggle(`packages:${group}`)}
+                onSelect={() => toggle(`packages:${group}`)}
+                content={<><span className="tree-label">{group}</span><span className="tree-meta">{rows.length}</span></>}
+              >
+                {rows.map(item => (
+                  <TreeNode
+                    key={item.id}
+                    dragId={catalogToken({ kind: 'package', id: item.id })}
+                    title={`${item.description}\n${packageSummary(item)}`}
+                    onSelect={() => {}}
+                    content={<><span className="tree-label">{item.name}</span><span className="tree-meta">Drag onto plan</span></>}
+                  />
+                ))}
+              </TreeNode>
+            );
+          })}
         </TreeNode>
       )}
       {showDucts && (
@@ -2084,6 +2170,31 @@ function ContextMenu({
   );
 }
 
+function loopSwatch(loop: { fluid: string; supplyC: number | null }): string {
+  if (loop.fluid === 'co2' || loop.fluid === 'refrigerant') return '#7b4f9e';
+  if (loop.fluid === 'steam' || (loop.supplyC != null && loop.supplyC >= 30)) return '#c0492f';
+  return '#2f6fb0';
+}
+
+function pointPlace(project: Project, point: NonNullable<Project['controlPoints']>[number]): string {
+  const location = point.location;
+  if (location.kind === 'room') return project.rooms.find(room => room.id === location.roomId)?.name ?? 'Space';
+  const item = project.equipment.find(entry => entry.id === location.equipmentId);
+  const section = item ? unitSections(item).find(entry => entry.id === location.sectionId) : undefined;
+  return `${item ? getProduct(item.catalogId)?.model ?? 'Unit' : 'Unit'}${section ? ` · ${SECTION_LABEL[section.kind]}` : ''}`;
+}
+
+const LOCK_KEY = 'hvac-plan-positions-locked';
+
+function LockIcon({ locked }: { locked: boolean }) {
+  return (
+    <svg width={22} height={22} viewBox="0 0 22 22" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <rect x="5" y="10" width="12" height="8.5" rx="1.5" />
+      <path d={locked ? 'M7.8 10V7.5a3.2 3.2 0 0 1 6.4 0V10' : 'M7.8 10V7.5a3.2 3.2 0 0 1 6.2-1.1'} />
+    </svg>
+  );
+}
+
 function DrawIcon({ kind }: { kind: ToolKind }) {
   const props = { width: 22, height: 22, viewBox: '0 0 22 22', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
   if (kind === 'select') return <svg {...props}><path d="M6 3.5 10.2 17.5 12.3 12.3 17.5 10.2Z" /></svg>;
@@ -2156,10 +2267,13 @@ function LayersMenu({
       {row('loads', 'Loads')}
       {row('equipment', 'Equipment')}
       {row('ducts', 'Ducts')}
+      {row('piping', 'Piping')}
+      {row('controls', 'Room sensors')}
+      {row('internals', 'Unit internals')}
       <p className="layers-title">Detail</p>
       {row('ductWidth', 'Duct widths')}
       {row('clearances', 'Clearances')}
-      {row('labels', 'Labels')}
+      {row('labels', 'Details on all items')}
       {scene === '3d' && (
         <>
           <p className="layers-title">3D</p>

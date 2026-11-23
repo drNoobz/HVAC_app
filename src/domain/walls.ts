@@ -1,6 +1,6 @@
 import { normalizeSite } from './climate';
 import { builtinAssembly, cloneLayers } from './constructionLibrary';
-import type { DuctNode, DuctRun, LoadItem, Project, Room, SurfaceAssignment, WallFace } from './types';
+import type { ControlPoint, DuctNode, DuctRun, LoadItem, PlantLoop, Project, Room, SurfaceAssignment, WallFace } from './types';
 
 export const WALL_FACE_IDS: WallFace[] = ['px', 'nx', 'py', 'ny'];
 
@@ -791,6 +791,34 @@ function normalizeStreamDesign(value: DuctRun['streamDesign']): DuctRun['streamD
   return { flowM3s, dbC, wbC, rh };
 }
 
+function normalizePlantLoops(value: Project['plantLoops']): PlantLoop[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(loop => {
+    if (!loop || typeof loop.id !== 'string' || typeof loop.fluid !== 'string') return [];
+    return [{
+      id: loop.id,
+      name: typeof loop.name === 'string' ? loop.name : 'Loop',
+      fluid: loop.fluid,
+      glycolFraction: finiteOrNull(loop.glycolFraction),
+      supplyC: finiteOrNull(loop.supplyC),
+      returnC: finiteOrNull(loop.returnC),
+      plantEquipmentId: typeof loop.plantEquipmentId === 'string' ? loop.plantEquipmentId : null,
+      notes: typeof loop.notes === 'string' ? loop.notes : '',
+    }];
+  });
+}
+
+function normalizeControlPoints(value: Project['controlPoints'], equipmentIds: Set<string>, roomIds: Set<string>): ControlPoint[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(point => {
+    if (!point || typeof point.id !== 'string' || typeof point.sensor !== 'string' || !point.location) return [];
+    const location = point.location;
+    if (location.kind === 'station' && !equipmentIds.has(location.equipmentId)) return [];
+    if (location.kind === 'room' && !roomIds.has(location.roomId)) return [];
+    return [{ ...point, tag: typeof point.tag === 'string' ? point.tag : '' }];
+  });
+}
+
 function normalizeDuctNodes(value: Project['ductNodes']): DuctNode[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap(node => {
@@ -930,6 +958,12 @@ export function normalizeProject(project: Project, emptyNote: string): Project {
     equipment: normalizeEquipment(project.equipment),
     ducts: normalizeDucts(project.ducts, nodeIds),
     ductNodes,
+    plantLoops: normalizePlantLoops(project.plantLoops),
+    controlPoints: normalizeControlPoints(
+      project.controlPoints,
+      new Set((project.equipment ?? []).map(item => item?.id)),
+      new Set(project.rooms.map(room => room.id)),
+    ),
     loads: normalizeLoads(project.loads),
     site: normalizeSite(project.site),
     interfaceWalls: normalizeInterfaceWalls(project.interfaceWalls),
