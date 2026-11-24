@@ -5,7 +5,7 @@ import { defaultSections } from './airUnits';
 import { createId, nowIso } from './ids';
 import { getLoadProduct } from './loadCatalog';
 import { placementZ } from './projectOps';
-import { applySystemPackage } from './systemPackages';
+import { applySystemPackage, RTU_DUCTED, type PackageDuct, type PackageRef, type SystemPackage } from './systemPackages';
 import type { HvacSystem, LoadItem, Opening, PlacedEquipment, Project, Room, SiteClimate, SurfaceAssignment, SystemKind } from './types';
 import { interfaceTargets, isOutsideInterfaceKey, repeatedWalls, separateSharedWalls } from './walls';
 
@@ -230,6 +230,95 @@ function fullServiceSite(): SiteClimate {
   };
 }
 
+const roundDuct = (service: PackageDuct['service'], widthIn: number, from: PackageRef, to: PackageRef, via?: { x: number; y: number }[]): PackageDuct => ({
+  catalogId: 'esm-sw-round',
+  service,
+  shape: 'round',
+  widthIn,
+  from,
+  to,
+  via,
+});
+const memberPort = (member: string, portId: string): PackageRef => ({ member, portId });
+const junction = (key: string): PackageRef => ({ node: key });
+
+/**
+ * The catalogue rooftop package stretched to serve the dining room, the bar, and the corridor from one unit.
+ * Supply stays 3,750 CFM: dining 6 × 500, bar 2 × 300, corridor 150. Return stays 3,000 CFM through the dining
+ * grilles: the bar returns through its open doorway, and corridor air leaves through the exhausted restrooms
+ * and the kitchen.
+ */
+const DINING_BAR_RTU: SystemPackage = {
+  ...RTU_DUCTED,
+  id: 'rtu-ducted-dining-bar',
+  name: 'Rooftop unit, dining, bar and corridor',
+  description: '12.5 ton RTU with economizer. Supply trunk → dining (6 diffusers), corridor (1 diffuser), through the wall to the bar (2 diffusers). Return main → 3 dining grilles.',
+  systems: [
+    {
+      ...RTU_DUCTED.systems[0],
+      notes: 'One rooftop for the dining room, bar, and corridor: same hours and similar loads. Supply 3,750 CFM = dining 3,000 + bar 600 + corridor 150. Return 3,000 CFM through the dining grilles; the bar returns through its open doorway and the corridor air is drawn on by the restroom exhaust and the kitchen. Minimum outdoor air (supply less return) ventilates all three. Terminal airflows are planning values.',
+    },
+  ],
+  members: [
+    ...RTU_DUCTED.members.filter(member => !member.key.startsWith('d')),
+    { key: 'd1a', catalogId: 'diff-sq-24', planOffset: { xM: 2.3, yM: 2.0 }, designCfm: 500 },
+    { key: 'd1b', catalogId: 'diff-sq-24', planOffset: { xM: 2.3, yM: -2.0 }, designCfm: 500 },
+    { key: 'd2a', catalogId: 'diff-sq-24', planOffset: { xM: 4.5, yM: 2.0 }, designCfm: 500 },
+    { key: 'd2b', catalogId: 'diff-sq-24', planOffset: { xM: 4.5, yM: -2.0 }, designCfm: 500 },
+    { key: 'd3a', catalogId: 'diff-sq-24', planOffset: { xM: 6.7, yM: 2.0 }, designCfm: 500 },
+    { key: 'd3b', catalogId: 'diff-sq-24', planOffset: { xM: 6.7, yM: -2.0 }, designCfm: 500 },
+    { key: 'dc', catalogId: 'diff-sq-24', planOffset: { xM: 3.4, yM: 4.9 }, designCfm: 150, notes: 'Corridor supply. Ventilates the corridor; the air moves on to the exhausted restrooms and the kitchen.' },
+    { key: 'd4a', catalogId: 'diff-sq-24', planOffset: { xM: 8.6, yM: -1.6 }, designCfm: 300, notes: 'Bar supply.' },
+    { key: 'd4b', catalogId: 'diff-sq-24', planOffset: { xM: 10.6, yM: -1.6 }, designCfm: 300, notes: 'Bar supply.' },
+  ],
+  nodes: [
+    { key: 's1', service: 'supply', x: 2.3, y: 0 },
+    { key: 'sc', service: 'supply', x: 3.4, y: 0 },
+    { key: 's2', service: 'supply', x: 4.5, y: 0 },
+    { key: 's3', service: 'supply', x: 6.7, y: 0 },
+    { key: 's4', service: 'supply', x: 8.6, y: 0 },
+    { key: 'r1', service: 'return', x: -2.3, y: 0 },
+  ],
+  ducts: [
+    // Trunk steps down as each branch leaves: 3,750 → 2,750 → 2,600 → 1,600 → 600 → 300 CFM.
+    roundDuct('supply', 22, memberPort('rtu', 'supply'), junction('s1')),
+    roundDuct('supply', 20, junction('s1'), junction('sc')),
+    roundDuct('supply', 20, junction('sc'), junction('s2')),
+    roundDuct('supply', 16, junction('s2'), junction('s3')),
+    roundDuct('supply', 10, junction('s3'), junction('s4')),
+    roundDuct('supply', 8, junction('s4'), memberPort('d4b', 'neck'), [{ x: 10.6, y: 0 }]),
+    roundDuct('supply', 10, junction('s1'), memberPort('d1a', 'neck')),
+    roundDuct('supply', 10, junction('s1'), memberPort('d1b', 'neck')),
+    roundDuct('supply', 6, junction('sc'), memberPort('dc', 'neck')),
+    roundDuct('supply', 10, junction('s2'), memberPort('d2a', 'neck')),
+    roundDuct('supply', 10, junction('s2'), memberPort('d2b', 'neck')),
+    roundDuct('supply', 10, junction('s3'), memberPort('d3a', 'neck')),
+    roundDuct('supply', 10, junction('s3'), memberPort('d3b', 'neck')),
+    roundDuct('supply', 8, junction('s4'), memberPort('d4a', 'neck')),
+    ...RTU_DUCTED.ducts.filter(duct => duct.service === 'return'),
+  ],
+};
+
+/** Office heating and cooling: a ductless wall unit with its own thermostat. The ERV keeps supplying outdoor air. */
+const OFFICE_SPLIT: SystemPackage = {
+  id: 'office-split',
+  name: 'Ductless heat pump, one room',
+  description: '1 ton wall-mounted heat pump with a room thermostat.',
+  group: 'Air handling',
+  systems: [
+    {
+      key: 'main',
+      name: 'Office heat pump',
+      kind: 'comfort',
+      notes: 'Ductless wall unit heats and cools the office on its own thermostat, so it can run outside dining hours. It recirculates room air only; the office ERV supplies the outdoor air.',
+    },
+  ],
+  members: [{ key: 'split', catalogId: 'split-12', planOffset: { xM: 0, yM: 0 }, yawDeg: 90, notes: 'High on the wall. Outdoor unit on the roof or at grade.' }],
+  nodes: [],
+  ducts: [],
+  points: [{ tag: 'T-2', sensor: 'temperature', member: 'split', room: true }],
+};
+
 export function createFullServiceProject(): Project {
   const plan = fullServiceRooms();
   const project = base(
@@ -244,17 +333,18 @@ export function createFullServiceProject(): Project {
 
   // Each air system is a catalogue system template, dropped where it serves.
   let next = project;
-  const drop = (packageId: string, xM: number, yM: number, rename?: string) => {
+  const drop = (packageId: string | SystemPackage, xM: number, yM: number, rename?: string) => {
     const before = new Set(next.systems.map(item => item.id));
     const placed = applySystemPackage(next, packageId, { xM, yM });
-    if (placed === next) throw new Error(`System template ${packageId} did not apply`);
+    if (placed === next) throw new Error(`System template ${typeof packageId === 'string' ? packageId : packageId.id} did not apply`);
     next = rename ? { ...placed, systems: placed.systems.map(item => (before.has(item.id) ? item : { ...item, name: rename })) } : placed;
   };
   drop('kitchen-hood-mau', 3.6, 15.39);
   drop('restroom-exhaust-2', 13.1, 6.5);
   drop('general-exhaust-inline', 12.2, 14.5);
   drop('erv-small-room', 19.0, 7.0);
-  drop('rtu-ducted', 4.6, 4, 'Dining comfort');
+  drop(DINING_BAR_RTU, 4.6, 4, 'Dining & bar comfort');
+  drop(OFFICE_SPLIT, 16.62, 7.0);
   next = { ...next, equipment: next.equipment.map(item => ({ ...item, notes: item.notes ? `${EXAMPLE} ${item.notes}` : EXAMPLE })) };
 
   return {
@@ -440,7 +530,7 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
     id: 'full-service',
     name: 'Full-service restaurant',
     description:
-      'Dining, bar, kitchen, prep, dish, restrooms, storage, office, and corridor, with climate, loads, and complete air systems: ducted RTU, hood exhaust with make-up air, restroom and dish exhaust, and an office ERV.',
+      'Dining, bar, kitchen, prep, dish, restrooms, storage, office, and corridor, with climate, loads, and complete air systems: a ducted RTU for the dining room, bar, and corridor, hood exhaust with make-up air, restroom and dish exhaust, and an office ERV with a ductless heat pump.',
     create: createFullServiceProject,
   },
 ];

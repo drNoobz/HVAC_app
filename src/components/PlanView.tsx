@@ -2150,6 +2150,7 @@ function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
   if (product?.category === 'energy-recovery' || /ERV|recovery/i.test(product?.name ?? '')) return { name: 'ERV', roof };
   if (product?.category === 'heating-cooling' || product?.category === 'system-equipment') {
     if (/condens/i.test(product?.name ?? '')) return { name: 'CU', roof };
+    if (/mini-split|ductless/i.test(product?.name ?? '')) return { name: 'Split', roof };
     if (/rooftop|WeatherMaker|RTU/i.test(product?.name ?? '') || product?.mount === 'roof') return { name: 'RTU', roof };
     return { name: 'Unit', roof };
   }
