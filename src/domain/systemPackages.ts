@@ -284,7 +284,7 @@ export const KITCHEN_HOOD_MAU: SystemPackage = {
   ],
   members: [
     { key: 'hood', catalogId: 'hood-wall-8', planOffset: { xM: 0, yM: 0 }, system: 'exhaust', notes: 'Wall canopy on the back wall.' },
-    { key: 'fan', catalogId: 'fan-upblast-30', planOffset: { xM: 4.0, yM: -3.19 }, system: 'exhaust', designCfm: 1600, notes: 'Roof upblast fan selected at the hood airflow.' },
+    { key: 'fan', catalogId: 'fan-upblast-30', planOffset: { xM: 3.2, yM: 0 }, system: 'exhaust', designCfm: 1600, notes: 'Roof upblast fan beside the hood, selected at the hood airflow. A short grease duct, clear of the make-up air.' },
     {
       key: 'mau',
       catalogId: 'mau-40',
@@ -304,7 +304,8 @@ export const KITCHEN_HOOD_MAU: SystemPackage = {
   ],
   nodes: [{ key: 'tee', service: 'supply', x: 2.4, y: -4.19, system: 'makeup' }],
   ducts: [
-    { catalogId: 'captiveaire-dw', service: 'exhaust', shape: 'round', widthIn: 16, from: port('hood', 'exhaust'), to: port('fan', 'in'), via: [{ x: 0, y: -3.19 }], system: 'exhaust' },
+    // Grease duct along the back wall to the roof fan: short, and it never crosses the make-up air supply.
+    { catalogId: 'captiveaire-dw', service: 'exhaust', shape: 'round', widthIn: 16, from: port('hood', 'exhaust'), to: port('fan', 'in'), system: 'exhaust' },
     { ...round('supply', 16, port('mau', 'supply'), node('tee')), system: 'makeup' },
     { ...round('supply', 12, node('tee'), port('diffB', 'neck')), system: 'makeup' },
     { ...round('supply', 12, node('tee'), port('diffA', 'neck'), [{ x: -2.0, y: -4.19 }]), system: 'makeup' },

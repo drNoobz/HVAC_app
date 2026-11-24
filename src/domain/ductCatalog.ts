@@ -35,6 +35,19 @@ export interface DuctProduct {
   gaps: string[];
 }
 
+/**
+ * One colour per kind of air, whatever system or room it serves: supply blue, return orange, outdoor air green,
+ * and air leaving the building (exhaust or relief) brown.
+ */
+export const SERVICE_COLOR: Record<DuctService, string> = {
+  supply: '#1d4e89',
+  return: '#c47b12',
+  outdoor: '#2f7d32',
+  exhaust: '#7a4a2b',
+  relief: '#7a4a2b',
+  mixed: '#6f6a8a',
+};
+
 export const DUCT_STREAMS: {
   id: string;
   label: string;
@@ -42,18 +55,18 @@ export const DUCT_STREAMS: {
   kind: SystemKind;
   service: DuctService;
 }[] = [
-  { id: 'kitchen-exhaust', label: 'Kitchen exhaust', color: '#9b2c2c', kind: 'kitchen-exhaust', service: 'exhaust' },
-  { id: 'makeup-air', label: 'Make-up air', color: '#0e6e66', kind: 'makeup-air', service: 'supply' },
-  { id: 'comfort-supply', label: 'Comfort supply', color: '#1d4e89', kind: 'comfort', service: 'supply' },
-  { id: 'comfort-return', label: 'Comfort return', color: '#c47b12', kind: 'comfort', service: 'return' },
-  { id: 'comfort-outdoor', label: 'Outdoor air', color: '#2f7d32', kind: 'comfort', service: 'outdoor' },
-  { id: 'comfort-relief', label: 'Relief', color: '#7a4a2b', kind: 'comfort', service: 'relief' },
-  { id: 'restroom-exhaust', label: 'Restroom exhaust', color: '#6b3d6e', kind: 'restroom-exhaust', service: 'exhaust' },
-  { id: 'ventilation-outdoor', label: 'Outdoor air', color: '#2f7d32', kind: 'ventilation', service: 'outdoor' },
-  { id: 'ventilation-supply', label: 'Ventilation supply', color: '#1a7a8c', kind: 'ventilation', service: 'supply' },
-  { id: 'ventilation-return', label: 'Ventilation return', color: '#5c6b2f', kind: 'ventilation', service: 'return' },
-  { id: 'ventilation-exhaust', label: 'Ventilation exhaust', color: '#a33b6b', kind: 'ventilation', service: 'exhaust' },
-  { id: 'ventilation-relief', label: 'Relief', color: '#7a4a2b', kind: 'ventilation', service: 'relief' },
+  { id: 'kitchen-exhaust', label: 'Kitchen exhaust', color: SERVICE_COLOR.exhaust, kind: 'kitchen-exhaust', service: 'exhaust' },
+  { id: 'makeup-air', label: 'Make-up air', color: SERVICE_COLOR.supply, kind: 'makeup-air', service: 'supply' },
+  { id: 'comfort-supply', label: 'Comfort supply', color: SERVICE_COLOR.supply, kind: 'comfort', service: 'supply' },
+  { id: 'comfort-return', label: 'Comfort return', color: SERVICE_COLOR.return, kind: 'comfort', service: 'return' },
+  { id: 'comfort-outdoor', label: 'Outdoor air', color: SERVICE_COLOR.outdoor, kind: 'comfort', service: 'outdoor' },
+  { id: 'comfort-relief', label: 'Relief', color: SERVICE_COLOR.relief, kind: 'comfort', service: 'relief' },
+  { id: 'restroom-exhaust', label: 'Restroom exhaust', color: SERVICE_COLOR.exhaust, kind: 'restroom-exhaust', service: 'exhaust' },
+  { id: 'ventilation-outdoor', label: 'Outdoor air', color: SERVICE_COLOR.outdoor, kind: 'ventilation', service: 'outdoor' },
+  { id: 'ventilation-supply', label: 'Ventilation supply', color: SERVICE_COLOR.supply, kind: 'ventilation', service: 'supply' },
+  { id: 'ventilation-return', label: 'Ventilation return', color: SERVICE_COLOR.return, kind: 'ventilation', service: 'return' },
+  { id: 'ventilation-exhaust', label: 'Ventilation exhaust', color: SERVICE_COLOR.exhaust, kind: 'ventilation', service: 'exhaust' },
+  { id: 'ventilation-relief', label: 'Relief', color: SERVICE_COLOR.relief, kind: 'ventilation', service: 'relief' },
 ];
 
 const HVAC_KINDS: SystemKind[] = ['makeup-air', 'comfort', 'restroom-exhaust', 'ventilation'];

@@ -3,13 +3,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { CATALOG_MIME, equipmentSizeM, getProduct, isSchematicOnly } from '@/domain/catalog';
 import { parseCatalogDrag } from '@/domain/catalogDrag';
-import { DUCT_STREAMS, streamFor } from '@/domain/ductCatalog';
+import { SERVICE_COLOR } from '@/domain/ductCatalog';
 import { ductCrossings, ductFlows, ductSizeLabel, ductViewOf, endRise, equipmentPortHits, nearestNode, nearestPort, nearestRun, portFits, streamDesignLabel, type DuctDraftPoint } from '@/domain/ducts';
 import { isUnit, SECTION_TAG, sectionSummary, unitFlows } from '@/domain/airUnits';
 import { PORT_ROLE_LABEL, UNIT_STREAM_LABEL, unitLayout, type UnitComponent, type UnitLayout, type UnitStream } from '@/domain/unitNetwork';
 import { LOOP_FLUID_LABEL, SENSOR_LABEL, VALVE_LABEL } from '@/domain/controls';
 import { AxialFan, CentrifugalFan, CondenserSection, ControlDamper, DuctCoil, DuctFilter, HeatExchanger, Humidifier, InstrumentBubble, MixingPlenum, PlanSymbol, Valve, type PlanSymbolKind } from './hvacSymbols';
-import type { ControlPoint, DuctRun, DuctService, DuctShape, EditorTool, LoadItem, Opening, PlacedEquipment, PlantLoop, Project, Room, Selection, SystemKind, UnitSection, WallFace, WallRun } from '@/domain/types';
+import type { ControlPoint, DuctRun, DuctService, DuctShape, EditorTool, LoadItem, Opening, PlacedEquipment, PlantLoop, Project, Room, Selection, UnitSection, WallFace, WallRun } from '@/domain/types';
 import { getLoadProduct, LOAD_CATEGORY_COLOR } from '@/domain/loadCatalog';
 import { LoadSymbol } from './LoadIcon';
 import type { BuildStep } from '@/domain/checks';
@@ -30,7 +30,6 @@ const DIM = '#0e6e66';
 const SELECT = '#f6ad55';
 const SELECT_FILL = 'rgba(246,173,85,0.28)';
 const HAIR = 1.15;
-const SYSTEM_COLORS = ['#1f4e5f', '#8a3d2f', '#245c3a', '#3d4a8a', '#8a5a12', '#6b3d6e'];
 
 export interface PlanLayers {
   spaces: boolean;
@@ -72,6 +71,8 @@ function hitPhase(hit: string): BuildStep | null {
 
 /** Plan label importance: where two collide, the lower one is hidden until there is room (zoom in or select it). */
 const LABEL_PRIORITY = {
+  /** Where air crosses the envelope: wins over duct and equipment labels, gives way to room names. */
+  outside: 85,
   room: 90,
   duct: 70,
   equipment: 60,
@@ -84,7 +85,7 @@ const LABEL_PRIORITY = {
 const LABEL_ACTIVE = 1000;
 
 function declutterLabels(svg: SVGSVGElement) {
-  const labels = [...svg.querySelectorAll<SVGTextElement>('text[data-label]')]
+  const labels = [...svg.querySelectorAll<SVGGraphicsElement>('[data-label]')]
     .map(element => ({ element, priority: Number(element.dataset.label) || 0, box: element.getBoundingClientRect() }))
     .filter(entry => entry.box.width > 0 && entry.box.height > 0)
     .sort((a, b) => b.priority - a.priority);
@@ -847,32 +848,21 @@ export function PlanView({
   const openUnitInView = openUnits.length > 0;
   const legendEntries: AirKeyEntry[] = (() => {
     const found = new Map<string, AirKeyEntry>();
-    for (const item of openUnits) {
-      const kind = project.systems.find(system => system.id === item.systemId)?.kind;
-      for (const [stream, service] of [['outdoor', 'outdoor'], ['return', 'return'], ['supply', 'supply'], ['exhaust', 'relief']] as const) {
-        const color = unitStreamColor(kind, stream);
-        const label = (kind && streamFor(kind, service)?.label) || UNIT_STREAM_LABEL[stream];
-        found.set(`${label}|${color}`, { label, color, service, double: true });
-      }
-    }
+    // One row per kind of air: the colours no longer differ by system.
+    const add = (service: DuctService, double: boolean) => {
+      const group = service === 'relief' ? 'exhaust' : service;
+      const prev = found.get(group);
+      found.set(group, { label: AIR_KEY_LABEL[group], color: SERVICE_COLOR[group], service: group, double: double || !!prev?.double });
+    };
+    if (openUnits.length > 0) for (const service of ['outdoor', 'return', 'supply', 'relief'] as const) add(service, true);
     for (const run of project.ducts ?? []) {
       if (ductViewOf(run) !== 'plan' || run.points.length < 2) continue;
       const xs = run.points.map(point => point.x);
       const ys = run.points.map(point => point.y);
       if (Math.max(...xs) < viewX0 || Math.min(...xs) > viewX1 || Math.max(...ys) < viewY0 || Math.min(...ys) > viewY1) continue;
-      const system = project.systems.find(item => item.id === run.systemId);
-      const stream = system ? streamFor(system.kind, run.service) : null;
-      const label = stream?.label ?? SERVICE_NAME[run.service];
-      const color = stream?.color ?? '#5e6368';
-      const key = `${label}|${color}`;
-      const double = run.widthM * pxPerM >= 6;
-      const prev = found.get(key);
-      found.set(key, { label, color, service: run.service, double: double || !!prev?.double });
+      add(run.service, run.widthM * pxPerM >= 6);
     }
-    const order = (entry: AirKeyEntry) => {
-      const index = DUCT_STREAMS.findIndex(stream => stream.label === entry.label && stream.color === entry.color);
-      return index < 0 ? DUCT_STREAMS.length : index;
-    };
+    const order = (entry: AirKeyEntry) => AIR_KEY_ORDER.indexOf(entry.service);
     return [...found.values()].sort((a, b) => order(a) - order(b));
   })();
   const planEquipment = project.equipment
@@ -1744,8 +1734,8 @@ export function PlanView({
                 fontM={font}
                 labelScale={equipmentText}
                 systemName={showSystems && (layers.labels || (selectedSystemId != null && system?.id === selectedSystemId)) ? system?.name : undefined}
-                color={showSystems && system ? SYSTEM_COLORS[systemIndex % SYSTEM_COLORS.length] : undefined}
-                streamColor={stream => unitStreamColor(system?.kind, stream)}
+                color={showSystems ? terminalAirColor(item.catalogId) : undefined}
+                streamColor={unitStreamColor}
               />
             );
           })}</g>}
@@ -1760,7 +1750,7 @@ export function PlanView({
           )}
           {(chain || (aim && tool.kind === 'wall')) && <ChainPreview points={chain ?? []} aim={aim} units={project.units} fontM={font} />}
           {tool.kind === 'duct' && (ductChain || ductAim) && (
-            <DuctDraft points={ductChain ?? []} aim={ductAim} units={project.units} fontM={font} view={view} sizeLabel={ductSizeLabel(tool, project.units)} widthM={showDuctSize ? tool.widthM : 0} color={streamFor(project.systems.find(system => system.id === tool.systemId)?.kind ?? 'other', tool.service)?.color ?? DIM} />
+            <DuctDraft points={ductChain ?? []} aim={ductAim} units={project.units} fontM={font} view={view} sizeLabel={ductSizeLabel(tool, project.units)} widthM={showDuctSize ? tool.widthM : 0} color={SERVICE_COLOR[tool.service] ?? DIM} />
           )}
           {spot && (tool.kind === 'door' || tool.kind === 'window') && <OpeningGhost spot={spot} kind={tool.kind} />}
           {highlightedRoom && ((highlightedRoom.outline?.length ?? 0) >= 3 ? (
@@ -1873,7 +1863,8 @@ interface AirKeyEntry {
   double: boolean;
 }
 
-const SERVICE_NAME: Record<DuctService, string> = { supply: 'Supply', return: 'Return', exhaust: 'Exhaust', outdoor: 'Outdoor air', relief: 'Relief', mixed: 'Mixed air' };
+const AIR_KEY_LABEL: Record<DuctService, string> = { supply: 'Supply', return: 'Return', exhaust: 'Exhaust / relief', outdoor: 'Outdoor air', relief: 'Exhaust / relief', mixed: 'Mixed air' };
+const AIR_KEY_ORDER: DuctService[] = ['supply', 'return', 'outdoor', 'exhaust', 'mixed'];
 
 const AIR_KEY_COLLAPSED = 'hvac-air-key-collapsed';
 
@@ -1921,6 +1912,17 @@ function AirKey({ entries, mixed }: { entries: readonly AirKeyEntry[]; mixed: bo
         <span key={`${row.label}|${row.color}`}>
           {swatch(row.color, SERVICE_DASH[row.service], row.double)}
           {row.label}
+        </span>
+      ))}
+      {[
+        { label: 'Outside air in', color: OUTSIDE_IN_COLOR, points: '20,2.6 9,2.6 9,0.5 2,4 9,7.5 9,5.4 20,5.4' },
+        { label: 'Outside air out', color: OUTSIDE_OUT_COLOR, points: '0,2.6 11,2.6 11,0.5 18,4 11,7.5 11,5.4 0,5.4' },
+      ].map(tag => (
+        <span key={tag.label}>
+          <svg className="air-key-swatch" viewBox="0 0 20 8" aria-hidden="true">
+            <polygon points={tag.points} fill={tag.color} />
+          </svg>
+          {tag.label}
         </span>
       ))}
       <span>
@@ -2244,8 +2246,8 @@ function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
     if (product.id.startsWith('diff')) return { name: 'SD', roof };
     if (product.id.startsWith('grille-ret')) return { name: 'RG', roof };
     if (product.id.startsWith('grille')) return { name: 'EG', roof };
-    if (product.id.startsWith('louver')) return { name: product.id.endsWith('oa') ? 'OA LVR · from outside' : 'EA LVR · to outside', roof };
-    return { name: product.id.includes('intake') ? 'Intake · from outside' : 'Relief · to outside', roof };
+    if (product.id.startsWith('louver')) return { name: product.id.endsWith('oa') ? 'OA LVR' : 'EA LVR', roof };
+    return { name: product.id.includes('intake') ? 'Intake' : 'Relief', roof };
   }
   if (product?.category === 'makeup-air') return { name: 'MAU', roof };
   if (product?.category === 'energy-recovery' || /ERV|recovery/i.test(product?.name ?? '')) return { name: 'ERV', roof };
@@ -2255,7 +2257,7 @@ function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
     if (/rooftop|WeatherMaker|RTU/i.test(product?.name ?? '') || product?.mount === 'roof') return { name: 'RTU', roof };
     return { name: 'Unit', roof };
   }
-  if (product?.category === 'exhaust-fan' || product?.category === 'bathroom-exhaust') return { name: roof ? 'Fan · to outside' : 'Fan', roof };
+  if (product?.category === 'exhaust-fan' || product?.category === 'bathroom-exhaust') return { name: 'Fan', roof };
   if (product?.category === 'air-path') {
     if (/mix/i.test(product.name)) return { name: 'Mix', roof: false };
     if (/filter/i.test(product.name)) return { name: 'Filter', roof: false };
@@ -2269,6 +2271,19 @@ function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
     return { name: 'AHU', roof: false };
   }
   return { name: 'Unit', roof };
+}
+
+/** Equipment that is itself the opening to outdoors (louvers, roof hoods, roof fans): which way air crosses. */
+function outdoorOpening(catalogId: string): 'oa' | 'ea' | null {
+  const product = getProduct(catalogId);
+  if (!product) return null;
+  if (product.category === 'air-terminal') {
+    if (product.id.startsWith('louver')) return product.id.endsWith('oa') ? 'oa' : 'ea';
+    if (product.mount === 'roof') return product.id.includes('intake') ? 'oa' : 'ea';
+    return null;
+  }
+  if ((product.category === 'exhaust-fan' || product.category === 'bathroom-exhaust') && product.mount === 'roof') return 'ea';
+  return null;
 }
 
 function DuctLayer({
@@ -2301,24 +2316,32 @@ function DuctLayer({
   const flows = ductFlows(project).runs;
   const planRuns = (project.ducts ?? []).filter(run => ductViewOf(run) === 'plan');
   const colorOf = (run: DuctRun) => {
-    const system = project.systems.find(item => item.id === run.systemId);
-    return (system && streamFor(system.kind, run.service)?.color) || '#5e6368';
+    return SERVICE_COLOR[run.service];
   };
   // Zoomed in far enough, ducts are drawn double-line at their true width, as on a duct plan.
   const doubled = (run: DuctRun) => run.widthM * pxPerM >= 6;
   const wallM = 1.3 / Math.max(pxPerM, 1);
   const doubleRuns = planRuns.filter(doubled).map(run => ({ run, points: extendAtJunctions(run).map(point => `${point.x},${point.y}`).join(' ') }));
+  // Air leaving the building sits lowest, supply on top: a fixed order, so a crossing always reads the same way.
+  const LAYER_ORDER: DuctService[] = ['exhaust', 'relief', 'outdoor', 'return', 'mixed', 'supply'];
+  const doubleLayers = [...new Set(doubleRuns.map(({ run }) => `${LAYER_ORDER.indexOf(run.service)}|${run.service}|${run.systemId ?? ''}`))]
+    .sort((a, b) => Number(a.split('|')[0]) - Number(b.split('|')[0]))
+    .map(key => ({ key, runs: doubleRuns.filter(({ run }) => `${LAYER_ORDER.indexOf(run.service)}|${run.service}|${run.systemId ?? ''}` === key) }));
   return (
     <g>
-      {/* Duct walls: a wide stroke in the stream colour, then the inside over it, so joined runs share one outline. */}
-      <g pointerEvents="none">
-        {doubleRuns.map(({ run, points }) => (
-          <polyline key={`w-${run.id}`} points={points} fill="none" stroke={selection.kind === 'duct' && selection.id === run.id ? SELECT : colorOf(run)} strokeWidth={run.widthM + wallM * 2} strokeLinejoin="miter" strokeMiterlimit={3} />
-        ))}
-        {doubleRuns.map(({ run, points }) => (
-          <polyline key={`i-${run.id}`} points={points} fill="none" stroke={pale(selection.kind === 'duct' && selection.id === run.id ? SELECT : colorOf(run), 0.9)} strokeWidth={run.widthM} strokeLinejoin="miter" strokeMiterlimit={3} />
-        ))}
-      </g>
+      {/* Duct walls: a wide stroke in the stream colour, then the inside over it, so joined runs share one outline.
+          Each network (system and air type) is drawn as its own layer: where two networks cross, one passes over
+          the other with its walls intact instead of the two merging into what looks like a junction. */}
+      {doubleLayers.map(({ key, runs }) => (
+        <g key={key} pointerEvents="none">
+          {runs.map(({ run, points }) => (
+            <polyline key={`w-${run.id}`} points={points} fill="none" stroke={selection.kind === 'duct' && selection.id === run.id ? SELECT : colorOf(run)} strokeWidth={run.widthM + wallM * 2} strokeLinejoin="miter" strokeMiterlimit={3} />
+          ))}
+          {runs.map(({ run, points }) => (
+            <polyline key={`i-${run.id}`} points={points} fill="none" stroke={pale(selection.kind === 'duct' && selection.id === run.id ? SELECT : colorOf(run), 0.9)} strokeWidth={run.widthM} strokeLinejoin="miter" strokeMiterlimit={3} />
+          ))}
+        </g>
+      ))}
       {planRuns.map(run => {
         const color = colorOf(run);
         const double = doubled(run);
@@ -2337,11 +2360,7 @@ function DuctLayer({
         const labelShown = !!label && (allLabels || active || (systemId != null && run.systemId === systemId)) && (active || labelHalf * 2 <= label.length - fontM * 0.6);
         const labelInside = double && run.widthM >= labelSize * 1.7;
         // Flow arrows step aside where the label sits inside the duct.
-        const clearOfLabel = (chevron: string) => {
-          if (!label || !labelShown || !labelInside) return true;
-          const [x, y] = chevron.split(' ')[1].split(',').map(Number);
-          return Math.hypot(x - label.x, y - label.y) > labelHalf + fontM * 0.8;
-        };
+        const underLabel = (x: number, y: number) => !!label && labelShown && labelInside && Math.hypot(x - label.x, y - label.y) <= labelHalf + fontM * 0.8;
         return (
           <g key={run.id}>
             <polyline
@@ -2368,7 +2387,7 @@ function DuctLayer({
               <polygon key={`${run.id}-w-${index}`} points={wallQuad(run.points[index].x, run.points[index].y, point.x, point.y, run.widthM)} fill={color} fillOpacity={0.16} stroke={color} strokeWidth={1} vectorEffect="non-scaling-stroke" pointerEvents="none" />
             ))}
             {!double && <polyline points={drawn} fill="none" stroke={active ? SELECT : color} strokeWidth={active ? 2.6 : 1.7} strokeDasharray={SERVICE_DASH[run.service]} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" pointerEvents="none" />}
-            {carried?.toward && flowChevrons(carried.toward === 'end' ? run.points : [...run.points].reverse(), fontM).filter(clearOfLabel).map((chevron, index) => (
+            {carried?.toward && flowChevrons(carried.toward === 'end' ? run.points : [...run.points].reverse(), fontM, underLabel).map((chevron, index) => (
               <polyline key={`${run.id}-a-${index}`} points={chevron} fill="none" stroke={active ? SELECT : color} strokeWidth={1.7} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" pointerEvents="none" />
             ))}
             {crossings.map((hit, index) => {
@@ -2412,8 +2431,7 @@ function DuctLayer({
         );
       })}
       {(project.ductNodes ?? []).map(node => {
-        const system = project.systems.find(item => item.id === node.systemId);
-        const color = (system && streamFor(system.kind, node.service)?.color) || '#5e6368';
+        const color = SERVICE_COLOR[node.service];
         const branches = (project.ducts ?? []).filter(run => run.start.nodeId === node.id || run.end.nodeId === node.id).length;
         const target = tool.kind === 'duct' && tool.systemId === node.systemId && tool.service === node.service;
         return (
@@ -2454,7 +2472,11 @@ const SERVICE_DASH: Record<DuctService, string | undefined> = {
 };
 
 /** Open arrowheads along a polyline given in flow order: one per stretch of plan, always one on a short run. */
-function flowChevrons(points: readonly { x: number; y: number }[], fontM: number): string[] {
+/**
+ * Flow arrows spaced along a polyline, pointing toward its last point. Each arrow keeps to its own slot of the run;
+ * where `avoid` says a spot is taken (a label sits there), it slides along the run to the nearest clear spot.
+ */
+function flowChevrons(points: readonly { x: number; y: number }[], fontM: number, avoid?: (x: number, y: number) => boolean): string[] {
   const size = fontM * 0.34;
   const spacing = fontM * 7;
   const segments: { a: { x: number; y: number }; ux: number; uy: number; length: number; from: number }[] = [];
@@ -2469,13 +2491,30 @@ function flowChevrons(points: readonly { x: number; y: number }[], fontM: number
   }
   if (total < size * 3) return [];
   const count = Math.max(1, Math.floor(total / spacing));
-  const out: string[] = [];
-  for (let k = 0; k < count; k += 1) {
-    const at = (total * (k + 0.5)) / count;
+  const slot = total / count;
+  const step = fontM * 0.4;
+  const tipAt = (at: number) => {
     const segment = segments.find(entry => at <= entry.from + entry.length) ?? segments[segments.length - 1];
     const t = at - segment.from;
-    const tipX = segment.a.x + segment.ux * (t + size / 2);
-    const tipY = segment.a.y + segment.uy * (t + size / 2);
+    return { segment, x: segment.a.x + segment.ux * (t + size / 2), y: segment.a.y + segment.uy * (t + size / 2) };
+  };
+  const out: string[] = [];
+  for (let k = 0; k < count; k += 1) {
+    const ideal = slot * (k + 0.5);
+    const reach = Math.max(0, slot / 2 - size);
+    let found: ReturnType<typeof tipAt> | null = null;
+    for (let d = 0; d <= reach && !found; d += step) {
+      for (const at of d === 0 ? [ideal] : [ideal + d, ideal - d]) {
+        if (at < size || at > total - size * 1.5) continue;
+        const tip = tipAt(at);
+        if (!avoid || !avoid(tip.x, tip.y)) {
+          found = tip;
+          break;
+        }
+      }
+    }
+    if (!found) continue;
+    const { segment, x: tipX, y: tipY } = found;
     const backX = tipX - segment.ux * size;
     const backY = tipY - segment.uy * size;
     out.push(`${backX - segment.uy * size * 0.7},${backY + segment.ux * size * 0.7} ${tipX},${tipY} ${backX + segment.uy * size * 0.7},${backY - segment.ux * size * 0.7}`);
@@ -2627,6 +2666,7 @@ function EquipmentMark({
   const layout = isUnit(product) ? unitLayout(item, length, width) : null;
   const open = !!layout && layout.components.length > 0 && (internals || (autoOpen && length * pxPerM >= UNIT_DETAIL_PX));
   const showSymbol = !open && planSymbol !== 'none' && Math.min(length, width) >= fontM * 0.5;
+  const opening = layout ? null : outdoorOpening(item.catalogId);
   return (
     <g
       data-hit="equipment"
@@ -2679,6 +2719,35 @@ function EquipmentMark({
           onSelect={onSelect}
         />
       )}
+      {/* A roof hood, louver or roof fan: the tag stands straight up from it, clear of neighbours on the same wall. */}
+      {opening && (
+        <g transform={`rotate(${90 - item.yawDeg} ${item.xM} ${item.yM})`}>
+          <OutsideAirTag
+            x={item.xM + Math.abs(Math.sin((item.yawDeg * Math.PI) / 180)) * length / 2 + Math.abs(Math.cos((item.yawDeg * Math.PI) / 180)) * width / 2 + chipH}
+            y={item.yM}
+            face={1}
+            role={opening}
+            size={fontM * 0.6}
+            yawDeg={90}
+            detail={null}
+          />
+        </g>
+      )}
+      {!open &&
+        layout?.ports
+          .filter(port => (port.role === 'oa' || port.role === 'ea') && !(port.ducted && ductedPortIds.includes(getProduct(item.catalogId)?.unit?.portAt[port.role]?.id ?? '')))
+          .map(port => (
+            <OutsideAirTag
+              key={`out-${port.role}`}
+              x={item.xM + (port.face > 0 ? Math.max(port.x, length / 2) : Math.min(port.x, -length / 2))}
+              y={item.yM + Math.max(-width / 2, Math.min(width / 2, port.y))}
+              face={port.face}
+              role={port.role as 'oa' | 'ea'}
+              size={fontM * 0.6}
+              yawDeg={item.yawDeg}
+              detail={null}
+            />
+          ))}
       {showSymbol && (
         <PlanSymbol kind={planSymbol} x0={item.xM - length / 2} x1={item.xM + length / 2} y0={item.yM - width / 2} y1={item.yM + width / 2} color={active ? SELECT : stroke} />
       )}
@@ -3231,16 +3300,19 @@ function PipeLayer({
             {units.map((unit, index) => {
               const end = anchorOf(unit);
               const corner = { x: end.x + lane, y: plant.yM };
-              const route = (offset: number) =>
-                [
-                  { x: plant.xM, y: plant.yM + offset },
-                  { x: corner.x + offset * (end.x >= plant.xM ? -1 : 1), y: corner.y + offset },
-                  { x: corner.x + offset * (end.x >= plant.xM ? -1 : 1), y: end.y },
-                ]
-                  .map(point => `${point.x},${point.y}`)
-                  .join(' ');
+              const path = (offset: number) => [
+                { x: plant.xM, y: plant.yM + offset },
+                { x: corner.x + offset * (end.x >= plant.xM ? -1 : 1), y: corner.y + offset },
+                { x: corner.x + offset * (end.x >= plant.xM ? -1 : 1), y: end.y },
+              ];
+              const route = (offset: number) => path(offset).map(point => `${point.x},${point.y}`).join(' ');
               const supply = route(gap / 2);
               const ret = route(-gap / 2);
+              // Supply runs out from the plant; on liquid loops the dashed return comes back to it.
+              const arrows = [
+                ...flowChevrons(path(gap / 2), fontM * 0.8),
+                ...(liquid ? flowChevrons([...path(-gap / 2)].reverse(), fontM * 0.8) : []),
+              ];
               const mid = { x: (plant.xM + corner.x) / 2, y: plant.yM };
               return (
                 <g key={`${loop.id}-${unit.id}`}>
@@ -3262,6 +3334,9 @@ function PipeLayer({
                   </polyline>
                   <polyline points={supply} fill="none" stroke={active ? SELECT : color} strokeWidth={active ? 2.2 : 1.3} vectorEffect="non-scaling-stroke" strokeLinejoin="round" pointerEvents="none" />
                   {liquid && <polyline points={ret} fill="none" stroke={active ? SELECT : color} strokeWidth={active ? 2.2 : 1.3} strokeDasharray="5 3" vectorEffect="non-scaling-stroke" strokeLinejoin="round" pointerEvents="none" />}
+                  {arrows.map((chevron, arrowIndex) => (
+                    <polyline key={`a-${arrowIndex}`} points={chevron} fill="none" stroke={active ? SELECT : color} strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" pointerEvents="none" />
+                  ))}
                   {index === 0 && (allLabels || related) && Math.abs(corner.x - plant.xM) > fontM * 4 && (
                     <g transform={`translate(${mid.x} ${mid.y + gap + fontM * 0.55}) scale(1,-1)`} pointerEvents="none">
                       <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.pipe} textAnchor="middle" fontSize={fontM * 0.58} fontWeight={600} fill={active ? SELECT : color}>
@@ -3275,6 +3350,67 @@ function PipeLayer({
           </g>
         );
       })}
+    </g>
+  );
+}
+
+/**
+ * Marks a unit connection open to the outdoors: a bold arrow (in for outdoor air, out for exhaust) and a solid tag,
+ * drawn beyond the casing in the unit's frame so it reads the same whether the unit is drawn open or closed.
+ */
+function OutsideAirTag({ x, y, face, role, size, yawDeg, detail }: { x: number; y: number; face: 1 | -1; role: 'oa' | 'ea'; size: number; yawDeg: number; detail: string | null }) {
+  const inward = role === 'oa';
+  // One colour for air coming in, one for air going out, whatever system it belongs to.
+  const color = inward ? OUTSIDE_IN_COLOR : OUTSIDE_OUT_COLOR;
+  const title = 'OUTSIDE AIR';
+  const gap = size * 0.35;
+  const arrowLen = size * 2.6;
+  const shaft = size * 0.26;
+  const head = size * 0.62;
+  const headLen = size * 0.95;
+  const near = x + face * gap;
+  const far = x + face * (gap + arrowLen);
+  const tip = inward ? near : far;
+  const tail = inward ? far : near;
+  const dir = Math.sign(tip - tail) || 1;
+  const neck = tip - dir * headLen;
+  const arrow = [
+    [tail, y - shaft],
+    [neck, y - shaft],
+    [neck, y - head],
+    [tip, y],
+    [neck, y + head],
+    [neck, y + shaft],
+    [tail, y + shaft],
+  ]
+    .map(([px, py]) => `${px},${py}`)
+    .join(' ');
+  const lines = detail ? [title, detail] : [title];
+  const wide = Math.max(title.length * size * 0.64, (detail?.length ?? 0) * size * 0.52) + size * 1.1;
+  const tall = size * 1.5 + (detail ? size * 1.05 : 0);
+  // The tag is drawn upright on screen, so its reach along the unit's axis depends on the unit's rotation.
+  const rad = (yawDeg * Math.PI) / 180;
+  const reach = Math.abs(Math.cos(rad)) * wide / 2 + Math.abs(Math.sin(rad)) * tall / 2;
+  const tagX = x + face * (gap + arrowLen + size * 0.4 + reach);
+  return (
+    <g pointerEvents="none" data-label={LABEL_PRIORITY.outside}>
+      <polygon points={arrow} fill={color} stroke="#fff" strokeWidth={0.8} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      <g transform={`translate(${tagX} ${y}) rotate(${-yawDeg}) scale(1,-1)`}>
+        <rect x={-wide / 2} y={-tall / 2} width={wide} height={tall} rx={size * 0.35} fill={color} stroke="#fff" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        {lines.map((line, index) => (
+          <text
+            key={line}
+            textAnchor="middle"
+            dominantBaseline="central"
+            y={-tall / 2 + size * 0.75 + index * size * 1.05}
+            fontSize={index === 0 ? size * 0.92 : size * 0.78}
+            fontWeight={index === 0 ? 700 : 500}
+            fill="#fff"
+          >
+            {line}
+          </text>
+        ))}
+      </g>
     </g>
   );
 }
@@ -3344,13 +3480,30 @@ const NO_POINTS: ControlPoint[] = [];
 const NO_LOOPS: PlantLoop[] = [];
 
 /** Colour of an air stream inside a unit: the colour its duct carries outside, so the path reads through the casing. */
+/** Outside-air tags: the same two colours everywhere on the plan, in the air key too. */
+const OUTSIDE_IN_COLOR = '#2f7d32';
+const OUTSIDE_OUT_COLOR = '#7a4a2b';
 const UNIT_STREAM_FALLBACK: Record<UnitStream, string> = { outdoor: '#2f7d32', return: '#c47b12', mixed: '#6f6a8a', supply: '#1d4e89', exhaust: '#7a4a2b' };
 const STREAM_SERVICE: Record<UnitStream, DuctService | null> = { outdoor: 'outdoor', return: 'return', mixed: null, supply: 'supply', exhaust: 'relief' };
 
-function unitStreamColor(kind: SystemKind | undefined, stream: UnitStream): string {
+/** Air inside a unit takes the same colour as that air in a duct, whatever the system. */
+function unitStreamColor(stream: UnitStream): string {
   const service = STREAM_SERVICE[stream];
-  if (!kind || !service) return UNIT_STREAM_FALLBACK[stream];
-  return streamFor(kind, service)?.color ?? (stream === 'exhaust' ? streamFor(kind, 'exhaust')?.color : undefined) ?? UNIT_STREAM_FALLBACK[stream];
+  return service ? SERVICE_COLOR[service] : UNIT_STREAM_FALLBACK[stream];
+}
+
+/**
+ * Equipment is drawn in one neutral colour. Only diffusers, grilles, louvers and hoods take a colour: the colour
+ * of the air they handle, so they read with their ducts.
+ */
+function terminalAirColor(catalogId: string): string | undefined {
+  const product = getProduct(catalogId);
+  if (product?.category !== 'air-terminal') return undefined;
+  const id = product.id;
+  if (id.startsWith('diff')) return SERVICE_COLOR.supply;
+  if (id.startsWith('grille-ret')) return SERVICE_COLOR.return;
+  if (id.endsWith('-oa') || id.includes('intake')) return SERVICE_COLOR.outdoor;
+  return SERVICE_COLOR.exhaust;
 }
 
 function rotateLocal(item: Pick<PlacedEquipment, 'xM' | 'yM' | 'yawDeg'>, x: number, y: number): { x: number; y: number } {
@@ -3632,27 +3785,32 @@ function UnitInternals({
           const portId = getProduct(item.catalogId)?.unit?.portAt[port.role]?.id;
           // A duct leaves this connection on the plan and carries its own airflow label.
           if (port.ducted && portId && ductedPortIds.includes(portId)) return null;
-          const outside = port.role === 'oa' || port.role === 'ea';
+          // Where air crosses the building envelope: a solid tag and a bold arrow beyond the hood.
+          if (port.role === 'oa' || port.role === 'ea') {
+            return (
+              <OutsideAirTag
+                key={port.role}
+                x={cx + port.x + port.face * h * 0.56}
+                y={cy + port.y}
+                face={port.face}
+                role={port.role}
+                size={Math.max(t * 1.1, 11.5 / Math.max(pxPerM, 1e-6))}
+                yawDeg={item.yawDeg}
+                detail={fine && flow != null ? formatFlow(flow, units) : null}
+              />
+            );
+          }
           const lines = [
             { value: name, size: t, weight: 700 },
-            ...(fine && outside ? [{ value: port.role === 'oa' ? (port.ducted ? 'duct from outside' : 'intake from outside') : port.ducted ? 'duct to outside' : 'discharge to outside', size: t * 0.82, weight: 600 }] : []),
             ...(fine && flow != null ? [{ value: formatFlow(flow, units), size: t * 0.82, weight: 500 }] : []),
           ];
-          // Beyond the hood or duct end, level with the connection, so it never sits between two streams.
+          // Beyond the duct end, level with the connection, so it never sits between two streams.
           const wide = Math.max(...lines.map(line => line.value.length * line.size * 0.6)) + t * 1.2;
-          const tall = lines.length * t * 1.15 + t * 0.6;
           const x = cx + port.x + port.face * (h * 0.56 + t * 0.9 + wide / 2);
           const y = cy + port.y;
           const top = (lines.length - 1) * t * 0.575;
           return (
             <g key={port.role}>
-              {/* Outdoor connections sit in a dashed badge: this is where air crosses the building envelope. */}
-              {outside &&
-                upright(
-                  x,
-                  y,
-                  <rect x={-wide / 2} y={-tall / 2} width={wide} height={tall} rx={t * 0.4} fill="#fff" fillOpacity={0.92} stroke={color} strokeWidth={1.1} strokeDasharray="4 2.5" vectorEffect="non-scaling-stroke" />,
-                )}
               {lines.map((line, index) => (
                 <g key={line.value}>{text(x, y + top - index * t * 1.15, line.value, line.size, color, line.weight)}</g>
               ))}
