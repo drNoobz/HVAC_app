@@ -31,7 +31,7 @@ seat count before design use.
 | Kitchen | 667 ft² | 4 | 110 CFM OA; 467 CFM exhaust | MAU 2 × 775 CFM (100% outdoor air); 10 ft hood at 2,000 CFM | ✅ (hood was 8 ft) |
 | Prep | 220 ft² | 2 | 41 CFM | MAU, 1 × 150 CFM | ✅ (was transfer air only) |
 | Dish | 207 ft² | 2 | 40 CFM OA; 145 CFM exhaust | Type II hood over the dishwasher, 400 CFM; air arrives from prep | ✅ (was a ceiling grille) |
-| Restroom A / B | 71 ft² each | — | 70 CFM exhaust per WC (continuous) | 150 CFM fan each, to a roof hood | ⚠ Needs door louvers, noted on the system: see 5 |
+| Restroom A / B | 71 ft² each | — | 70 CFM exhaust per WC (continuous) | 150 CFM fan each, to a roof hood; 150 CFM transfer grille in each door | ✅ (had no transfer path) |
 | Office | 193 ft² | 2 | 22 CFM | Small ERV, 100 CFM class (placeholder) | ✅ (was 800 CFM) |
 
 ## Air balance
@@ -108,13 +108,16 @@ now has one:
 400 CFM is a planning value. Replace it with the dishwasher and hood data, and swap in a real product once one is
 in the catalogue.
 
-### 5. Restrooms need a transfer path — open (documented)
+### 5. Restrooms had no transfer path — fixed
 
-Each restroom exhausts 150 CFM (70 CFM per WC is required). The make-up comes from the corridor. A 1 in undercut
-passes only about 30–50 CFM quietly, so each door needs a louver or transfer grille of about 0.5–1 ft² free area.
-The plan has no transfer element (`Opening` has no notes or louver field), so the requirement is in the restroom
-exhaust system's notes.
-- **Next step:** a transfer grille or door louver element.
+Each restroom exhausts 150 CFM (70 CFM per WC is required). A 1 in undercut passes only about 30–50 CFM quietly.
+- **The element:** the catalogue now has `grille-transfer-door`, a labelled planning placeholder: an 18 × 12 in
+  sight-proof door grille, about 0.7 ft² free area, 150 CFM at about 210 fpm. The plan draws it as a slotted
+  bar with an arrow showing which way the air passes (the item's local +y).
+- **The template:** `RESTROOMS` puts one in each restroom door (yaw 180: corridor → restroom).
+- **The roof hoods:** moved beside the fans, so the doors stay clear.
+- **The check:** Check now warns when a room with a restroom exhaust fan has less than 80% of that airflow in
+  supply diffusers plus transfer grilles.
 
 ### 6. Storage had no ventilation — fixed
 

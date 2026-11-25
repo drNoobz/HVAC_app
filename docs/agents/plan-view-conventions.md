@@ -45,6 +45,15 @@ bold arrow.
   - **Louvers, roof hoods and roof fans** (`outdoorOpening`): standing straight up from the item, past its name
     chip.
 
+## Transfer grilles
+
+`grille-transfer-door` (any `grille-transfer*` id) is an air terminal with no duct:
+- **Plan drawing:** a slotted bar plus an arrow along its local +y, the direction the air passes. Set the item's
+  yaw so that +y points into the room that pulls the air (the exhausted room).
+- **Colour:** neutral; it is not a supply or exhaust terminal.
+- **Label:** "TG", drawn on the upstream side so it stays clear of the arrow.
+- **Check:** counts it as make-up for restroom exhaust fans in the same room.
+
 ## Flow arrows
 
 - `flowChevrons(points, fontM, avoid?)`: one arrow per stretch of about 7 × font along a run, pointing toward

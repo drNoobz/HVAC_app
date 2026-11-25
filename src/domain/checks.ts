@@ -263,6 +263,29 @@ function airIssues(project: Project): CheckIssue[] {
       fixLabel: 'Show',
     });
   }
+  // An exhausted restroom with no supply needs a path for its make-up air: a transfer grille in or beside the door.
+  for (const room of project.rooms) {
+    const inRoom = project.equipment.filter(item => item.roomId === room.id);
+    const exhaust = inRoom
+      .filter(item => getProduct(item.catalogId)?.category === 'bathroom-exhaust')
+      .reduce((sum, item) => sum + (designFlow(item) ?? 0) * item.quantity, 0);
+    if (exhaust <= 0) continue;
+    const inflow = inRoom
+      .filter(item => item.catalogId.startsWith('grille-transfer') || item.catalogId.startsWith('diff'))
+      .reduce((sum, item) => sum + (designFlow(item) ?? 0) * item.quantity, 0);
+    if (inflow >= exhaust * 0.8) continue;
+    issues.push({
+      id: `transfer-${room.id}`,
+      step: 'systems',
+      severity: 'warning',
+      message: inflow > 0
+        ? `${room.name} exhausts ${formatFlow(exhaust, units)} but its transfer grilles and supply pass only ${formatFlow(inflow, units)}. Add free area so the make-up air can get in with the door closed.`
+        : `${room.name} exhausts ${formatFlow(exhaust, units)} with no supply and no transfer grille. A door undercut passes only about 30–50 CFM quietly; add a transfer grille in or beside the door.`,
+      selection: { kind: 'room', id: room.id },
+      fix: { kind: 'select' },
+      fixLabel: 'Show',
+    });
+  }
   let outdoor = 0;
   let exhaust = 0;
   for (const item of project.equipment) {

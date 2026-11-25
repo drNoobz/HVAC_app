@@ -2226,6 +2226,7 @@ function ClearanceDimensions({
 function planSymbolFor(product: ReturnType<typeof getProduct>): PlanSymbolKind {
   if (!product) return 'none';
   if (product.category === 'air-terminal') {
+    if (isTransferGrille(product.id)) return 'none';
     if (product.id.startsWith('diff')) return 'supply-outlet';
     if (product.id.startsWith('grille-ret')) return 'return-inlet';
     if (product.id.startsWith('grille')) return 'exhaust-inlet';
@@ -2243,6 +2244,7 @@ function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
   if (product?.category === 'air-handling') return { name: 'AHU', roof };
   if (product?.category === 'plant') return { name: /boiler/i.test(product.name) ? 'B' : /chiller/i.test(product.name) ? 'CH' : 'RACK', roof };
   if (product?.category === 'air-terminal') {
+    if (isTransferGrille(product.id)) return { name: 'TG', roof };
     if (product.id.startsWith('diff')) return { name: 'SD', roof };
     if (product.id.startsWith('grille-ret')) return { name: 'RG', roof };
     if (product.id.startsWith('grille')) return { name: 'EG', roof };
@@ -2271,6 +2273,11 @@ function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
     return { name: 'AHU', roof: false };
   }
   return { name: 'Unit', roof };
+}
+
+/** A grille that passes room air through a door or wall, with no duct. Air crosses it along its local +y. */
+function isTransferGrille(catalogId: string): boolean {
+  return catalogId.startsWith('grille-transfer');
 }
 
 /** Equipment that is itself the opening to outdoors (louvers, roof hoods, roof fans): which way air crosses. */
@@ -2719,6 +2726,25 @@ function EquipmentMark({
           onSelect={onSelect}
         />
       )}
+      {/* Transfer grille: a slotted face in the door, and an arrow through it showing which side the air goes to. */}
+      {isTransferGrille(item.catalogId) && (
+        <g pointerEvents="none">
+          <rect x={item.xM - length / 2} y={item.yM - fontM * 0.18} width={length} height={fontM * 0.36} fill="#fff" stroke={active ? SELECT : stroke} strokeWidth={1.2} vectorEffect="non-scaling-stroke" />
+          {[-0.3, 0, 0.3].map(u => (
+            <line key={u} x1={item.xM + u * length} y1={item.yM - fontM * 0.18} x2={item.xM + u * length} y2={item.yM + fontM * 0.18} stroke={active ? SELECT : stroke} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+          ))}
+          <line x1={item.xM} y1={item.yM - fontM * 0.95} x2={item.xM} y2={item.yM + fontM * 0.75} stroke={active ? SELECT : stroke} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
+          <polyline
+            points={`${item.xM - fontM * 0.28},${item.yM + fontM * 0.55} ${item.xM},${item.yM + fontM * 0.95} ${item.xM + fontM * 0.28},${item.yM + fontM * 0.55}`}
+            fill="none"
+            stroke={active ? SELECT : stroke}
+            strokeWidth={1.6}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        </g>
+      )}
       {/* A roof hood, louver or roof fan: the tag stands straight up from it, clear of neighbours on the same wall. */}
       {opening && (
         <g transform={`rotate(${90 - item.yawDeg} ${item.xM} ${item.yM})`}>
@@ -2751,7 +2777,7 @@ function EquipmentMark({
       {showSymbol && (
         <PlanSymbol kind={planSymbol} x0={item.xM - length / 2} x1={item.xM + length / 2} y0={item.yM - width / 2} y1={item.yM + width / 2} color={active ? SELECT : stroke} />
       )}
-      <g transform={`translate(${item.xM} ${item.yM + width / 2 + chipH / 2 + fontM * 0.1}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
+      <g transform={`translate(${item.xM} ${isTransferGrille(item.catalogId) ? item.yM - chipH / 2 - fontM * 1.15 : item.yM + width / 2 + chipH / 2 + fontM * 0.1}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
         <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.equipment} textAnchor="middle" dominantBaseline="middle" y={systemName ? -chipH * 0.18 : 0} fontSize={fontM * 0.62 * textScale} fill={active ? SELECT : stroke}>
           {label}
         </text>
@@ -3498,7 +3524,7 @@ function unitStreamColor(stream: UnitStream): string {
  */
 function terminalAirColor(catalogId: string): string | undefined {
   const product = getProduct(catalogId);
-  if (product?.category !== 'air-terminal') return undefined;
+  if (product?.category !== 'air-terminal' || isTransferGrille(product.id)) return undefined;
   const id = product.id;
   if (id.startsWith('diff')) return SERVICE_COLOR.supply;
   if (id.startsWith('grille-ret')) return SERVICE_COLOR.return;

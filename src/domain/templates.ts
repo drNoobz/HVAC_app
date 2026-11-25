@@ -381,13 +381,24 @@ const KITCHEN_LINE: SystemPackage = {
   ],
 };
 
-/** Restroom exhaust with a note on the make-up path: the plan has no transfer grille element yet. */
+/**
+ * Restroom exhaust with its make-up path: each restroom door gets a transfer grille sized for the fan, so corridor
+ * air can reach the fan with the door closed.
+ */
 const RESTROOMS: SystemPackage = {
   ...RESTROOM_EXHAUST,
   systems: RESTROOM_EXHAUST.systems.map(system => ({
     ...system,
-    notes: `${system.notes} Make-up air comes from the corridor: give each restroom door a louver or transfer grille of about 0.5–1 ft² free area. A plain undercut passes only about 30–50 CFM quietly.`,
+    notes: `${system.notes} Make-up air comes from the corridor through a transfer grille in each door (about 0.7 ft² free area for 150 CFM at about 210 fpm). A plain undercut passes only about 30–50 CFM quietly.`,
   })),
+  members: [
+    // Roof hoods beside the fans rather than toward the doors, so the doors stay clear for the transfer grilles.
+    ...RESTROOM_EXHAUST.members.map(member =>
+      member.key === 'hoodA' ? { ...member, planOffset: { xM: -0.7, yM: 0 } } : member.key === 'hoodB' ? { ...member, planOffset: { xM: 2.9, yM: 0 } } : member,
+    ),
+    { key: 'tgA', catalogId: 'grille-transfer-door', planOffset: { xM: -0.1, yM: 1.4 }, yawDeg: 180, designCfm: 150, notes: 'Transfer grille in the Restroom A door: corridor air in to the exhaust fan.' },
+    { key: 'tgB', catalogId: 'grille-transfer-door', planOffset: { xM: 2.1, yM: 1.4 }, yawDeg: 180, designCfm: 150, notes: 'Transfer grille in the Restroom B door: corridor air in to the exhaust fan.' },
+  ],
 };
 
 /**
