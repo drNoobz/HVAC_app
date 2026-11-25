@@ -207,6 +207,30 @@ export const CATALOG: CatalogProduct[] = [
     ],
   },
   {
+    id: 'hood-wall-10',
+    manufacturer: 'CaptiveAire',
+    model: 'ND-2',
+    name: 'Type I wall canopy hood, 10 ft',
+    category: 'kitchen-hood',
+    supplier: 'CaptiveAire Systems (USA)',
+    mount: 'ceiling',
+    dimensions: feet(10, 4, 2, '10 ft long × 4 ft deep × 2 ft high planning envelope'),
+    airflow: flow(2000, '2000 CFM (10 ft × 200 CFM/ft at 600 °F listing)'),
+    cooling: null,
+    heating: null,
+    electrical: 'Lighting and controls per CaptiveAire package options. Confirm on submittal.',
+    connections: 'Grease duct and fire-suppression package. Duct sized from exhaust CFM (listing uses ~1500 FPM).',
+    documentUrl: 'https://pics.acitydiscount.com/specs/ND-2.pdf',
+    image: null,
+    source: 'CaptiveAire ND-2 wall canopy listing: min exhaust 150 / 200 / 250 CFM/ft at 450 / 600 / 700 °F cooking surface.',
+    reviewStatus: 'needs-confirmation',
+    gaps: [
+      'Total CFM uses the 600 °F band as a planning pick. Heavier cooking lines need the 700 °F band.',
+      'Hood depth/height are a planning envelope; order length and options from CaptiveAire.',
+      'No product image in this app.',
+    ],
+  },
+  {
     id: 'hood-island-10',
     manufacturer: 'CaptiveAire',
     model: 'ND-2WI',
@@ -885,6 +909,7 @@ function port(id: string, service: DuctService, direction: 'in' | 'out', u: numb
 /** Explicit connections. Air flows in at an inlet and out at an outlet. */
 const PORTS: Record<string, CatalogPort[]> = {
   'hood-wall-8': [port('exhaust', 'exhaust', 'out', 0, 0)],
+  'hood-wall-10': [port('exhaust', 'exhaust', 'out', 0, 0)],
   'hood-island-10': [port('exhaust', 'exhaust', 'out', 0, 0)],
   'fan-upblast-30': [port('in', 'exhaust', 'in', 0, 0)],
   'fan-inline-8': [port('in', 'exhaust', 'in', -1, 0), port('out', 'exhaust', 'out', 1, 0)],
