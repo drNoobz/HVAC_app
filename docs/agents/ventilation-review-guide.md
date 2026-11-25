@@ -4,8 +4,9 @@ A repeatable method for checking that every space in a template (or a user's pro
 exhaust it needs. The worked example is
 [restaurant-template-ventilation-review.md](restaurant-template-ventilation-review.md).
 
-This is **airflow bookkeeping**: it is in scope for the app. It is not a load calculation; the app must not solve
-loads or psychrometrics. Write results as planning checks and say which code edition they assume.
+This is **airflow bookkeeping**, not a load calculation. The app has no solver yet; one is planned. Until then,
+templates use best-guess capacities, as described in [regulations-first-templates.md](regulations-first-templates.md).
+Write results as planning checks and say which code edition they assume.
 
 ## 1. Collect the inputs
 

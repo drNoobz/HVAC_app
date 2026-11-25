@@ -245,6 +245,14 @@ const junction = (key: string): PackageRef => ({ node: key });
 const CFM = 0.0004719474432;
 
 /**
+ * Code basis: the requirements in this template are derived from these, before any equipment is placed
+ * (docs/agents/regulations-first-templates.md). Generic model codes, unamended; a real project uses the editions
+ * and amendments its jurisdiction adopted.
+ */
+const CODE_BASIS =
+  'Code basis (planning, generic and unamended): IMC 2021 §403 and ASHRAE 62.1-2022 for ventilation and exhaust; IMC 2021 §506–508, NFPA 96-2021, and the UL 710 hood listing for kitchen exhaust and make-up air; IBC 2021 Table 1004.5 for occupant load; IECC 2021 §C403 for economizer and demand-controlled ventilation. A Chicago project follows the Chicago Construction Codes, the Chicago energy code, and the Illinois Food Code: confirm editions with the city.';
+
+/**
  * Design occupancy, which also sets the ventilation outdoor air. Full-service dining at about 15 ft² per seat
  * (the IBC occupant load for unconcentrated tables): 1,033 ft² → 70. Bar: 237 ft² → 16 seats.
  */
@@ -279,7 +287,7 @@ const DINING_BAR_RTU: SystemPackage = {
   systems: [
     {
       ...RTU_DUCTED.systems[0],
-      notes: `One rooftop for the dining room, bar, corridor, and storage: same hours and similar loads. Supply 3,750 CFM = dining 3,000 + bar 550 + corridor 120 + storage 80. Minimum outdoor air ${RTU_MIN_OA_CFM.toLocaleString('en-US')} CFM ventilates all four for ${DINING_SEATS} dining and ${BAR_SEATS} bar seats; return 2,550 CFM through the dining grilles. The bar and storage return through their doorways; the corridor air is drawn on by the restroom exhaust and the kitchen. Terminal airflows are planning values.`,
+      notes: `One rooftop for the dining room, bar, corridor, and storage: same hours and similar loads. Supply 3,750 CFM = dining 3,000 + bar 550 + corridor 120 + storage 80. Minimum outdoor air ${RTU_MIN_OA_CFM.toLocaleString('en-US')} CFM ventilates all four for ${DINING_SEATS} dining and ${BAR_SEATS} bar seats (IMC §403 / ASHRAE 62.1); return 2,550 CFM through the dining grilles. The bar and storage return through their doorways; the corridor air is drawn on by the restroom exhaust and the kitchen. The dining room is over 500 ft² at more than 25 people per 1,000 ft² on an economizer unit, so demand-controlled ventilation applies (IECC §C403.7.1): CO2-2 resets the outdoor air down from the minimum when the room is not full. Best-guess cooling (no solver yet): people 86 × 615 Btu/h ≈ 53,000; outdoor air 4.5 × 1,200 CFM × 9.9 Btu/lb ≈ 53,000 at the Chicago design day; lights ≈ 5,500; envelope and sun ≈ 20,000; about 132,000 Btu/h, 11 tons, inside the unit's 12.5. Terminal airflows are planning values.`,
     },
   ],
   members: [
@@ -329,6 +337,7 @@ const DINING_BAR_RTU: SystemPackage = {
     roundDuct('supply', 8, junction('s4'), memberPort('d4a', 'neck')),
     ...RTU_DUCTED.ducts.filter(duct => duct.service === 'return'),
   ],
+  points: [...(RTU_DUCTED.points ?? []), { tag: 'CO2-2', sensor: 'co2', member: 'rtu', room: true }],
 };
 
 /**
@@ -343,14 +352,21 @@ const KITCHEN_LINE: SystemPackage = {
   description: '10 ft Type I wall canopy (2,000 CFM) → 16 in listed grease duct → roof upblast fan beside the hood. Direct-fired MAU at 1,700 CFM: two diffusers ahead of the line and one in prep.',
   systems: KITCHEN_HOOD_MAU.systems.map(system =>
     system.key === 'exhaust'
-      ? { ...system, notes: 'Type I hood, 10 ft, covers the range, fryer, and griddle with 6 in overhang at each end. 2,000 CFM (200 CFM/ft at the 600 °F listing) → listed grease duct → roof upblast fan selected at the hood airflow. The fan discharges to outdoors on its own.' }
-      : { ...system, notes: 'Direct-fired MAU with its intake hood on the unit. 1,700 CFM, 85% of the hood exhaust: two diffusers ahead of the cooking line (775 each) and one in prep (150), which also ventilates prep. The other 15% transfers from the dining room so the kitchen stays negative to it.' },
+      ? { ...system, notes: 'Type I hood over the grease-producing line (IMC §507, NFPA 96), 10 ft, covering the range, fryer, and griddle with 6 in overhang at each end. 2,000 CFM (200 CFM/ft at the 600 °F UL 710 listing) → listed grease duct at about 1,430 fpm (500 fpm minimum) → roof upblast fan selected at the hood airflow. The fan discharges to outdoors on its own. Fire suppression per the hood listing (UL 300).' }
+      : { ...system, notes: 'Direct-fired MAU with its intake hood on the unit, interlocked to run with the hood fan (IMC §508). 1,700 CFM, 85% of the hood exhaust: two diffusers ahead of the cooking line (775 each) and one in prep (150), which also ventilates prep. The other 15% transfers from the dining room, so make-up from all sources about equals the exhaust and the kitchen stays negative to the dining room. Best-guess burner (no solver yet): 1.08 × 1,700 CFM × (65 − (−4) °F) ≈ 127,000 Btu/h, so about 130 MBH output.' },
   ),
   members: KITCHEN_HOOD_MAU.members
     .map(member => {
       if (member.key === 'hood') return { ...member, catalogId: 'hood-wall-10', notes: 'Wall canopy on the back wall, 10 ft: 6 in past the range and the griddle at each end.' };
       if (member.key === 'fan') return { ...member, designCfm: 2000 };
-      if (member.key === 'mau') return { ...member, sections: (member.sections ?? []).map(section => (section.flowM3s != null ? { ...section, flowM3s: 1700 * CFM } : section)) };
+      if (member.key === 'mau')
+        return {
+          ...member,
+          sections: (member.sections ?? []).map(section => {
+            if (section.kind === 'heating-coil') return { ...section, capacityW: 130000 * 0.29307107, note: 'Direct gas-fired burner in the airstream. About 130 MBH output: best guess for 1,700 CFM from −4 °F to 65 °F.' };
+            return section.flowM3s != null ? { ...section, flowM3s: 1700 * CFM } : section;
+          }),
+        };
       if (member.key === 'diffA' || member.key === 'diffB') return { ...member, designCfm: 775 };
       return member;
     })
@@ -374,34 +390,55 @@ const RESTROOMS: SystemPackage = {
   })),
 };
 
-/** Dish exhaust: the grille stands in for the dishwasher's Type II hood or direct vent. */
+/**
+ * Dish exhaust. The high-temperature door-type dishwasher makes steam and heat, so it gets a Type II condensate hood
+ * (IMC §507), not a ceiling grille: hood → inline fan → gravity relief hood on the roof.
+ */
 const DISH_EXHAUST: SystemPackage = {
   ...GENERAL_EXHAUST,
+  id: 'dish-exhaust-type2',
+  name: 'Dish exhaust, Type II hood',
+  description: 'Type II condensate hood over the dishwasher (400 CFM) → 10 in duct → inline fan → gravity relief hood on the roof.',
   systems: GENERAL_EXHAUST.systems.map(system => ({
     ...system,
-    notes: 'Stands in for a Type II (condensate) hood over the high-temperature door-type dishwasher, or a direct vent if the machine is listed for one. Exhaust rate per the machine data; 400 CFM is a planning value → inline fan → gravity relief hood on the roof.',
+    notes: 'Type II condensate hood over the high-temperature door-type dishwasher (IMC §507) → inline fan → gravity relief hood on the roof. 400 CFM is a planning value: use the dishwasher and hood data. Dish air is not returned (class 2); it arrives from prep.',
   })),
-  members: GENERAL_EXHAUST.members.map(member =>
-    member.key === 'grille' ? { ...member, notes: 'Placeholder for the dishwasher Type II hood or direct vent. Select per the machine.' } : member,
-  ),
+  members: [
+    { key: 'fan', catalogId: 'fan-inline-8', planOffset: { xM: 0, yM: 0 }, yawDeg: 0, designCfm: 400, notes: 'Inline fan. Inlet from the dishwasher hood; outlet to the roof hood.' },
+    { key: 'hood2', catalogId: 'hood-type2-4', planOffset: { xM: -0.9, yM: -0.2 }, designCfm: 400, notes: 'Type II condensate hood over the door-type dishwasher.' },
+    { key: 'hood', catalogId: 'hood-relief-roof', planOffset: { xM: 1.4, yM: 0.8 }, notes: 'Roof discharge.' },
+  ],
+  nodes: [],
+  ducts: [
+    roundDuct('exhaust', 10, memberPort('hood2', 'exhaust'), memberPort('fan', 'in'), [{ x: -0.9, y: 0 }]),
+    roundDuct('exhaust', 10, memberPort('fan', 'out'), memberPort('hood', 'throat'), [{ x: 1.4, y: 0 }]),
+  ],
 };
 
 /**
- * Office ventilation. The office needs about 22 CFM of outdoor air (2 people, 193 ft²). 250 CFM is the bottom of
- * the RenewAire HE1X range, the smallest ERV in this catalogue, so it still over-ventilates: select a smaller ERV
- * (about 50–100 CFM) for design.
+ * Office ventilation. The office needs about 22 CFM of outdoor air (2 people, 193 ft², IMC §403 / ASHRAE 62.1).
+ * A 100 CFM-class ERV covers it with margin and runs on the office's own hours.
  */
 const OFFICE_VENTILATION: SystemPackage = {
   ...OFFICE_ERV,
+  id: 'erv-office-100',
+  description: '100 CFM-class ERV with outdoor-air and exhaust hoods on the casing. 6 in supply to a ceiling diffuser and 6 in return from a grille.',
   systems: OFFICE_ERV.systems.map(system => ({
     ...system,
-    notes: 'Rooftop ERV at 250 CFM, the bottom of the HE1X range. The office needs about 22 CFM of outdoor air (2 people, 193 ft², ASHRAE 62.1), so select a smaller ERV (about 50–100 CFM) for design. Supply diffuser and return grille in the room.',
+    notes: 'ERV at 100 CFM for the office: it needs about 22 CFM of outdoor air (2 people, 193 ft², IMC §403 / ASHRAE 62.1), and the smallest common ERVs run 50–150 CFM. Balanced supply and exhaust, so it does not shift the building balance. The office is under 500 ft², so demand-controlled ventilation is not required; CO2-1 still reports. Placeholder unit: select the ERV and its hoods or wall caps.',
   })),
   members: OFFICE_ERV.members.map(member => {
-    if (member.key === 'erv') return { ...member, sections: (member.sections ?? []).map(section => (section.flowM3s != null ? { ...section, flowM3s: 250 * CFM } : section)) };
-    if (member.key === 'diff' || member.key === 'grille') return { ...member, designCfm: 250 };
+    if (member.key === 'erv')
+      return {
+        ...member,
+        catalogId: 'erv-small-100',
+        notes: 'Small ERV, 100 CFM class. Outdoor-air and exhaust hoods on the casing.',
+        sections: (member.sections ?? []).map(section => (section.flowM3s != null ? { ...section, flowM3s: 100 * CFM } : section)),
+      };
+    if (member.key === 'diff' || member.key === 'grille') return { ...member, designCfm: 100 };
     return member;
   }),
+  ducts: OFFICE_ERV.ducts.map(duct => ({ ...duct, widthIn: 6 })),
 };
 
 /** Office heating and cooling: a ductless wall unit with its own thermostat. The ERV keeps supplying outdoor air. */
@@ -455,7 +492,7 @@ export function createFullServiceProject(): Project {
   return {
     ...next,
     location: "Chicago O'Hare, IL (planning climate)",
-    details: `${TEMPLATE_DETAILS} Equipment, loads, and ducts are planning placements, not a design. Exterior conditions use Chicago O'Hare ASHRAE 2009 design-day values; confirm the project site before design use. Every duct ends at a unit, a fan, or a terminal, and branch airflows add up to the unit airflow.`,
+    details: `${TEMPLATE_DETAILS} ${CODE_BASIS} Equipment, loads, and ducts are planning placements sized by best guess until the solver is connected, not a design. Exterior conditions use Chicago O'Hare ASHRAE 2009 design-day values; confirm the project site before design use. Every duct ends at a unit, a fan, or a terminal, and branch airflows add up to the unit airflow.`,
     site: fullServiceSite(),
     loads: [
       load('people-restaurant', plan.dining, 4, 3.2, DINING_SEATS),
@@ -636,7 +673,7 @@ export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
     id: 'full-service',
     name: 'Full-service restaurant',
     description:
-      'Dining, bar, kitchen, prep, dish, restrooms, storage, office, and corridor, with climate, loads, and complete air systems: a ducted RTU for the dining room, bar, corridor, and storage, a 10 ft hood with make-up air to the kitchen and prep, restroom and dish exhaust, and an office ERV with a ductless heat pump.',
+      'Dining, bar, kitchen, prep, dish, restrooms, storage, office, and corridor, with climate, loads, and complete air systems: a ducted RTU for the dining room, bar, corridor, and storage, a 10 ft hood with make-up air to the kitchen and prep, restroom exhaust, a Type II hood over the dishwasher, and an office ERV with a ductless heat pump.',
     create: createFullServiceProject,
   },
 ];

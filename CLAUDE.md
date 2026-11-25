@@ -5,8 +5,13 @@ Run with `npm run dev` (port 3100).
 
 ## Ground rules from the user
 
-- **No solving.** No psychrometrics, load calculations or equipment sizing in the app. Airflow bookkeeping
-  (sums, balances, ventilation-rate checks) is fine.
+- **Regulations first.** When building or changing a template, start from the code basis and derive each space's
+  requirements before placing equipment. See
+  [docs/agents/regulations-first-templates.md](docs/agents/regulations-first-templates.md).
+- **No solver yet (temporary).** The app does not run psychrometrics or load calculations; a solver is planned.
+  Until then, templates use best-guess sizes (approximate CFM, Btu/h, tons) with the arithmetic in the notes, so
+  the right equipment lands in the right places. Airflow bookkeeping (sums, balances, ventilation-rate checks) is
+  fine.
 - **Everything happens on the main canvas.** Inspectors stay slim. Keep the phases Spaces, Loads, Systems and
   Check.
 - Don't remove structure the user didn't ask to remove.
@@ -31,6 +36,8 @@ Run with `npm run dev` (port 3100).
 
 ## Guides
 
+- [docs/agents/regulations-first-templates.md](docs/agents/regulations-first-templates.md): where codes come
+  from, the code basis, deriving requirements per space, and designing a template to them.
 - [docs/agents/plan-view-conventions.md](docs/agents/plan-view-conventions.md): colours, outside-air tags, flow
   arrows, duct layering, labels, interaction rules.
 - [docs/agents/ventilation-review-guide.md](docs/agents/ventilation-review-guide.md): how to check that every

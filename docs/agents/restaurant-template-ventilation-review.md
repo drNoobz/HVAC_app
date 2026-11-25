@@ -2,9 +2,18 @@
 
 - **Reviewed:** 2026-11-25, against the template built by `createFullServiceProject()` in
   `src/domain/templates.ts` (system packages in `src/domain/systemPackages.ts`).
-- **Fixes applied:** 2026-11-26. The template-specific packages live in `templates.ts`: `DINING_BAR_RTU`,
+- **Fixes applied:** 2026-11-26; then a regulations-first pass the same day (code basis, demand-controlled
+  ventilation, Type II dish hood, small office ERV, best-guess capacities). The template-specific packages live in `templates.ts`: `DINING_BAR_RTU`,
   `KITCHEN_LINE`, `RESTROOMS`, `DISH_EXHAUST`, `OFFICE_VENTILATION`, `OFFICE_SPLIT`.
 - **Method and rate tables:** [ventilation-review-guide.md](ventilation-review-guide.md).
+
+**Code basis** (stated in the template details as `CODE_BASIS`, generic and unamended):
+- ventilation: IMC 2021 §403 and ASHRAE 62.1-2022
+- kitchen exhaust and make-up air: IMC 2021 §506–508, NFPA 96-2021 and UL 710
+- occupant load: IBC 2021 Table 1004.5
+- energy: IECC 2021 §C403
+
+See [regulations-first-templates.md](regulations-first-templates.md).
 
 Rates come from ASHRAE 62.1 Tables 6-1 and 6-4, which the IMC (Table 403.3.1.1) follows closely. The template's
 planning climate is Chicago, which enforces its own mechanical code (based on the IMC, with local amendments). Every
@@ -21,17 +30,17 @@ seat count before design use.
 | Storage | 145 ft² | — | 17 CFM | RTU, 1 × 80 CFM, branched on from the bar; returns through the bar | ✅ (was ❌: nothing served it) |
 | Kitchen | 667 ft² | 4 | 110 CFM OA; 467 CFM exhaust | MAU 2 × 775 CFM (100% outdoor air); 10 ft hood at 2,000 CFM | ✅ (hood was 8 ft) |
 | Prep | 220 ft² | 2 | 41 CFM | MAU, 1 × 150 CFM | ✅ (was transfer air only) |
-| Dish | 207 ft² | 2 | 40 CFM OA; 145 CFM exhaust | 400 CFM exhaust; air arrives from prep | ⚠ The grille stands in for a Type II hood: see 4 |
+| Dish | 207 ft² | 2 | 40 CFM OA; 145 CFM exhaust | Type II hood over the dishwasher, 400 CFM; air arrives from prep | ✅ (was a ceiling grille) |
 | Restroom A / B | 71 ft² each | — | 70 CFM exhaust per WC (continuous) | 150 CFM fan each, to a roof hood | ⚠ Needs door louvers, noted on the system: see 5 |
-| Office | 193 ft² | 2 | 22 CFM | ERV at 250 CFM | ⚠ Still about 11× too much: see 7 |
+| Office | 193 ft² | 2 | 22 CFM | Small ERV, 100 CFM class (placeholder) | ✅ (was 800 CFM) |
 
 ## Air balance
 
 | | Original template | Now |
 |---|---|---|
-| Outdoor air in | RTU 750 + MAU 1,600 + ERV 800 = 3,150 | RTU 1,200 + MAU 1,700 + ERV 250 = 3,150 |
-| Exhaust out | hood 1,600 + dish 400 + restrooms 300 + ERV 800 = 3,100 | hood 2,000 + dish 400 + restrooms 300 + ERV 250 = 2,950 |
-| Net | +50 | +200 (about 6% of outdoor air); it leaves through the RTU's barometric relief |
+| Outdoor air in | RTU 750 + MAU 1,600 + ERV 800 = 3,150 | RTU 1,200 + MAU 1,700 + ERV 100 = 3,000 |
+| Exhaust out | hood 1,600 + dish 400 + restrooms 300 + ERV 800 = 3,100 | hood 2,000 + dish 400 + restrooms 300 + ERV 100 = 2,800 |
+| Net | +50 | +200 (about 7% of outdoor air); it leaves through the RTU's barometric relief |
 
 How the air moves now:
 - The RTU zone (dining, bar, corridor, storage) supplies 3,750 CFM and returns 2,550, so it is 1,200 CFM positive.
@@ -89,12 +98,15 @@ RTU multiple-zone check at the new counts:
 
 The MAU trunk now tees in prep to a 150 CFM diffuser. The two kitchen diffusers dropped to 775 CFM each.
 
-### 4. Dish exhaust is a ceiling grille over a high-temperature dishwasher — open (documented)
+### 4. Dish exhaust was a ceiling grille over a high-temperature dishwasher — fixed
 
-The airflow (400 CFM against 145 required) is fine. The IMC wants a Type II (condensate) hood over steam-producing
-dishwashers, or a listed direct vent. The catalogue has no Type II hood yet, so the system and grille notes now
-say the grille is a placeholder.
-- **Next step:** add a Type II hood product with real listing data, and swap it in `DISH_EXHAUST`.
+The IMC wants a Type II (condensate) hood over steam-producing dishwashers, or a listed direct vent. The template
+now has one:
+- a Type II hood (`hood-type2-4`, a labelled planning placeholder) directly over the door-type dishwasher
+- then the inline fan, then the roof relief hood (`DISH_EXHAUST`)
+
+400 CFM is a planning value. Replace it with the dishwasher and hood data, and swap in a real product once one is
+in the catalogue.
 
 ### 5. Restrooms need a transfer path — open (documented)
 
@@ -109,18 +121,35 @@ exhaust system's notes.
 An 80 CFM diffuser now branches off the bar supply (node `s5`), and its air returns through the door to the bar.
 If the room will ever hold chemicals, it needs exhaust at 1.5 CFM/ft² instead.
 
-### 7. Office ERV oversized — reduced, still open
+### 7. Office ERV oversized — fixed with a placeholder
 
-The ERV went from 800 to 250 CFM, with the diffuser and grille at 250. 250 CFM is the bottom of the RenewAire HE1X
-range and the smallest ERV in the catalogue. The office needs about 22 CFM, so it still over-ventilates by
-about 11×. The system notes say so.
-- **Next step:** add a small ERV (about 50–100 CFM; indoor units of this size need ducted outdoor-air and exhaust
-  wall caps), and use it in `OFFICE_VENTILATION`.
+The ERV is now a 100 CFM-class unit (`erv-small-100`, a labelled planning placeholder), with its diffuser and
+return grille at 100 CFM on 6 in ducts. The office needs about 22 CFM; ERVs of 50–150 CFM are the smallest common
+size.
+- **Next step:** select a real unit. Many at this size are indoor units with ducted wall caps rather than hoods on
+  the casing, so the package may need outdoor-air and exhaust ducts.
+
+### 8. Energy code: demand-controlled ventilation — added
+
+The dining room is over 500 ft² with more than 25 people per 1,000 ft², and it is served by an economizer unit.
+IECC §C403.7.1 therefore requires demand-controlled ventilation. The RTU package now has a room CO₂ sensor,
+CO2-2. The office is under 500 ft², so its CO2-1 is optional.
+
+### 9. Best-guess capacities (no solver yet)
+
+| Equipment | Estimate | Selected |
+|---|---|---|
+| RTU cooling | People 86 × 615 Btu/h ≈ 53,000; outdoor air 4.5 × 1,200 × 9.9 Btu/lb ≈ 53,000 (Chicago design day, room at 75 °F / 50%); lights ≈ 5,500; envelope and sun ≈ 20,000 (guess). About 132,000 Btu/h ≈ 11 tons. | 12.5 tons ✅ |
+| MAU burner | 1.08 × 1,700 CFM × (65 − (−4) °F) ≈ 127,000 Btu/h | About 130 MBH output (was 400 MBH) |
+| Office split | 193 ft² office, 2 people, one window | 1 ton ✅ (rule of thumb) |
+
+The solver will replace these numbers. The arithmetic is in the system notes, so it is clear what to replace.
 
 ## Not checked here
 
-- Thermal loads, coil capacities and psychrometrics: the app does not solve them at this stage. Note that the
-  added diners raise the internal loads; the RTU's 12.5 tons was not re-checked.
+- A full load calculation: the capacities above are best guesses until the solver is connected.
+- Energy recovery thresholds (IECC §C403.7.4) for the RTU at about 32% outdoor air: check them for the climate
+  zone.
 - Duct static pressure, noise criteria, filtration (MERV) and economizer high-limit settings.
 - Fire separations, grease duct clearances and enclosures, and the fire-suppression system: NFPA 96 and the
   building code.
