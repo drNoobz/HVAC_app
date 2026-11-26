@@ -2,7 +2,8 @@
 
 import dynamic from 'next/dynamic';
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { catalogToken } from '@/domain/catalogDrag';
+import { catalogToken, setActiveCatalogDrag, type CatalogDrag } from '@/domain/catalogDrag';
+import { createSystemAt, dropRole, ductStart, joinTarget, packageAround, packagesFor, runUnder, systemDistance, systemKindsFor } from '@/domain/smartDrop';
 import { buildChecks, stepForSelection, type BuildStep, type CheckIssue } from '@/domain/checks';
 import { siteMissing, siteOf } from '@/domain/climate';
 import { LOOP_FLUID_LABEL, newPlantLoop, SENSOR_LABEL } from '@/domain/controls';
@@ -17,10 +18,11 @@ import {
   FAMILY_LABEL,
   FAMILY_ORDER,
   getProduct,
+  type CatalogProduct,
   type EquipmentCategory,
   type EquipmentFamily,
 } from '@/domain/catalog';
-import { applySystemPackage, PACKAGE_GROUPS, packageSummary } from '@/domain/systemPackages';
+import { applySystemPackage, PACKAGE_GROUPS, packageSummary, type SystemPackage } from '@/domain/systemPackages';
 import { useSystemPackages } from './useSystemPackages';
 import { downloadText, fileSlug } from '@/domain/download';
 import {
@@ -50,14 +52,15 @@ import {
   updateRoom,
   updateSystem,
   placementZ,
+  roomAtPoint,
 } from '@/domain/projectOps';
 import { buildBom, buildConstructionBom, buildConstructionSchedule, buildSchedule, projectSummary, scheduleCsv } from '@/domain/schedule';
 import { DUCT_CATALOG, DUCT_STREAMS, ductPairAllowed, getDuctProduct, servicesFor, streamFor, systemsForProduct } from '@/domain/ductCatalog';
-import { ductSizeLabel, DUCT_SERVICES, DUCT_SERVICE_LABEL, openPorts } from '@/domain/ducts';
+import { ductSizeLabel, DUCT_SERVICES, DUCT_SERVICE_LABEL, openPorts, type DuctDraftPoint } from '@/domain/ducts';
 import { SURFACE_FACES, SYSTEM_KINDS, WALL_FACES, type DuctService, type EditorTool, type Project, type Selection, type StoredTemplate, type WallFace } from '@/domain/types';
 import { NO_WALL_RUNS, polygonArea } from '@/domain/wallDraw';
 import { INTERFACE_COLOR, PLAN_SIDES, WALL_TYPES, edgePortions, findInterface, interfaceForOpening, interfaceTargets, portionSummary, roomFill, wallColor, wallPlaceLabel, wallRoleLabel } from '@/domain/walls';
-import { DEFAULT_LAYERS, PlanView, type PlanLayers } from './PlanView';
+import { DEFAULT_LAYERS, PlanView, type DropHint, type PlanLayers } from './PlanView';
 import { formatArea, formatLength, formatNumber, formatPower, lengthToM, lengthUnit, mToLength } from '@/domain/units';
 import { projectToBuildingModel, validateModel } from '@/thermonode/localAdapter';
 import { mergeAssemblies, mergeLibrary, type ConstructionAssembly, type ConstructionMaterial } from '@/domain/constructionLibrary';
@@ -125,7 +128,7 @@ function toolStep(tool: EditorTool): BuildStep | null {
   return null;
 }
 
-type MenuEntry = { id: string; label: string; danger?: boolean; run: () => void };
+type MenuEntry = { id: string; label: string; detail?: string; danger?: boolean; run: () => void };
 
 function selectionForSubject(project: Project, subjectId: string | undefined): Selection | null {
   if (!subjectId) return null;
@@ -190,6 +193,7 @@ export function Studio({
   const [query, setQuery] = useState('');
   const [catalogFamily, setCatalogFamily] = useState<EquipmentFamily | 'all'>('all');
   const [lastProductId, setLastProductId] = useState<string | null>(null);
+  const packages = useSystemPackages();
   const [targetSystemId, setTargetSystemId] = useState('');
   const [loadQuery, setLoadQuery] = useState('');
   const [spaceQuery, setSpaceQuery] = useState('');
@@ -206,7 +210,7 @@ export function Studio({
   const [wallTypeId, setWallTypeId] = useState<string | null>(null);
   const [scene, setScene] = useState<'plan' | '3d'>('plan');
   const [cameraPose, setCameraPose] = useState<'orbit' | 'top'>('top');
-  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; title?: string; items: MenuEntry[] } | null>(null);
   const [nameFocus, setNameFocus] = useState(0);
   const past = useRef<Project[]>([]);
   const future = useRef<Project[]>([]);
@@ -217,6 +221,30 @@ export function Studio({
     setHistoryTick({ undo: true, redo: false });
     onChange(next);
   };
+  /** A system made for a dropped duct. If the user leaves the duct tool before drawing anything, it goes again. */
+  const pendingSystem = useRef<{ id: string; before: Project } | null>(null);
+  const latestProject = useRef(project);
+  latestProject.current = project;
+  const latestOnChange = useRef(onChange);
+  latestOnChange.current = onChange;
+  useEffect(() => {
+    const pending = pendingSystem.current;
+    if (!pending || (tool.kind === 'duct' && tool.systemId === pending.id)) return;
+    pendingSystem.current = null;
+    // Leaving the duct tool commits the run being drawn in this same render, so look once that edit has landed.
+    window.setTimeout(() => {
+      const current = latestProject.current;
+      if (!current.systems.some(system => system.id === pending.id)) return;
+      const used =
+        current.equipment.some(item => item.systemId === pending.id) ||
+        (current.ducts ?? []).some(run => run.systemId === pending.id) ||
+        (current.ductNodes ?? []).some(node => node.systemId === pending.id);
+      if (used) return;
+      if (past.current[past.current.length - 1] === pending.before) past.current.pop();
+      setHistoryTick({ undo: past.current.length > 0, redo: future.current.length > 0 });
+      latestOnChange.current(removeSystem(current, pending.id));
+    }, 0);
+  }, [tool]);
   const undo = () => {
     const prev = past.current.pop();
     if (!prev) return;
@@ -480,7 +508,10 @@ export function Studio({
       return [{ id: 'delete', label: 'Delete', danger: true, run: () => { edit(removeWallRunOpening(project, next.wallId, next.id)); setSelection({ kind: 'wallRun', id: next.wallId }); } }];
     }
     if (next.kind === 'duct') {
-      return [{ id: 'delete', label: 'Delete', danger: true, run: () => { edit(removeDuct(project, next.id)); setSelection({ kind: 'project' }); } }];
+      return [
+        { id: 'branch', label: 'Draw branch', detail: 'Click on this run where the branch starts', run: () => armBranch(next.id) },
+        { id: 'delete', label: 'Delete', danger: true, run: () => { edit(removeDuct(project, next.id)); setSelection({ kind: 'project' }); } },
+      ];
     }
     if (next.kind === 'load') {
       return [{ id: 'delete', label: 'Delete', danger: true, run: () => { edit(removeLoad(project, next.id)); setSelection({ kind: 'project' }); } }];
@@ -514,22 +545,91 @@ export function Studio({
       items: SYSTEM_KINDS.map(kind => ({ id: kind.id, label: kind.label, run: () => addSystemOfKind(kind.id) })),
     });
   };
-  const armDuct = (catalogId: string, preset?: { systemId: string; service: DuctService }) => {
+  const armDuct = (
+    catalogId: string,
+    preset?: { systemId: string; service: DuctService; widthM?: number; heightM?: number | null },
+    systemList: Project['systems'] = project.systems,
+  ) => {
     const product = getDuctProduct(catalogId) ?? DUCT_CATALOG[0];
-    const systems = systemsForProduct(product, project.systems);
+    const systems = systemsForProduct(product, systemList);
     const currentId = preset?.systemId ?? (tool.kind === 'duct' ? tool.systemId : selection.kind === 'system' ? selection.id : '');
     const system = systems.find(item => item.id === currentId) ?? systems[0];
     const services = system ? servicesFor(product, system.kind) : [];
     const keep = tool.kind === 'duct' && tool.catalogId === product.id;
     const service = preset && services.includes(preset.service) ? preset.service : keep && services.includes(tool.service) ? tool.service : services[0] ?? 'supply';
-    const listed = product.sizes?.find(size => keep && Math.abs(size.widthM - tool.widthM) < 0.002) ?? product.sizes?.[0];
-    const widthM = listed?.widthM ?? (keep ? tool.widthM : product.defaultWidthIn * 0.0254);
-    const heightM = product.shape === 'rect' ? (keep && tool.heightM ? tool.heightM : (product.defaultHeightIn ?? 12) * 0.0254) : null;
+    const presetSize = preset?.widthM != null ? product.sizes?.find(size => Math.abs(size.widthM - preset.widthM!) < 0.002) : undefined;
+    const listed = presetSize ?? product.sizes?.find(size => keep && Math.abs(size.widthM - tool.widthM) < 0.002) ?? product.sizes?.[0];
+    const widthM = presetSize?.widthM ?? (preset?.widthM != null && !product.sizes ? preset.widthM : listed?.widthM ?? (keep ? tool.widthM : product.defaultWidthIn * 0.0254));
+    const heightM = product.shape === 'rect' ? (preset?.heightM ?? (keep && tool.heightM ? tool.heightM : (product.defaultHeightIn ?? 12) * 0.0254)) : null;
     const next = { kind: 'duct' as const, catalogId: product.id, systemId: system?.id ?? '', service, shape: product.shape, widthM, heightM };
     setTool(next);
     setView('model');
     if (step !== 'check') setStep('systems');
     return next;
+  };
+  /** Right-click "Draw branch": the duct tool set to the run's system, air, product and size. Click the run to tee off it. */
+  const armBranch = (runId: string) => {
+    const run = (project.ducts ?? []).find(item => item.id === runId);
+    if (!run) return;
+    armDuct(run.catalogId, { systemId: run.systemId, service: run.service, widthM: run.widthM, heightM: run.heightM });
+  };
+  /**
+   * A duct dropped from the catalogue: on a run it starts a branch, by an open connection it starts there, and
+   * otherwise it runs in the nearest system that can carry it, or a new one. Returns why when it can't start.
+   */
+  const beginDuctAt = (catalogId: string, point: { xM: number; yM: number }): { tool: Extract<EditorTool, { kind: 'duct' }>; start: DuctDraftPoint | null } | string => {
+    const product = getDuctProduct(catalogId);
+    if (!product) return 'Unknown duct type.';
+    const branch = runUnder(project, point.xM, point.yM, 0.4);
+    const branchSystem = branch ? project.systems.find(item => item.id === branch.run.systemId) : undefined;
+    if (branch && branchSystem) {
+      const own = ductPairAllowed(product, branchSystem.kind, branch.run.service);
+      const tool = armDuct(own ? product.id : branch.run.catalogId, {
+        systemId: branchSystem.id,
+        service: branch.run.service,
+        ...(own && product.id !== branch.run.catalogId ? {} : { widthM: branch.run.widthM, heightM: branch.run.heightM }),
+      });
+      return { tool, start: { x: Number(branch.x.toFixed(3)), y: Number(branch.y.toFixed(3)), splitDuctId: branch.run.id } };
+    }
+    const port = openPorts(project)
+      .map(hit => ({ hit, distance: Math.hypot(hit.x - point.xM, hit.y - point.yM) }))
+      .filter(entry => entry.distance <= 0.6)
+      .sort((a, b) => a.distance - b.distance)[0]?.hit;
+    if (port) {
+      const item = project.equipment.find(entry => entry.id === port.equipmentId);
+      const owner = item?.systemId ? project.systems.find(entry => entry.id === item.systemId) : undefined;
+      let base = project;
+      let system = owner;
+      if (!system && item) {
+        const itemProduct = getProduct(item.catalogId);
+        const kind = (itemProduct ? systemKindsFor(itemProduct, packages) : []).find(entry => streamFor(entry, port.service)) ?? ductStart(catalogId)?.kind;
+        if (kind) {
+          const made = createSystemAt(project, kind, { xM: item.xM, yM: item.yM });
+          base = updateEquipment(made.project, item.id, { systemId: made.system.id });
+          system = made.system;
+          edit(base);
+        }
+      }
+      if (system) {
+        const fit = ductPairAllowed(product, system.kind, port.service) ? product : DUCT_CATALOG.find(entry => ductPairAllowed(entry, system!.kind, port.service));
+        if (fit) {
+          const tool = armDuct(fit.id, { systemId: system.id, service: port.service }, base.systems);
+          return { tool, start: { x: Number(port.x.toFixed(3)), y: Number(port.y.toFixed(3)), equipmentId: port.equipmentId, portId: port.portId } };
+        }
+      }
+    }
+    const fitting = systemsForProduct(product, project.systems);
+    if (fitting.length > 0) {
+      const current = tool.kind === 'duct' ? tool.systemId : selection.kind === 'system' ? selection.id : targetSystemId;
+      const nearest = fitting.find(item => item.id === current) ?? [...fitting].sort((a, b) => systemDistance(project, a.id, point.xM, point.yM) - systemDistance(project, b.id, point.xM, point.yM))[0];
+      return { tool: armDuct(product.id, { systemId: nearest.id, service: tool.kind === 'duct' && tool.systemId === nearest.id ? tool.service : servicesFor(product, nearest.kind)[0] }), start: null };
+    }
+    const fresh = ductStart(product.id);
+    if (!fresh) return `${product.name} has no air type it can carry.`;
+    const made = createSystemAt(project, fresh.kind, point);
+    pendingSystem.current = { id: made.system.id, before: project };
+    edit(made.project);
+    return { tool: armDuct(product.id, { systemId: made.system.id, service: fresh.service }, made.project.systems), start: null };
   };
   const pickTool = (kind: ToolKind) => {
     if (kind === 'duct' || kind === 'load' || kind === 'place' || kind === 'door' || kind === 'window') return;
@@ -539,20 +639,88 @@ export function Studio({
   const runFix = (issue: CheckIssue) => {
     if (issue.selection) select(issue.selection);
   };
-  const placeEquipment = (point: { xM: number; yM: number }, catalogId: string) => {
-    const product = getProduct(catalogId);
-    if (!product) return;
-    const placed = constrainEquipmentPosition(project.rooms, { catalogId: product.id, yawDeg: 0, roomId: null }, point.xM, point.yM);
-    const built = buildPlacement(product, placed.room, { xM: placed.xM, yM: placed.yM });
-    const item = targetSystemId && project.systems.some(system => system.id === targetSystemId) ? { ...built, systemId: targetSystemId } : built;
-    edit({ ...project, equipment: [...project.equipment, item] });
+  /** Put one catalogue item on the plan in a system, or in none. */
+  const putEquipment = (base: Project, product: CatalogProduct, point: { xM: number; yM: number }, systemId: string | null) => {
+    const placed = constrainEquipmentPosition(base.rooms, { catalogId: product.id, yawDeg: 0, roomId: null }, point.xM, point.yM);
+    const item = { ...buildPlacement(product, placed.room, { xM: placed.xM, yM: placed.yM }), systemId };
+    edit({ ...base, equipment: [...base.equipment, item] });
     setLastProductId(product.id);
     select({ kind: 'equipment', id: item.id });
   };
-  const placePackage = (point: { xM: number; yM: number }, packageId: string) => {
+  /** The unit (or fan) alone, heading a new system of its kind. */
+  const placeAlone = (product: CatalogProduct, point: { xM: number; yM: number }) => {
+    const made = createSystemAt(project, systemKindsFor(product, packages)[0] ?? 'other', point);
+    putEquipment(made.project, product, point, made.system.id);
+  };
+  const chosenSystemId = () => (targetSystemId && project.systems.some(system => system.id === targetSystemId) ? targetSystemId : null);
+  /**
+   * Equipment dropped on the plan. Terminals join the nearest system that carries their air; fans and hoods join
+   * a system of their kind nearby; units start their own system and offer a pregenerated one. Alt drops it alone.
+   * Returns a note for the cursor when the item could not join anything.
+   */
+  const placeEquipment = (point: { xM: number; yM: number }, catalogId: string, at?: { clientX: number; clientY: number; alt?: boolean }): string | void => {
+    const product = getProduct(catalogId);
+    if (!product) return;
+    const role = dropRole(product);
+    const chosen = chosenSystemId();
+    if (at?.alt || role === 'free') {
+      putEquipment(project, product, point, at?.alt ? null : chosen);
+      return;
+    }
+    if (chosen) {
+      putEquipment(project, product, point, chosen);
+      return;
+    }
+    if (role !== 'unit') {
+      const target = joinTarget(project, product, point, packages);
+      if (target) {
+        putEquipment(project, product, point, target.id);
+        return;
+      }
+      if (role === 'member') {
+        putEquipment(project, product, point, null);
+        return 'Placed without a system: none carries this air yet. Drop a unit or a system template first.';
+      }
+    }
+    const offers = packagesFor(product, packages).slice(0, 4);
+    if (offers.length === 0) {
+      placeAlone(product, point);
+      return;
+    }
+    setMenu({
+      x: at?.clientX ?? window.innerWidth / 2,
+      y: at?.clientY ?? window.innerHeight / 2,
+      title: `Place ${product.model}`,
+      items: [
+        ...offers.map(({ pack, memberKey }) => ({
+          id: `pack:${pack.id}`,
+          label: `Pregenerated system: ${pack.name}`,
+          detail: packageSummary(pack),
+          run: () => {
+            const laid = packageAround(pack, memberKey, product, point);
+            placePackage(laid.drop, laid.pack);
+          },
+        })),
+        { id: 'alone', label: `${product.model} only, in a new system`, detail: 'Add terminals and ducts yourself.', run: () => placeAlone(product, point) },
+      ],
+    });
+  };
+  const placePackage = (point: { xM: number; yM: number }, packageOrId: string | SystemPackage) => {
     const before = new Set(project.systems.map(system => system.id));
-    const next = applySystemPackage(project, packageId, point);
-    if (next === project) return;
+    const placed = applySystemPackage(project, packageOrId, point);
+    if (placed === project) return;
+    // A second copy of a template gets numbered system names, so the two stay apart in lists.
+    const taken = new Set(project.systems.map(system => system.name));
+    const next = {
+      ...placed,
+      systems: placed.systems.map(system => {
+        if (before.has(system.id) || !taken.has(system.name)) return system;
+        let n = 2;
+        while (taken.has(`${system.name} ${n}`)) n += 1;
+        taken.add(`${system.name} ${n}`);
+        return { ...system, name: `${system.name} ${n}` };
+      }),
+    };
     edit(next);
     const created = next.systems.find(system => !before.has(system.id));
     setScene('plan');
@@ -560,12 +728,63 @@ export function Studio({
     if (step !== 'check') setStep('systems');
     if (created) select({ kind: 'system', id: created.id });
   };
-  const placeLoad = (point: { xM: number; yM: number }, id: string) => {
+  const placeLoad = (point: { xM: number; yM: number }, id: string): string | void => {
+    if (project.rooms.length === 0) return 'Add a space first. Loads sit inside a space.';
     const next = addLoad(project, id, point);
-    if (next === project) return;
+    if (next === project) return 'Drop inside a space. Loads sit inside a space.';
     const created = (next.loads ?? [])[(next.loads ?? []).length - 1];
     edit(next);
     if (created) select({ kind: 'load', id: created.id });
+  };
+  /** What a catalogue drop at this point will do, for the hint at the cursor. Walls and openings are PlanView's. */
+  const describeDrop = (drag: CatalogDrag, point: { xM: number; yM: number }, alt: boolean): DropHint | null => {
+    const nameOf = (id: string | null | undefined) => project.systems.find(system => system.id === id)?.name ?? 'system';
+    if (drag.kind === 'equipment') {
+      const product = getProduct(drag.id);
+      if (!product) return null;
+      const role = dropRole(product);
+      const chosen = chosenSystemId();
+      if (role === 'free') return { text: chosen ? `${product.model} · into ${nameOf(chosen)}` : `${product.model} · no air system needed` };
+      if (alt) return { text: `${product.model} · without a system` };
+      if (chosen) return { text: `Into ${nameOf(chosen)}`, systemId: chosen };
+      if (role !== 'unit') {
+        const target = joinTarget(project, product, point, packages);
+        if (target) return { text: `Joins ${target.name}`, systemId: target.id };
+        if (role === 'member') return { text: 'No system carries this air yet', warn: true };
+      }
+      const kind = systemKindsFor(product, packages)[0] ?? 'other';
+      const label = SYSTEM_KINDS.find(item => item.id === kind)?.label.toLowerCase() ?? 'system';
+      return { text: packagesFor(product, packages).length > 0 ? `New ${label} system · pick a layout on drop` : `New ${label} system` };
+    }
+    if (drag.kind === 'package') {
+      const pack = packages.find(item => item.id === drag.id);
+      return { text: pack ? `Places ${pack.name}` : 'Places the system template' };
+    }
+    if (drag.kind === 'load') {
+      const room = roomAtPoint(project.rooms, point.xM, point.yM);
+      return room ? { text: `Into ${room.name}` } : { text: project.rooms.length === 0 ? 'Add a space first' : 'Drop inside a space', warn: true };
+    }
+    if (drag.kind === 'duct') {
+      const product = getDuctProduct(drag.id);
+      if (!product) return null;
+      const branch = runUnder(project, point.xM, point.yM, 0.4);
+      const branchSystem = branch ? project.systems.find(item => item.id === branch.run.systemId) : undefined;
+      if (branch && branchSystem) return { text: `Branch off ${branchSystem.name} · ${DUCT_SERVICE_LABEL[branch.run.service].toLowerCase()}`, systemId: branchSystem.id };
+      const port = openPorts(project).find(hit => Math.hypot(hit.x - point.xM, hit.y - point.yM) <= 0.6);
+      if (port) {
+        const item = project.equipment.find(entry => entry.id === port.equipmentId);
+        const model = item ? getProduct(item.catalogId)?.model : undefined;
+        return { text: `From ${model ?? 'the unit'} · ${DUCT_SERVICE_LABEL[port.service].toLowerCase()}`, systemId: item?.systemId ?? null };
+      }
+      const fitting = systemsForProduct(product, project.systems);
+      if (fitting.length > 0) {
+        const nearest = [...fitting].sort((a, b) => systemDistance(project, a.id, point.xM, point.yM) - systemDistance(project, b.id, point.xM, point.yM))[0];
+        return { text: `New run in ${nearest.name}`, systemId: nearest.id };
+      }
+      const fresh = ductStart(product.id);
+      return fresh ? { text: `New ${SYSTEM_KINDS.find(item => item.id === fresh.kind)?.label.toLowerCase()} system` } : { text: 'This duct carries no air type', warn: true };
+    }
+    return null;
   };
   const stepCount = (id: BuildStep): string => {
     if (id === 'spaces') return `${project.rooms.length}`;
@@ -1209,7 +1428,8 @@ export function Studio({
                     onPlace={placeEquipment}
                     onPlacePackage={placePackage}
                     onPlaceLoad={placeLoad}
-                    onBeginDuct={armDuct}
+                    onBeginDuct={beginDuctAt}
+                    describeDrop={describeDrop}
                     onPaintWall={paintWall}
                     onMoveLoad={(id, xM, yM) => edit(updateLoad(project, id, { xM, yM }))}
                     onRotateLoad={(id, yawDeg) => edit(updateLoad(project, id, { yawDeg }))}
@@ -1455,7 +1675,7 @@ export function Studio({
           </div>
         </form>
       )}
-      {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
+      {menu && <ContextMenu x={menu.x} y={menu.y} title={menu.title} items={menu.items} onClose={() => setMenu(null)} />}
     </div>
   );
 }
@@ -1527,8 +1747,10 @@ function TreeNode({
             dragged.current = true;
             event.dataTransfer.setData(CATALOG_MIME, dragId);
             event.dataTransfer.effectAllowed = 'copy';
+            setActiveCatalogDrag(dragId);
           }}
           onDragEnd={() => {
+            setActiveCatalogDrag(null);
             window.setTimeout(() => {
               dragged.current = false;
             }, 50);
@@ -2117,12 +2339,14 @@ function DimensionForm({
 function ContextMenu({
   x,
   y,
+  title,
   items,
   onClose,
 }: {
   x: number;
   y: number;
-  items: { id: string; label: string; danger?: boolean; run: () => void }[];
+  title?: string;
+  items: MenuEntry[];
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -2151,7 +2375,8 @@ function ContextMenu({
     };
   }, [onClose]);
   return (
-    <div ref={ref} className="context-menu" style={{ left: x + shift.x, top: y + shift.y }} role="menu" onContextMenu={event => event.preventDefault()}>
+    <div ref={ref} className="context-menu" style={{ left: x + shift.x, top: y + shift.y }} role="menu" aria-label={title} onContextMenu={event => event.preventDefault()}>
+      {title && <p className="context-menu-title">{title}</p>}
       {items.map(item => (
         <button
           key={item.id}
@@ -2163,7 +2388,8 @@ function ContextMenu({
             onClose();
           }}
         >
-          {item.label}
+          <span>{item.label}</span>
+          {item.detail && <span className="context-menu-detail">{item.detail}</span>}
         </button>
       ))}
     </div>
@@ -2298,8 +2524,10 @@ function CatalogDragRow({ token, title, children }: { token: string; title?: str
         dragged.current = true;
         event.dataTransfer.setData(CATALOG_MIME, token);
         event.dataTransfer.effectAllowed = 'copy';
+        setActiveCatalogDrag(token);
       }}
       onDragEnd={() => {
+        setActiveCatalogDrag(null);
         window.setTimeout(() => {
           dragged.current = false;
         }, 50);

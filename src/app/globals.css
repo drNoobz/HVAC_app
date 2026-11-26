@@ -122,6 +122,9 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
   border-radius: 6px;
   font-size: 13px;
 }
+.context-menu button { display: grid; gap: 1px; }
+.context-menu-title { margin: 2px 8px 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted, #6b7780); }
+.context-menu-detail { font-size: 11px; color: var(--muted, #6b7780); max-width: 320px; }
 .context-menu button:hover { background: #f6f8f9; }
 .context-menu button.danger { color: var(--danger); }
 .context-menu button.danger:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--line); border-radius: 0 0 6px 6px; }
@@ -456,6 +459,26 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
 .library-sections button { font-size: 12px; }
 .plan-wrap.is-place svg, .plan-wrap.is-catalog-drop svg { cursor: copy; }
 .plan-wrap.is-catalog-drop { box-shadow: inset 0 0 0 2px var(--teal); }
+/* What a catalogue drop will do, at the cursor (PlanView dropHint); and a short note after a drop that did little. */
+.drop-hint {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  max-width: 280px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #1f2a30;
+  color: white;
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+  box-shadow: var(--shadow);
+}
+.drop-hint[hidden] { display: none; }
+.drop-hint.warn { background: #8a4b12; }
+.drop-hint.is-note { animation: drop-note-in 120ms ease-out; }
+@keyframes drop-note-in { from { opacity: 0; } to { opacity: 1; } }
 .plan-wrap.is-select [data-hit="wall"][data-face="px"],
 .plan-wrap.is-select [data-hit="wall"][data-face="nx"] { cursor: ew-resize; }
 .plan-wrap.is-select [data-hit="wall"][data-face="py"],

@@ -21,7 +21,8 @@ const HFG_J_G = 2450;
 export const LOAD_METHOD_NOTES = [
   'People CO2: total heat less food allowance, converted with Persily and de Jonge (2017) Eq. 9, RQ 0.85, at 0 °C and 101 kPa.',
   'Combustion products: gas idle input treated as methane at HHV 890.3 kJ/mol.',
-  'Moisture: latent heat divided by 2450 J/g.',
+  'Moisture: latent heat divided by 2450 J/g, plus combustion water when no hood captures it.',
+  'Combustion products count as captured only when the appliance sits under a placed hood.',
   'CO has no catalog default. Enter a manufacturer or manual value.',
 ];
 
@@ -69,13 +70,14 @@ export function combustionPerUnit(product: LoadProduct): { co2Ls: number; waterG
   return { co2Ls: molS * MOLAR_VOLUME_L, waterGh: molS * 2 * WATER_G_MOL * 3600 };
 }
 
-export function defaultCo2Ls(product: LoadProduct): number {
+/** CO2 to the room per basis unit. Combustion CO2 counts unless a hood captures it. */
+export function defaultCo2Ls(product: LoadProduct, captured = product.hooded === true): number {
   if (product.category === 'people') {
     const metabolicW = product.sensibleW + product.latentW - (product.foodW ?? 0);
     return metabolicW * MJ_DAY_PER_W * CO2_LS_PER_MJ_DAY;
   }
   const burn = combustionPerUnit(product);
-  return burn && product.hooded === false ? burn.co2Ls : 0;
+  return burn && !captured ? burn.co2Ls : 0;
 }
 
 export function loadMultiplier(project: Project, item: LoadItem, product: LoadProduct): number {
@@ -91,15 +93,18 @@ export function loadGains(project: Project, item: LoadItem): LoadGains | null {
   const override = item.override;
   const sensible = override?.sensibleW ?? product.sensibleW;
   const latent = override?.latentW ?? product.latentW;
-  const co2 = override?.co2Ls ?? defaultCo2Ls(product);
   const burn = combustionPerUnit(product);
+  // A "hooded" appliance only has its combustion products captured when a hood is really over it.
+  const captured = !!burn && product.hooded === true && product.category === 'cooking' && hoodOver(project, item) != null;
+  const co2 = override?.co2Ls ?? defaultCo2Ls(product, captured);
+  const burnWaterGh = burn && !captured ? burn.waterGh : 0;
   return {
     sensibleW: sensible * multiplier,
     latentW: latent * multiplier,
-    moistureGh: ((latent * multiplier) / HFG_J_G) * 3600,
+    moistureGh: ((latent * multiplier) / HFG_J_G) * 3600 + burnWaterGh * multiplier,
     co2Ls: co2 * multiplier,
     coMgS: override?.coMgS != null ? override.coMgS * multiplier : null,
-    combustion: burn ? { co2Ls: burn.co2Ls * multiplier, waterGh: burn.waterGh * multiplier, captured: product.hooded === true } : null,
+    combustion: burn ? { co2Ls: burn.co2Ls * multiplier, waterGh: burn.waterGh * multiplier, captured } : null,
     multiplier,
     source: override ? override.source : 'ashrae',
   };

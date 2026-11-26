@@ -46,6 +46,8 @@ Run with `npm run dev` (port 3100).
   the latest review of the full-service template, with open findings.
 - [docs/agents/browser-testing.md](docs/agents/browser-testing.md): typecheck command, and the localStorage-safe
   test routine.
+- [docs/proposals/user-built-spaces-loads-systems.md](docs/proposals/user-built-spaces-loads-systems.md): the plan
+  for users building spaces, loads, units and systems by drag and drop (smart drops, space types, unit builder).
 
 When you learn something a future agent would need (a user preference, a pitfall, a code rule), add it to the
 matching guide, or start a new one in `docs/agents/` and link it here.

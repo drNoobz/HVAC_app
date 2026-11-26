@@ -20,3 +20,17 @@ export function parseCatalogDrag(token: string): CatalogDrag | null {
   if (kind === 'opening' && (id === 'door' || id === 'window')) return { kind: 'opening', opening: id };
   return null;
 }
+
+/**
+ * The catalogue item being dragged right now. Browsers hide drag data until the drop, so the canvas reads this to
+ * show what a drop will do while the pointer moves.
+ */
+let activeDrag: CatalogDrag | null = null;
+
+export function setActiveCatalogDrag(token: string | null): void {
+  activeDrag = token ? parseCatalogDrag(token) : null;
+}
+
+export function activeCatalogDrag(): CatalogDrag | null {
+  return activeDrag;
+}

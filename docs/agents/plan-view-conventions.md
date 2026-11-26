@@ -96,6 +96,28 @@ bold arrow.
 - It always adds "Outside air in", "Outside air out" and "Flow".
 - It folds to colour dots. The fold state is kept in localStorage under `hvac-air-key-collapsed`.
 
+## Catalogue drops
+
+Rules live in `src/domain/smartDrop.ts`; Studio's `placeEquipment`, `beginDuctAt` and `describeDrop` apply them.
+- **Every drop joins a system** unless the user holds Alt or picks a system in "Place into":
+  - `dropRole(product)`: unit (has a `unit` spec, or is an AHU, MAU, ERV or split), head (hood, exhaust fan,
+    bath fan), member (terminals and air-path parts), free (plant, items with no ports).
+  - Units ask, in a small menu at the drop point, "Pregenerated system: …" (a matching system package, with the
+    dropped product swapped in and its terminals scaled to the new airflow) or "… only, in a new system" (the
+    user's decision, 2026-11-27).
+  - Heads join a system of their kind within 6 m, otherwise they ask like a unit.
+  - Members join the nearest system that carries their **main** air (port service, not `accepts`), so an
+    exhaust grille never becomes an RTU's relief. With none, they drop unassigned and a note says so.
+- **Ducts:** dropped on a run, they start a branch (a tee on that run, same system, air, product and size).
+  Near an open port, they start there. Otherwise they go in the nearest system that can carry them, or a new
+  one. A new system made for a duct is removed if the user leaves the duct tool without drawing.
+  Right-click a run → "Draw branch" does the same as dropping on it.
+- **Feedback:** while dragging, a dark chip at the cursor says what the drop will do and the target system's
+  labels show (`DropHint`). A drop that did nothing useful leaves an amber note for about 3 s. Never fail
+  silently.
+- Browsers hide drag data until the drop. Drag sources call `setActiveCatalogDrag(token)` on dragstart, so
+  the canvas can read the item during dragover.
+
 ## Interaction rules (from the user)
 
 - **Selecting anything switches to its phase:** Spaces, Loads or Systems (`stepForSelection` / `select()` in

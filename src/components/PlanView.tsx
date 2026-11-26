@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { CATALOG_MIME, equipmentSizeM, getProduct, isSchematicOnly } from '@/domain/catalog';
-import { parseCatalogDrag } from '@/domain/catalogDrag';
+import { activeCatalogDrag, parseCatalogDrag, type CatalogDrag } from '@/domain/catalogDrag';
 import { SERVICE_COLOR } from '@/domain/ductCatalog';
 import { ductCrossings, ductFlows, ductSizeLabel, ductViewOf, endRise, equipmentPortHits, nearestNode, nearestPort, nearestRun, portFits, streamDesignLabel, type DuctDraftPoint } from '@/domain/ducts';
 import { isUnit, SECTION_TAG, sectionSummary, unitFlows } from '@/domain/airUnits';
@@ -498,6 +498,14 @@ function niceScale(pxPerM: number, units: Project['units']): { meters: number; l
   return { meters, label };
 }
 
+/** Hint at the cursor while a catalogue item is dragged over the plan. */
+export interface DropHint {
+  text: string;
+  /** The system the drop would join or extend: its labels show while dragging. */
+  systemId?: string | null;
+  warn?: boolean;
+}
+
 export function PlanView({
   project,
   selection,
@@ -521,6 +529,7 @@ export function PlanView({
   onMoveLoad,
   onRotateLoad,
   onBeginDuct,
+  describeDrop,
   onPlacePackage,
   onPaintWall,
   step,
@@ -546,17 +555,20 @@ export function PlanView({
   }) => void;
   onCloseSpace: (points: DrawPoint[]) => void;
   onPlaceOpening: (spot: OpeningSpot, kind: 'door' | 'window') => void;
-  onPlace: (point: { xM: number; yM: number }, catalogId: string) => void;
+  onPlace: (point: { xM: number; yM: number }, catalogId: string, at?: { clientX: number; clientY: number; alt?: boolean }) => string | void;
   onContextMenu: (selection: Selection, x: number, y: number) => void;
   onRoomsChange: (rooms: Room[]) => void;
   onMoveSpace: (roomId: string, dx: number, dy: number) => void;
   onMoveEquipment: (id: string, xM: number, yM: number) => void;
   onRotateEquipment: (id: string, yawDeg: number) => void;
   onNorthChange: (deg: number) => void;
-  onPlaceLoad: (point: { xM: number; yM: number }, loadId: string) => void;
+  onPlaceLoad: (point: { xM: number; yM: number }, loadId: string) => string | void;
   onMoveLoad: (id: string, xM: number, yM: number) => void;
   onRotateLoad: (id: string, yawDeg: number) => void;
-  onBeginDuct: (catalogId: string) => Extract<EditorTool, { kind: 'duct' }>;
+  /** Start a duct from a catalogue drop: the armed tool and, for a branch or a port, its first point. A string says why it can't. */
+  onBeginDuct: (catalogId: string, point: { xM: number; yM: number }) => { tool: Extract<EditorTool, { kind: 'duct' }>; start: DuctDraftPoint | null } | string;
+  /** What a catalogue drop here will do, shown at the cursor while dragging. */
+  describeDrop?: (drag: CatalogDrag, point: { xM: number; yM: number }, alt: boolean) => DropHint | null;
   onPlacePackage: (point: { xM: number; yM: number }, packageId: string) => void;
   onPaintWall: (selection: Selection, wallTypeId: string) => void;
   step: BuildStep;
@@ -582,6 +594,21 @@ export function PlanView({
   const [svgWidth, setSvgWidth] = useState(0);
   const pxPerM = svgWidth > 0 && view.w > 0 ? svgWidth / view.w : 40;
   const [catalogOver, setCatalogOver] = useState(false);
+  /** Hint at the cursor during a catalogue drag (text, and the system it would join); a note after a drop that did little. */
+  const [dropHint, setDropHint] = useState<DropHint | null>(null);
+  const [dropNote, setDropNote] = useState<{ x: number; y: number; text: string } | null>(null);
+  const hintRef = useRef<HTMLDivElement>(null);
+  const hintKey = useRef('');
+  const noteTimer = useRef<number | null>(null);
+  const showNote = (clientX: number, clientY: number, text: string) => {
+    const box = svgRef.current?.parentElement?.parentElement?.getBoundingClientRect();
+    if (noteTimer.current) window.clearTimeout(noteTimer.current);
+    setDropNote({ x: clientX - (box?.left ?? 0), y: clientY - (box?.top ?? 0), text });
+    noteTimer.current = window.setTimeout(() => setDropNote(null), 3200);
+  };
+  useEffect(() => () => {
+    if (noteTimer.current) window.clearTimeout(noteTimer.current);
+  }, []);
   const [draft, setDraft] = useState<{ xM: number; yM: number; lengthM: number; widthM: number } | null>(null);
   const [chain, setChain] = useState<DrawPoint[] | null>(null);
   const [aim, setAim] = useState<WallSnap | null>(null);
@@ -792,6 +819,7 @@ export function PlanView({
         : selection.kind === 'duct'
           ? (project.ducts ?? []).find(run => run.id === selection.id)?.systemId ?? null
           : null;
+  const shownSystemId = dropHint?.systemId ?? selectedSystemId;
   const highlightedRoom =
     selection.kind === 'room'
       ? rooms.find(room => room.id === selection.id)
@@ -910,20 +938,46 @@ export function PlanView({
         if (![...event.dataTransfer.types].includes(CATALOG_MIME)) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = 'copy';
+        const drag = activeCatalogDrag();
+        const box = event.currentTarget.getBoundingClientRect();
+        if (hintRef.current) hintRef.current.style.transform = `translate(${event.clientX - box.left + 14}px, ${event.clientY - box.top + 16}px)`;
+        if (!drag) return;
+        const point = toWorld(event.clientX, event.clientY);
+        const dropped = { xM: snap(point.xM), yM: snap(point.yM) };
+        let hint: DropHint | null = null;
+        if (drag.kind === 'opening' || drag.kind === 'wall') {
+          const spot = locateOpening(project.rooms, wallRuns, dropped, drag.kind === 'opening' ? drag.opening : 'door');
+          const onWall = drag.kind === 'wall' ? !!(wallUnderPointer(event.clientX, event.clientY) ?? spot?.roomId) : !!spot;
+          hint = onWall ? null : { text: 'Drop on a wall', warn: true };
+        } else {
+          hint = describeDrop?.(drag, drag.kind === 'duct' ? point : dropped, event.altKey) ?? null;
+        }
+        const key = hint ? `${hint.text}|${hint.systemId ?? ''}|${hint.warn ? 1 : 0}` : '';
+        if (key !== hintKey.current) {
+          hintKey.current = key;
+          setDropHint(hint);
+        }
       }}
       onDragLeave={event => {
         if (event.currentTarget.contains(event.relatedTarget as Node)) return;
         setCatalogOver(false);
+        hintKey.current = '';
+        setDropHint(null);
       }}
       onDrop={event => {
         setCatalogOver(false);
+        hintKey.current = '';
+        setDropHint(null);
         const drag = parseCatalogDrag(event.dataTransfer.getData(CATALOG_MIME));
         if (!drag) return;
         event.preventDefault();
         const point = toWorld(event.clientX, event.clientY);
         const dropped = { xM: snap(point.xM), yM: snap(point.yM) };
+        const note = (text: string | void) => {
+          if (text) showNote(event.clientX, event.clientY, text);
+        };
         if (drag.kind === 'equipment') {
-          onPlace(dropped, drag.id);
+          note(onPlace(dropped, drag.id, { clientX: event.clientX, clientY: event.clientY, alt: event.altKey }));
           return;
         }
         if (drag.kind === 'package') {
@@ -931,29 +985,44 @@ export function PlanView({
           return;
         }
         if (drag.kind === 'load') {
-          onPlaceLoad(dropped, drag.id);
+          note(onPlaceLoad(dropped, drag.id));
           return;
         }
         if (drag.kind === 'opening') {
           const spot = locateOpening(project.rooms, wallRuns, dropped, drag.opening);
           if (spot) onPlaceOpening(spot, drag.opening);
+          else note(`Drop the ${drag.opening} on a wall.`);
           return;
         }
         if (drag.kind === 'wall') {
           const spot = locateOpening(project.rooms, wallRuns, dropped, 'door');
           const target = wallUnderPointer(event.clientX, event.clientY) ?? (spot?.roomId ? { kind: 'surface' as const, roomId: spot.roomId, face: 'walls' as const, wallFace: spot.face } : null);
           if (target) onPaintWall(target, drag.id);
+          else note('Drop the wall type on a wall.');
           return;
         }
-        const armed = onBeginDuct(drag.id);
+        const begun = onBeginDuct(drag.id, point);
+        if (typeof begun === 'string') {
+          note(begun);
+          return;
+        }
+        const armed = begun.tool;
         if (!armed.systemId) return;
-        const snapped = snapDuct(dropped.xM, dropped.yM, project, armed.systemId, armed.service);
+        const snapped = begun.start ?? snapDuct(dropped.xM, dropped.yM, project, armed.systemId, armed.service);
         ductChainRef.current = [snapped];
         ductSettings.current = armed;
         setDuctChain([snapped]);
         setDuctAim(snapped);
       }}
     >
+      <div ref={hintRef} className={`drop-hint${dropHint?.warn ? ' warn' : ''}`} hidden={!dropHint} aria-live="polite">
+        {dropHint?.text}
+      </div>
+      {dropNote && (
+        <div className="drop-hint warn is-note" role="status" style={{ transform: `translate(${dropNote.x + 14}px, ${dropNote.y + 16}px)` }}>
+          {dropNote.text}
+        </div>
+      )}
       <div className="plan-sheet">
       <svg
         ref={svgRef}
@@ -1681,7 +1750,7 @@ export function PlanView({
           </g>
           {(layers.ducts || tool.kind === 'duct') && (
             <g opacity={tool.kind === 'duct' ? 1 : fade.ducts}>
-              <DuctLayer project={project} selection={selection} tool={tool} fontM={font} pxPerM={pxPerM} showSize={showDuctSize} allLabels={layers.labels} systemId={selectedSystemId} onSelect={onSelect} onContextMenu={onContextMenu} />
+              <DuctLayer project={project} selection={selection} tool={tool} fontM={font} pxPerM={pxPerM} showSize={showDuctSize} allLabels={layers.labels} systemId={shownSystemId} onSelect={onSelect} onContextMenu={onContextMenu} />
             </g>
           )}
           {layers.piping && showSystems && <g opacity={fade.equipment}><PipeLayer project={project} selection={selection} tool={tool} fontM={font} allLabels={layers.labels} onSelect={onSelect} /></g>}
@@ -1733,7 +1802,7 @@ export function PlanView({
                 tool={tool}
                 fontM={font}
                 labelScale={equipmentText}
-                systemName={showSystems && (layers.labels || (selectedSystemId != null && system?.id === selectedSystemId)) ? system?.name : undefined}
+                systemName={showSystems && (layers.labels || (shownSystemId != null && system?.id === shownSystemId)) ? system?.name : undefined}
                 color={showSystems ? terminalAirColor(item.catalogId) : undefined}
                 streamColor={unitStreamColor}
               />
