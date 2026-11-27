@@ -59,7 +59,7 @@ import { DUCT_CATALOG, DUCT_STREAMS, ductPairAllowed, getDuctProduct, servicesFo
 import { ductSizeLabel, DUCT_SERVICES, DUCT_SERVICE_LABEL, openPorts, type DuctDraftPoint } from '@/domain/ducts';
 import { SURFACE_FACES, SYSTEM_KINDS, WALL_FACES, type DuctService, type EditorTool, type Project, type Selection, type StoredTemplate, type WallFace } from '@/domain/types';
 import { NO_WALL_RUNS, polygonArea } from '@/domain/wallDraw';
-import { INTERFACE_COLOR, PLAN_SIDES, WALL_TYPES, edgePortions, findInterface, interfaceForOpening, interfaceTargets, portionSummary, roomFill, wallColor, wallPlaceLabel, wallRoleLabel } from '@/domain/walls';
+import { INTERFACE_COLOR, WALL_TYPES, edgePortions, findInterface, interfaceForOpening, interfaceTargets, portionSummary, roomFill, wallColor, wallName, wallPlaceLabel, wallRoleLabel } from '@/domain/walls';
 import { DEFAULT_LAYERS, PlanView, type DropHint, type PlanLayers } from './PlanView';
 import { formatArea, formatLength, formatNumber, formatPower, lengthToM, lengthUnit, mToLength } from '@/domain/units';
 import { projectToBuildingModel, validateModel } from '@/thermonode/localAdapter';
@@ -1567,13 +1567,14 @@ export function Studio({
                 <div className="strip-scroll">
                 {step === 'spaces' && (
                   <div className="plan-legend strip-legend">
-                    <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-dining')) }} />Exterior</div>
-                    <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-kitchen')) }} />Service</div>
+                    <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-dining')) }} />Framed</div>
+                    <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-kitchen')) }} />Masonry</div>
+                    <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-metal-building')) }} />Metal bldg</div>
                     <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-partition')) }} />Partition</div>
-                    <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-walkin')) }} />Walk-in</div>
+                    <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-walkin')) }} />Panel</div>
                     <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-glass')) }} />Glass</div>
                     <div><i className="swatch" style={{ background: ink(INTERFACE_COLOR) }} />Interface</div>
-                    <div><i className="swatch" style={{ background: ink(wallColor(null)) }} />No construction</div>
+                    <div><i className="swatch" style={{ background: ink(wallColor(null)) }} />Unassigned</div>
                   </div>
                 )}
                 {step === 'spaces' && wallType && (
@@ -2120,10 +2121,10 @@ function ProjectTree({
                       }
                       title={portionSummary(edgePortions(room, index, project.rooms))}
                       collapsed={shown.length > 0 ? wallClosed : undefined}
-                      toggleLabel={shown.length > 0 ? `${wallClosed ? 'Expand' : 'Collapse'} Wall ${index + 1}` : undefined}
+                      toggleLabel={shown.length > 0 ? `${wallClosed ? 'Expand' : 'Collapse'} ${wallName(room, { edge: index }, project.rooms, project.northDeg)}` : undefined}
                       onToggle={shown.length > 0 ? () => toggle(wallKey) : undefined}
                       onSelect={() => onSelect({ kind: 'surface', roomId: room.id, face: 'walls', edge: index })}
-                      content={<><span className="tree-label">Wall {index + 1}</span><span className="tree-meta">{formatLength(length, project.units, 2)}</span></>}
+                      content={<><span className="tree-label">{wallName(room, { edge: index }, project.rooms, project.northDeg)}</span><span className="tree-meta">{formatLength(length, project.units, 2)}</span></>}
                     >
                       {shown.map(target => {
                         const role = wallRoleLabel(project.interfaceWalls?.[target.key]?.constructionId);
@@ -2151,13 +2152,13 @@ function ProjectTree({
                     <TreeNode
                       key={face.id}
                       active={wallActive}
-                      title={`${wallPlaceLabel(room, face.id, project.rooms)} · ${role}`}
+                      title={`${wallPlaceLabel(room, face.id, project.rooms, project.northDeg)} · ${role}`}
                       collapsed={children > 0 ? wallClosed : undefined}
-                      toggleLabel={children > 0 ? `${wallClosed ? 'Expand' : 'Collapse'} ${face.label}` : undefined}
+                      toggleLabel={children > 0 ? `${wallClosed ? 'Expand' : 'Collapse'} ${wallName(room, { face: face.id }, project.rooms, project.northDeg)}` : undefined}
                       onToggle={children > 0 ? () => toggle(wallKey) : undefined}
                       onSelect={() => onSelect({ kind: 'surface', roomId: room.id, face: 'walls', wallFace: face.id })}
                       onMenu={event => onContextMenu({ kind: 'surface', roomId: room.id, face: 'walls', wallFace: face.id }, event.clientX, event.clientY)}
-                      content={<><span className="tree-label">{PLAN_SIDES[face.id].title} wall</span>{role !== 'Unassigned' && <span className="tree-meta">{role}</span>}</>}
+                      content={<><span className="tree-label">{wallName(room, { face: face.id }, project.rooms, project.northDeg)}</span>{role !== 'Unassigned' && <span className="tree-meta">{role}</span>}</>}
                     >
                       {shown.map(target => {
                         const interfaceRole = wallRoleLabel(project.interfaceWalls?.[target.key]?.constructionId);

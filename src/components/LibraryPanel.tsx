@@ -16,6 +16,7 @@ import {
   CONSTRUCTION_CATEGORIES,
   constructionCategoryLabel,
   importAssemblies,
+  ASSEMBLY_FAMILIES,
   importMaterials,
   libraryDocument,
   mergeAssemblies,
@@ -131,7 +132,7 @@ export function LibraryPanel({
   });
   const visibleAssemblies = assemblies.filter(item => {
     if (category !== 'all' && item.category !== category) return false;
-    const haystack = `${item.name} ${item.typicalUse} ${item.notes}`.toLowerCase();
+    const haystack = `${item.name} ${item.typicalUse} ${item.notes} ${ASSEMBLY_FAMILIES.find(family => family.id === item.family)?.label ?? ''}`.toLowerCase();
     return haystack.includes(query.trim().toLowerCase());
   });
 
@@ -563,7 +564,10 @@ export function LibraryPanel({
                           <strong>{assembly.name}</strong>
                           <div className="cell-sub">{assembly.origin === 'builtin' ? 'Built-in' : 'Added'}</div>
                         </td>
-                        <td>{constructionCategoryLabel[assembly.category]}</td>
+                        <td>
+                          {constructionCategoryLabel[assembly.category]}
+                          {assembly.family && <div className="cell-sub">{ASSEMBLY_FAMILIES.find(item => item.id === assembly.family)?.label}</div>}
+                        </td>
                         <td>{assembly.typicalUse || 'Use not stated'}</td>
                         <td>{assembly.layers.length}</td>
                         <td>{assembly.notes || assembly.orderLabel}</td>

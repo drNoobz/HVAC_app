@@ -65,9 +65,13 @@ export const SIMPLE_OFFICE: Tutorial = {
       callouts: [
         'Type a **Name**, for example "Small office".',
         'Set **Building type** to **Commercial**.',
+        'Set **Construction** to **Steel frame, brick or panel cladding**: how the shell is built. The floors, walls and ceilings that fit it are suggested first later on. Leave it **Not set** if you don\'t know yet.',
         'Pick your **Display units**: **IP (ft, CFM, Btu/h)** or **SI (m, L/s, kW)**. This tutorial uses IP.',
       ],
-      after: [{ kind: 'p', text: 'To get back here later, click an empty part of the canvas, or use **⋯ → Project settings** at the top right.' }],
+      after: [
+        { kind: 'p', text: '**North** sets which way the plan faces. Walls are named by compass from it: an outside wall is the **North wall**, **East wall** and so on, and a wall shared with another space is named after it, such as **Wall to Corridor**. Change North and every wall is renamed. This tutorial keeps north at the top of the plan.' },
+        { kind: 'p', text: 'To get back here later, click an empty part of the canvas, or use **⋯ → Project settings** at the top right.' },
+      ],
     },
     {
       id: 'space',
@@ -93,8 +97,9 @@ export const SIMPLE_OFFICE: Tutorial = {
       callouts: [
         'Change **Name** to "Open office".',
         'Set **Use** to **Office**.',
-        'Set **Floor** to "Dining floor, carpet on a 4 in slab". It is a carpet on a slab; the names come from the restaurant set.',
-        'Set **Ceiling** to "Flat roof, membrane on polyiso", for a single-storey building with a flat roof.',
+        'Set **Floor** to "Slab on grade 4 in, carpet". Floors, walls and ceilings are named by how they are built and grouped by construction class. The **Suggested** group at the top fits where the surface sits (ground floor, top floor, outside or shared wall) and the project\'s **Construction**; hover a field to see why.',
+        '**Floor finish** now reads **Carpet**. Change it to tile, vinyl, hardwood or bare concrete at any time; the floor under it stays the same.',
+        'Set **Ceiling** to "Exposed roof deck, membrane on R-30 polyiso", for a single-storey building with no dropped ceiling.',
         'The room on the plan, with its size. Drag a wall to resize the room, or drag the room to move it.',
       ],
     },
@@ -107,8 +112,8 @@ export const SIMPLE_OFFICE: Tutorial = {
       callouts: [
         'Click the **Catalogue** tab.',
         'Drag **Exterior wall** onto each of the four walls of the room. Drop it right on the wall line. A painted wall changes colour.',
-        'Drag a **Door** onto the bottom wall: the entrance.',
-        'Drag a **Window** onto the top wall. Do it twice for two windows.',
+        'Drag a **Door** onto the **South wall** (the bottom of the plan): the entrance.',
+        'Drag a **Window** onto the **North wall** (the top of the plan). Do it twice for two windows.',
         'The door on the plan. Click any door or window to drag it along its wall or change its size.',
       ],
       after: [{ kind: 'p', text: 'If you drop off a wall, a short message at the cursor says **"Drop on a wall"**. Try again closer to the line.' }],

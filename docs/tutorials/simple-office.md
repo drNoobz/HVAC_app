@@ -40,7 +40,12 @@ Useful to know:
    - **Name:** for example "Small office".
    - **Location:** your city (just a label for now).
    - **Building type:** **Commercial**.
+   - **Construction:** **Steel frame, brick or panel cladding** (how the shell is built; the app suggests floors,
+     walls and ceilings that fit it). Leave it **Not set** if you don't know yet.
    - **Display units:** **IP (ft, CFM, Btu/h)** (or SI if you prefer metres and L/s).
+
+**North** sets which way the plan faces. Outside walls are named by compass from it (North wall, East wall…), and
+shared walls after the space behind them (Wall to Corridor). Change North and the walls are renamed.
 
 You can get back to these settings any time from **⋯ → Project settings** (top right).
 
@@ -59,8 +64,12 @@ corner. 15 people × 160 ft² ≈ 2,400 ft².
 3. With the space selected, set these in the right panel:
    - **Name:** "Open office"
    - **Use:** **Office**
-   - **Floor:** "Dining floor, carpet on a 4 in slab" (carpet on a slab; the name comes from the restaurant set)
-   - **Ceiling:** "Flat roof, membrane on polyiso" (a single-storey building with a flat roof)
+   - **Floor:** "Slab on grade 4 in, carpet". Components are named by how they are built and grouped by
+     construction class. The **Suggested** group at the top fits where the surface sits (ground floor, top
+     floor, outside or shared wall) and the project's Construction; hover a field to see why.
+   - **Floor finish:** Carpet (already set by the floor; change it to tile, vinyl, hardwood or bare concrete
+     without changing the floor under it)
+   - **Ceiling:** "Exposed roof deck, membrane on R-30 polyiso" (a single-storey building with no dropped ceiling)
 
 ---
 
@@ -69,8 +78,8 @@ corner. 15 people × 160 ft² ≈ 2,400 ft².
 1. In the left panel, click the **Catalogue** tab.
 2. Drag **Exterior wall** onto each of the four walls of the office. Drop it right on the wall line; the wall
    changes colour when it is painted.
-3. Drag a **Door** onto the bottom wall (the entrance).
-4. Drag a **Window** onto the top wall, twice, to add two windows.
+3. Drag a **Door** onto the **South wall**, the bottom of the plan (the entrance).
+4. Drag a **Window** onto the **North wall**, the top of the plan, twice, to add two windows.
 5. To adjust a door or window, click it. You can drag it along the wall, or change its size in the right panel.
 
 If a drop lands off a wall, a short message at the cursor says "Drop on a wall". Try again closer to the line.

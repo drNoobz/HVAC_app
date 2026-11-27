@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactM
 import { CATALOG_MIME, equipmentSizeM, getProduct, isSchematicOnly } from '@/domain/catalog';
 import { activeCatalogDrag, parseCatalogDrag, type CatalogDrag } from '@/domain/catalogDrag';
 import { SERVICE_COLOR } from '@/domain/ductCatalog';
+import { assemblyFamily } from '@/domain/constructionLibrary';
 import { ductCrossings, ductFlows, ductSizeLabel, ductViewOf, endRise, equipmentPortHits, nearestNode, nearestPort, nearestRun, portFits, streamDesignLabel, type DuctDraftPoint } from '@/domain/ducts';
 import { isUnit, SECTION_TAG, sectionSummary, unitFlows } from '@/domain/airUnits';
 import { PORT_ROLE_LABEL, UNIT_STREAM_LABEL, unitLayout, type UnitComponent, type UnitLayout, type UnitStream } from '@/domain/unitNetwork';
@@ -203,11 +204,14 @@ function LoadMarks({
 type WallRole = 'hatch' | 'service' | 'partition' | 'panel' | 'glass' | 'none';
 
 function graphicWall(constructionId: string | null | undefined): { role: WallRole; thickness: number } {
-  if (constructionId === 'asm-wall-dining') return { role: 'hatch', thickness: 0.24 };
-  if (constructionId === 'asm-wall-kitchen') return { role: 'service', thickness: 0.24 };
-  if (constructionId === 'asm-wall-walkin' || constructionId === 'asm-wall-walkin-freezer') return { role: 'panel', thickness: 0.18 };
-  if (constructionId === 'asm-wall-glass') return { role: 'glass', thickness: 0.1 };
   if (!constructionId) return { role: 'none', thickness: 0.1 };
+  const family = assemblyFamily(constructionId);
+  if (family === 'steel-framed' || family === 'wood-framed') return { role: 'hatch', thickness: 0.24 };
+  if (family === 'mass') return { role: 'service', thickness: 0.24 };
+  if (family === 'metal-building') return { role: 'service', thickness: 0.18 };
+  if (family === 'wall-panel') return { role: 'panel', thickness: 0.18 };
+  if (family === 'glazed') return { role: 'glass', thickness: 0.1 };
+  if (constructionId === 'asm-wall-partition-cmu') return { role: 'partition', thickness: 0.2 };
   return { role: 'partition', thickness: 0.14 };
 }
 

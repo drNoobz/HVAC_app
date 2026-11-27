@@ -259,8 +259,9 @@ async function main() {
     await run(async t => {
       await t.set(t.field('Name'), 'Small office');
       await t.set(t.field('Building type'), 'Commercial');
+      await t.set(t.field('Construction'), 'Steel frame, brick or panel cladding');
     });
-    await shot('03-project', t => t.mark([t.fieldLabel('Name'), t.fieldLabel('Building type'), t.fieldLabel('Display units')]));
+    await shot('03-project', t => t.mark([t.fieldLabel('Name'), t.fieldLabel('Building type'), t.fieldLabel('Construction'), t.fieldLabel('Display units')]));
 
     // 4. Add a space by size
     await run(async t => {
@@ -282,11 +283,11 @@ async function main() {
       await t.sleep(300);
       await t.set(t.field('Name'), 'Open office');
       await t.set(t.field('Use'), 'Office');
-      await t.set(t.field('Floor'), 'Dining floor, carpet on a 4 in slab');
-      await t.set(t.field('Ceiling'), 'Flat roof, membrane on polyiso');
+      await t.set(t.field('Floor'), 'Slab on grade 4 in, carpet');
+      await t.set(t.field('Ceiling'), 'Exposed roof deck, membrane on R-30 polyiso');
     });
     await shot('05-space-settings', t =>
-      t.mark([t.fieldLabel('Name'), t.fieldLabel('Use'), t.fieldLabel('Floor'), t.fieldLabel('Ceiling'), { el: t.plan().querySelector('rect[data-hit="room"]'), pad: 6 }])
+      t.mark([t.fieldLabel('Name'), t.fieldLabel('Use'), t.fieldLabel('Floor'), t.fieldLabel('Floor finish'), t.fieldLabel('Ceiling'), { el: t.plan().querySelector('rect[data-hit="room"]'), pad: 6 }])
     );
 
     // 6. Walls, door, windows

@@ -51,6 +51,10 @@ its people rate (Rp), area rate (Ra), default density and air class. Exhaust nee
   never change; only the rates under them do.
 - A room keeps its free-text name ("Dining", "Bay 3") separate from its space type, so a user can call a room
   anything.
+- Floor, wall and ceiling suggestions do not depend on the space type: they come from where the surface sits
+  and the project's Construction setting (see docs/agents/constructions.md). A space type only adds to them
+  when it needs a special surface, like the wet and cold rooms already do (for example acoustic partitions for
+  a cinema).
 
 **In the catalogue:** a Space types group, filtered by the project's building type first (a restaurant project
 shows food-service types on top), with search across all groups.

@@ -1,7 +1,7 @@
 import { getProduct } from './catalog';
 import type { Project, Room, Selection } from './types';
 import { outlinesOverlap, roomLoop } from './wallDraw';
-import { PLAN_SIDES, WALL_FACE_IDS, edgePortions, interfaceTargets, portionSummary, wallPlaceLabel, wallRelation, type InterfaceTarget } from './walls';
+import { WALL_FACE_IDS, interfaceTargets, wallNameInText, type InterfaceTarget, type WallRef } from './walls';
 
 export interface PlanningIssue {
   id: string;
@@ -22,16 +22,17 @@ function hasStack(constructionId: string | null | undefined, layers: { materialI
   return Boolean(constructionId) || Boolean(layers && layers.length > 0);
 }
 
-function anchorPhrase(anchor: string): string {
+/** The wall an interface side sits on: "f:px" is a face of a box room, "e:3" an edge of a drawn room. */
+function anchorWall(anchor: string): WallRef | null {
   if (anchor.startsWith('f:')) {
     const face = anchor.slice(2);
-    if (face === 'px' || face === 'nx' || face === 'py' || face === 'ny') return `${PLAN_SIDES[face].title.toLowerCase()} wall`;
+    if (face === 'px' || face === 'nx' || face === 'py' || face === 'ny') return { face };
   }
   if (anchor.startsWith('e:')) {
-    const index = Number(anchor.slice(2));
-    if (Number.isInteger(index) && index >= 0) return `wall ${index + 1}`;
+    const edge = Number(anchor.slice(2));
+    if (Number.isInteger(edge) && edge >= 0) return { edge };
   }
-  return 'wall';
+  return null;
 }
 
 function covers(targets: readonly InterfaceTarget[], roomId: string, anchor: string): boolean {
@@ -79,10 +80,12 @@ export function planningIssues(project: Project): PlanningIssue[] {
       if (!host || host.roomId !== room.id) continue;
       const assignment = project.interfaceWalls?.[target.key];
       if (hasStack(assignment?.constructionId, assignment?.layers)) continue;
-      const other = target.sides[1]?.name || 'outside air';
+      const other = target.sides[1]?.name;
+      const wall = anchorWall(host.anchor);
+      const where = wall ? wallNameInText(room, wall, rooms, project.northDeg) : 'wall';
       issues.push({
         id: `iface-${target.key}`,
-        message: `${host.name} ${anchorPhrase(host.anchor)} interface with ${other} has no construction.`,
+        message: other ? `The wall between ${host.name} and ${other} has no construction.` : `${host.name} ${where} has no construction.`,
         selection: { kind: 'interface', key: target.key },
       });
     }
@@ -93,7 +96,7 @@ export function planningIssues(project: Project): PlanningIssue[] {
         if (!hasStack(assignment?.constructionId, assignment?.layers)) {
           issues.push({
             id: `wall-${room.id}-e${index}`,
-            message: `${room.name} wall ${index + 1} is ${portionSummary(edgePortions(room, index, rooms)).toLowerCase()} and has no construction.`,
+            message: `${room.name} ${wallNameInText(room, { edge: index }, rooms, project.northDeg)} has no construction.`,
             selection: { kind: 'surface', roomId: room.id, face: 'walls', edge: index },
           });
         }
@@ -105,7 +108,7 @@ export function planningIssues(project: Project): PlanningIssue[] {
         if (!hasStack(assignment.constructionId, assignment.layers)) {
           issues.push({
             id: `wall-${room.id}-${face}`,
-            message: `${room.name} ${PLAN_SIDES[face].title.toLowerCase()} wall is ${wallRelation(room, face, rooms).toLowerCase()} and has no construction.`,
+            message: `${room.name} ${wallNameInText(room, { face }, rooms, project.northDeg)} has no construction.`,
             selection: { kind: 'surface', roomId: room.id, face: 'walls', wallFace: face },
           });
         }
@@ -115,16 +118,16 @@ export function planningIssues(project: Project): PlanningIssue[] {
       if (!hasStack(opening.constructionId, opening.layers)) {
         issues.push({
           id: `opening-stack-${opening.id}`,
-          message: `${room.name} ${opening.kind} on the ${PLAN_SIDES[opening.face].title.toLowerCase()} wall has no construction.`,
+          message: `${room.name} ${opening.kind} on the ${wallNameInText(room, { face: opening.face }, rooms, project.northDeg)} has no construction.`,
           selection: { kind: 'opening', roomId: room.id, id: opening.id },
         });
       }
       const span = opening.face === 'px' || opening.face === 'nx' ? room.widthM : room.lengthM;
       if (opening.offsetM < -TOUCH_M || opening.offsetM + opening.widthM > span + TOUCH_M) {
-        const side = wallPlaceLabel(room, opening.face, rooms).split(' · ')[0].toLowerCase();
+        const side = wallNameInText(room, { face: opening.face }, rooms, project.northDeg);
         issues.push({
           id: `past-${opening.id}`,
-          message: `${room.name} ${opening.kind} extends past the ${side} wall.`,
+          message: `${room.name} ${opening.kind} extends past the ${side}.`,
           selection: { kind: 'opening', roomId: room.id, id: opening.id },
         });
       }

@@ -324,6 +324,8 @@ export interface ConstructionAssembly {
   id: string;
   name: string;
   category: AssemblyCategory;
+  /** Envelope class (ASSEMBLY_FAMILIES), used to group the picker. Missing on added components. */
+  family?: AssemblyFamilyId;
   typicalUse: string;
   orderLabel: string;
   /** True when the layers sit in contact and their R-values can be added. */
@@ -333,6 +335,83 @@ export interface ConstructionAssembly {
   notes: string;
   origin: 'builtin' | 'manual' | 'import';
 }
+
+/**
+ * Envelope classes for grouping components. Walls, roofs and floors follow the classes of ASHRAE 90.1 and the IECC
+ * (mass, steel-framed, wood-framed, metal building; insulation above deck; slab on grade), so a component can later
+ * be checked against the code's maximum U-factor for the climate zone. Listed in picker order.
+ */
+export const ASSEMBLY_FAMILIES = [
+  { id: 'slab-on-grade', category: 'floor', label: 'Slab on grade' },
+  { id: 'floor-exposed', category: 'floor', label: 'Over an unconditioned space' },
+  { id: 'floor-between', category: 'floor', label: 'Between floors' },
+  { id: 'floor-panel', category: 'floor', label: 'Insulated panel' },
+  { id: 'steel-framed', category: 'wall', label: 'Steel-framed' },
+  { id: 'wood-framed', category: 'wall', label: 'Wood-framed' },
+  { id: 'mass', category: 'wall', label: 'Mass (block, concrete, brick)' },
+  { id: 'metal-building', category: 'wall', label: 'Metal building' },
+  { id: 'glazed', category: 'wall', label: 'Glass (storefront, curtain wall)' },
+  { id: 'partition', category: 'wall', label: 'Interior partition' },
+  { id: 'wall-panel', category: 'wall', label: 'Insulated panel (walk-in, cold room)' },
+  { id: 'ceiling-dropped', category: 'ceiling', label: 'Dropped ceiling' },
+  { id: 'ceiling-gypsum', category: 'ceiling', label: 'Gypsum ceiling' },
+  { id: 'ceiling-under-floor', category: 'ceiling', label: 'Under a floor above' },
+  { id: 'ceiling-panel', category: 'ceiling', label: 'Insulated panel' },
+  { id: 'roof-above-deck', category: 'roof', label: 'No ceiling: insulation above the deck' },
+  { id: 'roof-metal-building', category: 'roof', label: 'No ceiling: metal building roof' },
+] as const satisfies readonly { id: string; category: AssemblyCategory; label: string }[];
+
+export type AssemblyFamilyId = (typeof ASSEMBLY_FAMILIES)[number]['id'];
+
+function isAssemblyFamily(value: unknown): value is AssemblyFamilyId {
+  return typeof value === 'string' && ASSEMBLY_FAMILIES.some(item => item.id === value);
+}
+
+/** The family of a built-in component, for code that only has its id (plan colours, wall kinds). */
+export function assemblyFamily(id: string | null | undefined): AssemblyFamilyId | undefined {
+  return id ? builtinAssembly(id)?.family : undefined;
+}
+
+export interface AssemblyGroup {
+  key: string;
+  label: string;
+  items: ConstructionAssembly[];
+}
+
+/**
+ * Components for a picker, grouped by family in the order above. `suggested` ids come first under their own label;
+ * they are still listed in their family too. Components without a family go under their category.
+ */
+export function groupAssemblies(
+  assemblies: ConstructionAssembly[],
+  categories: readonly AssemblyCategory[],
+  suggested: { label: string; ids: string[] } | null = null
+): AssemblyGroup[] {
+  const options = assemblies.filter(item => categories.includes(item.category));
+  const groups: AssemblyGroup[] = [];
+  if (suggested) {
+    const items = suggested.ids.flatMap(id => options.filter(item => item.id === id));
+    if (items.length > 0) groups.push({ key: 'suggested', label: suggested.label, items });
+  }
+  for (const category of categories) {
+    for (const family of ASSEMBLY_FAMILIES.filter(item => item.category === category)) {
+      const items = options.filter(item => item.family === family.id);
+      if (items.length > 0) groups.push({ key: family.id, label: family.label, items });
+    }
+    const loose = options.filter(item => item.category === category && !item.family);
+    if (loose.length > 0) groups.push({ key: category, label: ASSEMBLY_CATEGORY_LABEL[category], items: loose });
+  }
+  return groups;
+}
+
+const ASSEMBLY_CATEGORY_LABEL: Record<AssemblyCategory, string> = {
+  floor: 'Other floors',
+  wall: 'Other walls',
+  ceiling: 'Other ceilings',
+  roof: 'Other roofs',
+  window: 'Windows',
+  door: 'Doors',
+};
 
 const ASSEMBLY_KEY = 'hvac-construction-assemblies-v1';
 
@@ -387,6 +466,7 @@ export function parseAssembly(
   if (!source.ok) return source;
   const notes = readText(row.notes, 'Notes', 1200);
   if (!notes.ok) return notes;
+  if (row.family != null && !isAssemblyFamily(row.family)) return { ok: false, error: `Family ${String(row.family)} is not a known envelope class.` };
   if (typeof row.series !== 'boolean') return { ok: false, error: 'Series must be true or false.' };
   if (!Array.isArray(row.layers) || row.layers.length === 0) return { ok: false, error: 'A component needs at least one layer.' };
   const layers: StackLayer[] = [];
@@ -401,6 +481,7 @@ export function parseAssembly(
       id: id.value,
       name: name.value,
       category: row.category,
+      ...(isAssemblyFamily(row.family) ? { family: row.family } : {}),
       typicalUse: typicalUse.value,
       orderLabel: orderLabel.value,
       series: row.series,
@@ -423,6 +504,10 @@ function loadBuiltinAssemblies(): ConstructionAssembly[] {
     if (!parsed.ok) throw new Error(`Construction assembly ${index + 1}: ${parsed.error}`);
     if (seen.has(parsed.assembly.id)) throw new Error(`Duplicate construction assembly id ${parsed.assembly.id}.`);
     seen.add(parsed.assembly.id);
+    const family = ASSEMBLY_FAMILIES.find(item => item.id === parsed.assembly.family);
+    if (family && family.category !== parsed.assembly.category) {
+      throw new Error(`Assembly ${parsed.assembly.id} is a ${parsed.assembly.category} in the ${family.category} family ${family.id}.`);
+    }
     for (const layer of parsed.assembly.layers) {
       if (!materialIds.has(layer.materialId)) {
         throw new Error(`Assembly ${parsed.assembly.id} uses unknown material ${layer.materialId}.`);

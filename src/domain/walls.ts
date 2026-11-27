@@ -1,33 +1,37 @@
 import { normalizeSite } from './climate';
-import { builtinAssembly, cloneLayers } from './constructionLibrary';
+import { assemblyFamily, builtinAssembly, cloneLayers } from './constructionLibrary';
+import { defaultAssemblyId } from './envelopeDefaults';
 import type { ControlPoint, DuctNode, DuctRun, LoadItem, PlantLoop, Project, Room, SurfaceAssignment, WallFace } from './types';
 
 export const WALL_FACE_IDS: WallFace[] = ['px', 'nx', 'py', 'ny'];
 
+/** Wall kinds in the catalogue (drag to paint a wall) and the Kind picker. Each paints its component. */
 export const WALL_TYPES: { id: string; label: string; detail: string; assemblyId: string }[] = [
-  { id: 'exterior', label: 'Exterior wall', detail: 'Brick and studs, for a dining, bar, or office wall on the outside.', assemblyId: 'asm-wall-dining' },
-  { id: 'kitchen', label: 'Service wall', detail: 'Masonry, for a kitchen, restroom, storage, or corridor wall on the outside.', assemblyId: 'asm-wall-kitchen' },
+  { id: 'exterior', label: 'Exterior wall', detail: 'Brick veneer on steel studs, for offices, dining rooms, retail, and schools.', assemblyId: 'asm-wall-dining' },
+  { id: 'kitchen', label: 'Masonry wall', detail: 'Concrete block with continuous insulation, for kitchens, back of house, service areas, and warehouses.', assemblyId: 'asm-wall-kitchen' },
+  { id: 'metal-building', label: 'Metal building wall', detail: 'Pre-engineered metal wall, for factories, warehouses, and workshops.', assemblyId: 'asm-wall-metal-building' },
   { id: 'partition', label: 'Partition', detail: 'Gypsum on both sides. Use this where the wall is shared with another space.', assemblyId: 'asm-wall-partition' },
   { id: 'walk-in', label: 'Walk-in panel', detail: 'Cooler panel. Metal skins are not a separate layer.', assemblyId: 'asm-wall-walkin' },
   { id: 'freezer', label: 'Freezer panel', detail: 'Freezer panel. Swap this onto a walk-in when the box is a freezer.', assemblyId: 'asm-wall-walkin-freezer' },
-  { id: 'glass', label: 'Storefront glass', detail: 'Glazed wall using the published window U-0.32. Not a tested curtain wall.', assemblyId: 'asm-wall-glass' },
+  { id: 'glass', label: 'Glass wall', detail: 'Storefront or curtain wall using the published window U-0.32. Not a tested curtain wall.', assemblyId: 'asm-wall-glass' },
 ];
 
-/** Plan position of each face. Top of the plan is +Y. */
+/** The wall kind a component belongs to: its own kind, else the kind of its envelope class. Empty when none fits. */
+export function wallKindFor(constructionId: string | null | undefined): string {
+  if (!constructionId) return '';
+  const exact = WALL_TYPES.find(type => type.assemblyId === constructionId);
+  if (exact) return exact.id;
+  const family = assemblyFamily(constructionId);
+  if (!family) return '';
+  return WALL_TYPES.find(type => assemblyFamily(type.assemblyId) === family || (family === 'wood-framed' && type.id === 'exterior'))?.id ?? '';
+}
+
+/** Plan position of each face. Top of the plan is +Y. For geometry only: users see wallName(). */
 export const PLAN_SIDES: Record<WallFace, { title: string; edge: 'top' | 'left' | 'right' | 'bottom' }> = {
   py: { title: 'Top', edge: 'top' },
   nx: { title: 'Left', edge: 'left' },
   px: { title: 'Right', edge: 'right' },
   ny: { title: 'Bottom', edge: 'bottom' },
-};
-
-const ROLE_LABEL: Record<string, string> = {
-  'asm-wall-dining': 'Exterior wall',
-  'asm-wall-kitchen': 'Service wall',
-  'asm-wall-partition': 'Partition',
-  'asm-wall-walkin': 'Walk-in panel',
-  'asm-wall-walkin-freezer': 'Freezer panel',
-  'asm-wall-glass': 'Storefront glass',
 };
 
 const ROOM_FILL: Record<string, string> = {
@@ -62,14 +66,18 @@ export function colorNumber(hex: string): number {
   return Number.parseInt(hex.slice(1), 16);
 }
 
+/** Plan and 3D colour of a wall, by envelope class. The two walk-in panels keep their own blues. */
 export function wallColor(constructionId: string | null | undefined): string {
-  if (constructionId === 'asm-wall-dining') return '#8a5a3a';
-  if (constructionId === 'asm-wall-kitchen') return '#6d4c38';
-  if (constructionId === 'asm-wall-partition') return '#8aa0a8';
+  if (!constructionId) return '#c47b12';
   if (constructionId === 'asm-wall-walkin') return '#3d6f9a';
   if (constructionId === 'asm-wall-walkin-freezer') return '#2c4d78';
-  if (constructionId === 'asm-wall-glass') return '#3f8fbf';
-  if (!constructionId) return '#c47b12';
+  const family = assemblyFamily(constructionId);
+  if (family === 'steel-framed' || family === 'wood-framed') return '#8a5a3a';
+  if (family === 'mass') return '#6d4c38';
+  if (family === 'metal-building') return '#6b7a34';
+  if (family === 'partition') return '#8aa0a8';
+  if (family === 'wall-panel') return '#3d6f9a';
+  if (family === 'glazed') return '#3f8fbf';
   return '#60707a';
 }
 
@@ -87,14 +95,13 @@ export function interfaceConstructionColor(assignment: SurfaceAssignment | undef
   return wallColor(assignment.constructionId);
 }
 
-const SERVICE_USES = new Set(['Kitchen', 'Hot line', 'Prep', 'Dish', 'Restroom', 'Storage', 'Dry storage', 'Corridor', 'Service']);
 const TOUCH_M = 0.08;
 const PLANNING_NOTE =
-  'Planning default from the restaurant construction library. The stack is copied onto this surface. Confirm the climate zone and the tested assembly before design use.';
+  'Planning default from the construction library. The stack is copied onto this surface. Confirm the climate zone and the tested assembly before design use.';
 
 export function wallRoleLabel(constructionId: string | null | undefined): string {
   if (!constructionId) return 'Unassigned';
-  return ROLE_LABEL[constructionId] ?? 'Custom';
+  return WALL_TYPES.find(type => type.id === wallKindFor(constructionId))?.label ?? 'Custom';
 }
 
 export function blankWallAssignment(note: string): SurfaceAssignment {
@@ -147,13 +154,11 @@ export function wallFromAssembly(assemblyId: string): SurfaceAssignment {
 }
 
 function exteriorAssemblyId(use: string): string {
-  if (use === 'Walk-in') return 'asm-wall-walkin';
-  if (SERVICE_USES.has(use)) return 'asm-wall-kitchen';
-  return 'asm-wall-dining';
+  return defaultAssemblyId(use, 'wall');
 }
 
 function sharedAssemblyId(use: string): string {
-  return use === 'Walk-in' ? 'asm-wall-walkin' : 'asm-wall-partition';
+  return defaultAssemblyId(use, 'shared');
 }
 
 function overlap(a0: number, a1: number, b0: number, b1: number): number {
@@ -723,8 +728,90 @@ export function wallRelation(room: Room, face: WallFace, rooms: readonly Room[])
   return portionSummary(facePortions(room, face, rooms));
 }
 
-export function wallPlaceLabel(room: Room, face: WallFace, rooms: readonly Room[]): string {
-  return `${PLAN_SIDES[face].title} · ${wallRelation(room, face, rooms)}`;
+/** Compass points, clockwise from north. */
+const COMPASS_POINTS = ['North', 'Northeast', 'East', 'Southeast', 'South', 'Southwest', 'West', 'Northwest'] as const;
+
+/**
+ * The compass point an outward direction on the plan faces. Plan up is +Y. `northDeg` is the project's North
+ * setting: where north points, in degrees clockwise from up. Turning north renames every wall.
+ */
+export function compassPoint(dx: number, dy: number, northDeg: number): (typeof COMPASS_POINTS)[number] {
+  const bearing = (Math.atan2(dx, dy) * 180) / Math.PI;
+  const azimuth = (((bearing - northDegrees(northDeg)) % 360) + 360) % 360;
+  return COMPASS_POINTS[Math.round(azimuth / 45) % 8];
+}
+
+const FACE_NORMAL: Record<WallFace, [number, number]> = { px: [1, 0], nx: [-1, 0], py: [0, 1], ny: [0, -1] };
+
+/** Outward direction of one edge of a drawn room, whichever way its corners were drawn. */
+function edgeNormal(loop: readonly { x: number; y: number }[], edge: number): [number, number] {
+  let twiceArea = 0;
+  for (let index = 0; index < loop.length; index += 1) {
+    const a = loop[index];
+    const b = loop[(index + 1) % loop.length];
+    twiceArea += a.x * b.y - b.x * a.y;
+  }
+  const a = loop[edge];
+  const b = loop[(edge + 1) % loop.length];
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  // Counter-clockwise corners have the outside on the right of each edge.
+  return twiceArea >= 0 ? [dy, -dx] : [-dy, dx];
+}
+
+/** A wall of a room: one of the four faces of a box room, or one edge of a drawn room. */
+export type WallRef = { face: WallFace } | { edge: number };
+
+function wallPortionsOf(room: Room, wall: WallRef, rooms: readonly Room[]): WallPortion[] {
+  return 'face' in wall ? facePortions(room, wall.face, rooms) : edgePortions(room, wall.edge, rooms);
+}
+
+function neighbourNames(portions: readonly WallPortion[]): { names: string[]; outside: boolean } {
+  return { names: [...new Set(portions.flatMap(portion => portion.names))], outside: portions.length === 0 || portions.some(portion => portion.kind === 'outside') };
+}
+
+/** Name before numbering: "Wall to Kitchen" when other spaces cover it (two at most), else its compass point. */
+function baseWallName(room: Room, wall: WallRef, rooms: readonly Room[], northDeg: number): string {
+  const { names, outside } = neighbourNames(wallPortionsOf(room, wall, rooms));
+  if (!outside && names.length > 0 && names.length <= 2) return `Wall to ${names.join(' and ')}`;
+  const [dx, dy] = 'face' in wall ? FACE_NORMAL[wall.face] : edgeNormal(room.outline ?? [], wall.edge);
+  return `${compassPoint(dx, dy, northDeg)} wall`;
+}
+
+/** Every wall of a room, in plan order, as references. */
+export function roomWalls(room: Room): WallRef[] {
+  const loop = room.outline ?? [];
+  return loop.length >= 3 ? loop.map((_, edge) => ({ edge })) : WALL_FACE_IDS.map(face => ({ face }));
+}
+
+/**
+ * How people name a wall: outside walls by the way they face ("North wall"), walls shared with one or two spaces
+ * by the space behind them ("Wall to Kitchen"). Two walls of a room with the same name are numbered ("North wall 2").
+ */
+export function wallName(room: Room, wall: WallRef, rooms: readonly Room[], northDeg: number | undefined): string {
+  const north = northDegrees(northDeg);
+  const all = roomWalls(room);
+  const names = all.map(item => baseWallName(room, item, rooms, north));
+  const index = all.findIndex(item => ('face' in item && 'face' in wall ? item.face === wall.face : 'edge' in item && 'edge' in wall && item.edge === wall.edge));
+  if (index < 0) return baseWallName(room, wall, rooms, north);
+  const name = names[index];
+  const same = names.map((item, position) => (item === name ? position : -1)).filter(position => position >= 0);
+  return same.length > 1 ? `${name} ${same.indexOf(index) + 1}` : name;
+}
+
+/** "wall to Kitchen", "north wall": for the middle of a sentence. */
+export function wallNameInText(room: Room, wall: WallRef, rooms: readonly Room[], northDeg: number | undefined): string {
+  const name = wallName(room, wall, rooms, northDeg);
+  return name.charAt(0).toLowerCase() + name.slice(1);
+}
+
+/** A wall's name and what is behind it, for pickers and hover text: "East wall · outside", "North wall · partly to Storage". */
+export function wallPlaceLabel(room: Room, face: WallFace, rooms: readonly Room[], northDeg: number | undefined): string {
+  const name = wallName(room, { face }, rooms, northDeg);
+  const { names, outside } = neighbourNames(facePortions(room, face, rooms));
+  if (names.length === 0) return `${name} · outside`;
+  if (!outside && name.startsWith('Wall to ')) return name;
+  return `${name} · ${outside ? 'partly to' : 'to'} ${names.join(', ')}`;
 }
 
 function remapRef(ref: string, roomIds: Map<string, string>): string | null {

@@ -1,6 +1,7 @@
 import { blankSite } from './climate';
 import { builtinAssembly, cloneLayers } from './constructionLibrary';
 import { getProduct } from './catalog';
+import { defaultAssemblyId } from './envelopeDefaults';
 import { defaultSections } from './airUnits';
 import { createId, nowIso } from './ids';
 import { getLoadProduct } from './loadCatalog';
@@ -9,9 +10,8 @@ import { applySystemPackage, GENERAL_EXHAUST, KITCHEN_HOOD_MAU, OFFICE_ERV, REST
 import type { HvacSystem, LoadItem, Opening, PlacedEquipment, Project, Room, SiteClimate, SurfaceAssignment, SystemKind } from './types';
 import { interfaceTargets, isOutsideInterfaceKey, repeatedWalls, separateSharedWalls } from './walls';
 
-const PLANNING_NOTE = 'Planning default from the restaurant construction library. The stack is copied onto this surface. Confirm the climate zone and the tested assembly before design use.';
+const PLANNING_NOTE = 'Planning default from the construction library. The stack is copied onto this surface. Confirm the climate zone and the tested assembly before design use.';
 const KITCHEN_USES = new Set(['Kitchen', 'Hot line', 'Prep', 'Dish']);
-const SERVICE_USES = new Set(['Kitchen', 'Hot line', 'Prep', 'Dish', 'Restroom', 'Storage', 'Dry storage', 'Corridor', 'Service']);
 const DINING_USES = new Set(['Dining', 'Bar']);
 
 function surface(assemblyId: string): SurfaceAssignment {
@@ -36,16 +36,9 @@ function room(input: {
   heightM: number;
   openings?: Opening[];
 }): Room {
-  const floorId =
-    input.use === 'Walk-in'
-      ? 'asm-floor-walkin'
-      : KITCHEN_USES.has(input.use) || input.use === 'Restroom'
-        ? 'asm-floor-kitchen'
-        : DINING_USES.has(input.use) || input.use === 'Office'
-          ? 'asm-floor-dining'
-          : 'asm-floor-service';
-  const wallId = input.use === 'Walk-in' ? 'asm-wall-walkin' : KITCHEN_USES.has(input.use) ? 'asm-wall-kitchen' : DINING_USES.has(input.use) ? 'asm-wall-dining' : 'asm-wall-partition';
-  const ceilingId = input.use === 'Walk-in' ? 'asm-ceiling-walkin' : KITCHEN_USES.has(input.use) || input.use === 'Restroom' ? 'asm-ceiling-kitchen' : 'asm-ceiling-dining';
+  const floorId = defaultAssemblyId(input.use, 'floor');
+  const wallId = KITCHEN_USES.has(input.use) || DINING_USES.has(input.use) || input.use === 'Walk-in' ? defaultAssemblyId(input.use, 'wall') : defaultAssemblyId(input.use, 'shared');
+  const ceilingId = defaultAssemblyId(input.use, 'ceiling');
   return {
     id: createId('room'),
     name: input.name,
@@ -158,12 +151,6 @@ function base(
   });
 }
 
-function exteriorAssemblyId(use: string): string {
-  if (use === 'Walk-in') return 'asm-wall-walkin';
-  if (SERVICE_USES.has(use)) return 'asm-wall-kitchen';
-  return 'asm-wall-dining';
-}
-
 function assignInterfaces(project: Project): Project {
   const interfaceWalls: NonNullable<Project['interfaceWalls']> = { ...project.interfaceWalls };
   for (const target of interfaceTargets(project.rooms)) {
@@ -172,7 +159,7 @@ function assignInterfaces(project: Project): Project {
     const other = project.rooms.find(room => room.id === target.sides[1]?.roomId);
     const outside = isOutsideInterfaceKey(target.key);
     const assemblyId = outside
-      ? exteriorAssemblyId(host?.use ?? '')
+      ? defaultAssemblyId(host?.use ?? '', 'wall')
       : host?.use === 'Walk-in' || other?.use === 'Walk-in'
         ? 'asm-wall-walkin'
         : 'asm-wall-partition';

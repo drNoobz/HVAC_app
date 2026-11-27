@@ -2,6 +2,9 @@ export type BuildingType = 'restaurant' | 'commercial' | 'residential' | 'other'
 
 export type UnitSystem = 'SI' | 'IP';
 
+/** The building's structural shell, as the energy codes group walls and roofs. */
+export type BuildingConstruction = 'steel-frame' | 'concrete' | 'masonry' | 'metal-building' | 'wood-frame';
+
 export type SurfaceFace = 'floor' | 'ceiling' | 'walls';
 
 export type OpeningKind = 'door' | 'window' | 'opening';
@@ -405,6 +408,8 @@ export interface Project {
   location: string;
   buildingType: BuildingType;
   subtype: string;
+  /** How the building's shell is built. Missing means not set. Used to suggest floors, walls and ceilings. */
+  construction?: BuildingConstruction;
   units: UnitSystem;
   /** Degrees clockwise from the top of the plan. Omitted or 0 means up is north. */
   northDeg?: number;
@@ -509,6 +514,7 @@ export const SURFACE_FACES: { id: SurfaceFace; label: string }[] = [
   { id: 'ceiling', label: 'Ceiling' },
 ];
 
+/** The four faces of a box room, by plan side. Not for display: users see wallName() (compass or neighbour). */
 export const WALL_FACES: { id: WallFace; label: string }[] = [
   { id: 'px', label: 'Right wall' },
   { id: 'nx', label: 'Left wall' },

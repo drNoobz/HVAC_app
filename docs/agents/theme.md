@@ -18,7 +18,7 @@ Data colours stay hex because the 3D view (three.js) needs real colours. On the 
 
 - `ink(color)`: lines, text, markers, small swatches and translucent tints. Light: unchanged. Dark: OKLCH lightness
   becomes `0.48 + 0.55 L`, chroma × 0.9. Every colour reads on the dark paper, and a darker colour stays darker than a
-  lighter one (a plain "at least L" lift made Exterior and Service walls look the same).
+  lighter one (a plain "at least L" lift made framed and masonry walls look the same).
 - `wash(color)`: opaque pale fills such as room colours. Light: unchanged. Dark: lightness capped at 0.31, a dark tint
   of the same hue.
 - `fade(color, amount)`: a colour mixed toward the plan background (white in light, the paper in dark). Use it instead

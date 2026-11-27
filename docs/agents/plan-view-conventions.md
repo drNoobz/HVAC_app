@@ -75,6 +75,19 @@ bold arrow.
   mixed → supply. Two networks that cross show one passing over the other. Never merge them into one outline: a
   merged crossing looks like the kitchen exhaust feeding the supply.
 
+## Wall names
+
+Users never see plan sides (top, left, right, bottom, or "Wall 3"). Name a wall with `wallName()` in
+`src/domain/walls.ts`, or `wallNameInText()` mid-sentence and `wallPlaceLabel()` in pickers:
+
+- An outside wall, or one only partly shared, is named by the compass point it faces: "North wall",
+  "Southwest wall" (eight points). The direction comes from the project's **North** setting, so pass
+  `project.northDeg`; changing North renames every wall, and nothing stores a name.
+- A wall fully shared with one or two spaces is named after them: "Wall to Corridor", "Wall to Kitchen and Prep".
+- Two walls of one room with the same name are numbered in plan order: "North wall 1", "North wall 2".
+- The plan-side ids (`px`, `nx`, `py`, `ny`, edge indexes) stay internal. `PLAN_SIDES` and `WALL_FACES` labels
+  are for geometry only.
+
 ## Labels and declutter
 
 - Anything with `data-label="<priority>"` (text or a whole group) takes part in `declutterLabels`. It runs every

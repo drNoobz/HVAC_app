@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "note": "Restaurant planning components built from the North American materials library. Each component is an ordered stack of library layers with published R/U sources. Walls, roofs, doors, and windows run outside to inside. Floors run top to bottom. Ceilings run from the room toward the outside. A series stack is layers in contact. A ceiling-and-roof stack is not a series path, because a plenum sits between them.",
+  "note": "Planning components for commercial buildings, built from the North American materials library and grouped by the envelope classes the energy codes use (ASHRAE 90.1 / IECC: mass, steel-framed, wood-framed, metal building; insulation above deck, attic; slab on grade). Each component is an ordered stack of library layers with published R/U sources. Walls, roofs, doors, and windows run outside to inside. Floors run top to bottom. Ceilings run from the room toward the outside. A series stack is layers in contact. A ceiling-and-roof stack is not a series path, because a plenum sits between them.",
   "assemblies": [
     {
       "id": "asm-floor-dining",
-      "name": "Dining floor, carpet on a 4 in slab",
+      "name": "Slab on grade 4 in, carpet",
       "category": "floor",
-      "typicalUse": "Dining room and bar",
+      "typicalUse": "Offices, dining rooms, classrooms, cinemas, hotel rooms",
       "orderLabel": "Top → bottom",
       "series": true,
       "layers": [
@@ -22,20 +22,21 @@
         }
       ],
       "source": "Carpet with fibrous pad, R-2.08, over 4 in heavyweight undried concrete, R-0.32.",
-      "notes": "Top to bottom. Soil and air films are not included."
+      "notes": "Top to bottom. Soil and air films are not included.",
+      "family": "slab-on-grade"
     },
     {
       "id": "asm-floor-kitchen",
-      "name": "Kitchen floor, tile on a 4 in slab",
+      "name": "Slab on grade 4 in, tile",
       "category": "floor",
-      "typicalUse": "Kitchen, hot line, prep, dish, and restroom",
+      "typicalUse": "Kitchens, restrooms, lobbies, and wet areas",
       "orderLabel": "Top → bottom",
       "series": true,
       "layers": [
         {
           "materialId": "floor-tile",
           "thicknessMm": null,
-          "place": "Tile finish"
+          "place": "Finish"
         },
         {
           "materialId": "floor-hw-concrete-4in",
@@ -44,13 +45,14 @@
         }
       ],
       "source": "Tile, R-0.05, over 4 in heavyweight undried concrete, R-0.32.",
-      "notes": "Top to bottom. Tile thickness was not stated in the source table. Thinset is not a separate row."
+      "notes": "Top to bottom. Tile thickness was not stated in the source table. Thinset is not a separate row.",
+      "family": "slab-on-grade"
     },
     {
       "id": "asm-floor-service",
-      "name": "Service floor, 4 in slab",
+      "name": "Slab on grade 4 in",
       "category": "floor",
-      "typicalUse": "Storage, dry storage, and corridor",
+      "typicalUse": "Storage, corridors, and back of house; sealed or polished concrete",
       "orderLabel": "Top → bottom",
       "series": true,
       "layers": [
@@ -61,13 +63,14 @@
         }
       ],
       "source": "4 in heavyweight undried concrete, R-0.32.",
-      "notes": "A bare slab. Add a finish layer if the room has one."
+      "notes": "A bare slab. Pick a floor finish on the space when it has one.",
+      "family": "slab-on-grade"
     },
     {
       "id": "asm-floor-walkin",
-      "name": "Walk-in floor, panel on a slab",
+      "name": "Insulated floor panel on a slab",
       "category": "floor",
-      "typicalUse": "Walk-in cooler or freezer",
+      "typicalUse": "Walk-in coolers and freezers, cold rooms",
       "orderLabel": "Top → bottom",
       "series": true,
       "layers": [
@@ -83,13 +86,91 @@
         }
       ],
       "source": "U.S. Cooler exposed prefabricated floor, R-28 or greater, on a concrete slab.",
-      "notes": "Top to bottom. The panel R is the published minimum. Freezer floors may still need subfloor heat."
+      "notes": "Top to bottom. The panel R is the published minimum. Freezer floors may still need subfloor heat.",
+      "family": "floor-panel"
+    },
+    {
+      "id": "asm-floor-slab-6",
+      "name": "Slab on grade 6 in",
+      "category": "floor",
+      "family": "slab-on-grade",
+      "typicalUse": "Warehouses, factories, loading areas, and gyms",
+      "orderLabel": "Top → bottom",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "floor-hw-concrete-4in",
+          "thicknessMm": 152.4,
+          "place": "Slab"
+        }
+      ],
+      "source": "Heavyweight concrete at R-0.08 per inch (Energy Code Ace layer CC14), scaled to 6 in.",
+      "notes": "Top to bottom. Slab heat loss is set by the edge, not by this layer sum; perimeter insulation is not modeled here."
+    },
+    {
+      "id": "asm-floor-over-unconditioned",
+      "name": "Concrete floor over an unconditioned space, R-10 ci",
+      "category": "floor",
+      "family": "floor-exposed",
+      "typicalUse": "Floors over parking garages, crawl spaces, loading docks, or open air",
+      "orderLabel": "Top → bottom",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "floor-hw-concrete-4in",
+          "thicknessMm": null,
+          "place": "Slab"
+        },
+        {
+          "materialId": "insulation-polyiso-1",
+          "thicknessMm": 35.3,
+          "place": "Continuous insulation below"
+        }
+      ],
+      "source": "Heavyweight concrete 4 in R-0.32, and polyiso scaled from R-7.2 per inch to about R-10. R-10 ci is the IECC zone 5 mass floor value (U-0.074).",
+      "notes": "Top to bottom. Air films and the structure are not in the layer sum."
+    },
+    {
+      "id": "asm-floor-deck",
+      "name": "Concrete on steel deck, between floors",
+      "category": "floor",
+      "family": "floor-between",
+      "typicalUse": "Upper floors of offices, schools, hotels, and mixed-use buildings",
+      "orderLabel": "Top → bottom",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "floor-hw-concrete-4in",
+          "thicknessMm": 88.9,
+          "place": "Concrete topping on steel deck"
+        }
+      ],
+      "source": "Heavyweight concrete at R-0.08 per inch (Energy Code Ace layer CC14), scaled to 3.5 in. The steel deck adds almost nothing.",
+      "notes": "Top to bottom. When both sides are conditioned this floor is not part of the envelope."
+    },
+    {
+      "id": "asm-floor-wood-joist",
+      "name": "Wood joist floor, plywood subfloor",
+      "category": "floor",
+      "family": "floor-between",
+      "typicalUse": "Upper floors of wood-framed buildings",
+      "orderLabel": "Top → bottom",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "floor-plywood-34",
+          "thicknessMm": null,
+          "place": "Subfloor"
+        }
+      ],
+      "source": "Wood subfloor 3/4 in, R-0.94 (WAC 51-11C-61015).",
+      "notes": "Top to bottom. Joists and the cavity are not layers. Over an unconditioned space, add R-30 cavity insulation (IECC zone 5 joist floor, U-0.033)."
     },
     {
       "id": "asm-wall-dining",
-      "name": "Dining wall, brick and studs",
+      "name": "Brick veneer on steel studs, R-13 + R-7.5 ci",
       "category": "wall",
-      "typicalUse": "Dining room and bar exterior wall",
+      "typicalUse": "Exterior walls of offices, dining rooms, retail, and schools",
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
@@ -116,17 +197,18 @@
         {
           "materialId": "wall-gypsum-half",
           "thicknessMm": null,
-          "place": "Dining side"
+          "place": "Room side"
         }
       ],
       "source": "Face brick R-0.44, foil-faced polyiso R-7.2 per inch, gypsum R-0.45, and an R-13 batt. The polyiso thickness is scaled to the R-7.5 continuous insulation named for an IECC zone 5 metal-framed wall.",
-      "notes": "Outside to inside. Studs, brick ties, and air films are not in the layer sum. The zone 5 code maximum for this wall class is U-0.064, which is not the same as 1 divided by the layer sum."
+      "notes": "Outside to inside. Studs, brick ties, and air films are not in the layer sum. The zone 5 code maximum for this wall class is U-0.064, which is not the same as 1 divided by the layer sum.",
+      "family": "steel-framed"
     },
     {
       "id": "asm-wall-kitchen",
-      "name": "Kitchen wall, masonry and insulation",
+      "name": "Concrete block 8 in, R-7.5 ci",
       "category": "wall",
-      "typicalUse": "Kitchen, hot line, prep, and dish exterior wall",
+      "typicalUse": "Exterior walls of kitchens, back of house, service areas, and warehouses",
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
@@ -143,17 +225,18 @@
         {
           "materialId": "wall-gypsum-half",
           "thicknessMm": null,
-          "place": "Kitchen side"
+          "place": "Room side"
         }
       ],
       "source": "8 in CMU R-1.11, foil-faced polyiso scaled from R-7.2 per inch to about R-7.5, and 1/2 in gypsum R-0.45.",
-      "notes": "Outside to inside. A FRP or stainless kitchen finish is not a separate thermal layer in this library."
+      "notes": "Outside to inside. An FRP or stainless finish, as in a kitchen, is not a separate thermal layer in this library.",
+      "family": "mass"
     },
     {
       "id": "asm-wall-partition",
-      "name": "Interior partition, gypsum both sides",
+      "name": "Gypsum on studs, both sides",
       "category": "wall",
-      "typicalUse": "Restroom, office, storage, and corridor partition",
+      "typicalUse": "Interior partitions: offices, restrooms, storage, and corridors",
       "orderLabel": "One side → the other",
       "series": true,
       "layers": [
@@ -169,13 +252,14 @@
         }
       ],
       "source": "Gypsum board, 1/2 in, R-0.45, both faces.",
-      "notes": "The stud cavity is empty in this demo stack. Add a batt here if the partition is insulated."
+      "notes": "The stud cavity is empty in this demo stack. Add a batt here if the partition is insulated.",
+      "family": "partition"
     },
     {
       "id": "asm-wall-walkin",
-      "name": "Walk-in cooler wall",
+      "name": "Insulated panel, cooler (4 in XPS)",
       "category": "wall",
-      "typicalUse": "Walk-in cooler",
+      "typicalUse": "Walk-in coolers and cold rooms",
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
@@ -186,13 +270,14 @@
         }
       ],
       "source": "U.S. Cooler 4 in cooler XPS panel, minimum R-28.8.",
-      "notes": "The published panel R is the whole wall. Metal skins are not a separate row in that specification."
+      "notes": "The published panel R is the whole wall. Metal skins are not a separate row in that specification.",
+      "family": "wall-panel"
     },
     {
       "id": "asm-wall-walkin-freezer",
-      "name": "Walk-in freezer wall",
+      "name": "Insulated panel, freezer (4 in XPS)",
       "category": "wall",
-      "typicalUse": "Walk-in freezer",
+      "typicalUse": "Walk-in freezers and freezer rooms",
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
@@ -203,13 +288,14 @@
         }
       ],
       "source": "U.S. Cooler 4 in freezer XPS panel, minimum R-32.",
-      "notes": "Swap this onto a walk-in when the box is a freezer. Metal skins are not a separate row."
+      "notes": "Swap this onto a walk-in when the box is a freezer. Metal skins are not a separate row.",
+      "family": "wall-panel"
     },
     {
       "id": "asm-wall-glass",
-      "name": "Storefront glass",
+      "name": "Storefront or curtain wall, low-E double glazing",
       "category": "wall",
-      "typicalUse": "Dining or bar glazed wall",
+      "typicalUse": "Storefronts, lobbies, office curtain walls, and dining rooms",
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
@@ -220,13 +306,167 @@
         }
       ],
       "source": "Engineering Toolbox sealed double glazing with a low-E coating, U-0.32.",
-      "notes": "A glazed wall uses the published whole-window U-0.32. It is not a tested curtain wall, and SHGC was not stated."
+      "notes": "A glazed wall uses the published whole-window U-0.32. It is not a tested curtain wall, and SHGC was not stated.",
+      "family": "glazed"
+    },
+    {
+      "id": "asm-wall-precast",
+      "name": "Precast concrete 8 in, R-11.4 ci",
+      "category": "wall",
+      "family": "mass",
+      "typicalUse": "Tilt-up warehouses, big-box retail, cinemas, and gyms",
+      "orderLabel": "Outside → inside",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "wall-concrete-8",
+          "thicknessMm": null,
+          "place": "Concrete panel"
+        },
+        {
+          "materialId": "insulation-polyiso-1",
+          "thicknessMm": 40.2,
+          "place": "Continuous insulation"
+        },
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Room side"
+        }
+      ],
+      "source": "Concrete 8 in R-0.64, polyiso scaled from R-7.2 per inch to about R-11.4, and 1/2 in gypsum R-0.45. R-11.4 ci is the IECC zone 5 mass wall value (U-0.090).",
+      "notes": "Outside to inside. Furring, ties, and air films are not in the layer sum."
+    },
+    {
+      "id": "asm-wall-wood-stud",
+      "name": "Wood studs 2x6, R-21 batt, stucco",
+      "category": "wall",
+      "family": "wood-framed",
+      "typicalUse": "Small offices, retail, clinics, and multifamily",
+      "orderLabel": "Outside → inside",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "wall-stucco-1",
+          "thicknessMm": 22.2,
+          "place": "Outside finish"
+        },
+        {
+          "materialId": "wall-plywood-half",
+          "thicknessMm": null,
+          "place": "Sheathing"
+        },
+        {
+          "materialId": "insulation-batt-r21",
+          "thicknessMm": null,
+          "place": "Stud cavity"
+        },
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Room side"
+        }
+      ],
+      "source": "7/8 in stucco at R-0.20 per inch, 1/2 in plywood R-0.63, an R-21 batt, and 1/2 in gypsum R-0.45. R-20 cavity insulation is an IECC zone 5 wood-framed wall option (U-0.064).",
+      "notes": "Outside to inside. The studs are a parallel path; the layer sum overstates the whole-wall R."
+    },
+    {
+      "id": "asm-wall-metal-building",
+      "name": "Metal building wall, R-13 + R-13 ci",
+      "category": "wall",
+      "family": "metal-building",
+      "typicalUse": "Factories, warehouses, workshops, and pre-engineered gyms",
+      "orderLabel": "Outside → inside",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "wall-metal-building-zone5",
+          "thicknessMm": null,
+          "place": "Whole wall (code assembly)"
+        }
+      ],
+      "source": "IECC commercial envelope sample, Table C402.1.4, climate zone 5, metal building wall, U-0.052.",
+      "notes": "One whole-element row: metal buildings bridge through the girts, so a layer sum does not apply. Confirm the climate zone."
+    },
+    {
+      "id": "asm-wall-imp",
+      "name": "Insulated metal panel, 2 in polyiso core",
+      "category": "wall",
+      "family": "metal-building",
+      "typicalUse": "Factories, food plants, cold storage, and warehouses",
+      "orderLabel": "Outside → inside",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "insulation-polyiso-1",
+          "thicknessMm": 50.8,
+          "place": "Panel core"
+        }
+      ],
+      "source": "Polyiso at R-7.2 per inch, 2 in core, about R-14.4.",
+      "notes": "Metal skins are not a separate layer. Panel makers publish their own R per thickness; confirm the product."
+    },
+    {
+      "id": "asm-wall-partition-acoustic",
+      "name": "Acoustic partition, double gypsum, R-13 batt",
+      "category": "wall",
+      "family": "partition",
+      "typicalUse": "Cinemas, conference rooms, classrooms, hotel rooms, and clinics",
+      "orderLabel": "Side A → side B",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Side A, outer"
+        },
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Side A, inner"
+        },
+        {
+          "materialId": "insulation-batt-r13",
+          "thicknessMm": null,
+          "place": "Stud cavity"
+        },
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Side B, inner"
+        },
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Side B, outer"
+        }
+      ],
+      "source": "Four layers of 1/2 in gypsum R-0.45 and an R-13 batt.",
+      "notes": "The batt is there for sound. Studs are not in the layer sum."
+    },
+    {
+      "id": "asm-wall-partition-cmu",
+      "name": "Concrete block partition 8 in",
+      "category": "wall",
+      "family": "partition",
+      "typicalUse": "Fire separations, auditoriums, mechanical rooms, and factories",
+      "orderLabel": "Side A → side B",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "wall-cmu-8",
+          "thicknessMm": null,
+          "place": "Block"
+        }
+      ],
+      "source": "8 in CMU, R-1.11.",
+      "notes": "Painted block, no furring."
     },
     {
       "id": "asm-ceiling-dining",
-      "name": "Dining ceiling and roof",
+      "name": "Acoustic tile below an insulated roof deck",
       "category": "ceiling",
-      "typicalUse": "Dining, bar, office, and corridor",
+      "typicalUse": "Offices, dining rooms, retail, classrooms, and corridors",
       "orderLabel": "Room side → outside",
       "series": false,
       "layers": [
@@ -247,20 +487,21 @@
         }
       ],
       "source": "1/2 in acoustic tile R-1.26, polyiso scaled from R-7.2 per inch to about R-30, and 3/8 in built-up roofing R-0.33. R-30 ci is the IECC zone 5 roof insulation named for insulation entirely above the deck.",
-      "notes": "Room side toward the outside. The plenum between the tile and the roof is not a layer, so these R-values are not one series path."
+      "notes": "Room side toward the outside. The plenum between the tile and the roof is not a layer, so these R-values are not one series path.",
+      "family": "ceiling-dropped"
     },
     {
       "id": "asm-ceiling-kitchen",
-      "name": "Kitchen ceiling and roof",
+      "name": "Gypsum ceiling below an insulated roof deck",
       "category": "ceiling",
-      "typicalUse": "Kitchen, prep, dish, and restroom",
+      "typicalUse": "Kitchens, restrooms, labs, and washable areas",
       "orderLabel": "Room side → outside",
       "series": false,
       "layers": [
         {
           "materialId": "wall-gypsum-half",
           "thicknessMm": null,
-          "place": "Room side, washable ceiling"
+          "place": "Room side, gypsum ceiling"
         },
         {
           "materialId": "insulation-polyiso-1",
@@ -274,13 +515,14 @@
         }
       ],
       "source": "1/2 in gypsum R-0.45, polyiso scaled from R-7.2 per inch to about R-30, and 3/8 in built-up roofing R-0.33.",
-      "notes": "Room side toward the outside. Gypsum stands in for a washable kitchen ceiling. The space above that ceiling is not a layer."
+      "notes": "Room side toward the outside. Gypsum stands in for a washable kitchen ceiling. The space above that ceiling is not a layer.",
+      "family": "ceiling-gypsum"
     },
     {
       "id": "asm-ceiling-walkin",
-      "name": "Walk-in cooler ceiling",
+      "name": "Insulated ceiling panel, cooler",
       "category": "ceiling",
-      "typicalUse": "Walk-in cooler",
+      "typicalUse": "Walk-in coolers and cold rooms",
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
@@ -291,13 +533,101 @@
         }
       ],
       "source": "U.S. Cooler 4 in cooler XPS ceiling, minimum R-28.8.",
-      "notes": "The published panel R is the whole ceiling."
+      "notes": "The published panel R is the whole ceiling.",
+      "family": "ceiling-panel"
+    },
+    {
+      "id": "asm-ceiling-tile-metal",
+      "name": "Acoustic tile below a metal building roof",
+      "category": "ceiling",
+      "family": "ceiling-dropped",
+      "typicalUse": "Offices and break rooms inside metal buildings",
+      "orderLabel": "Room side → outside",
+      "series": false,
+      "layers": [
+        {
+          "materialId": "ceiling-acoustic-half",
+          "thicknessMm": null,
+          "place": "Room side, dropped ceiling"
+        },
+        {
+          "materialId": "roof-metal-building-zone5",
+          "thicknessMm": null,
+          "place": "Metal building roof (code assembly)"
+        }
+      ],
+      "source": "1/2 in acoustic tile R-1.26 and the IECC zone 5 metal building roof, U-0.035.",
+      "notes": "Room side toward the outside. The plenum is not a layer, and the roof row is a whole-element U-factor."
+    },
+    {
+      "id": "asm-ceiling-tile-floor",
+      "name": "Acoustic tile below a floor above",
+      "category": "ceiling",
+      "family": "ceiling-under-floor",
+      "typicalUse": "Lower floors of offices, schools, and hotels",
+      "orderLabel": "Room side → outside",
+      "series": false,
+      "layers": [
+        {
+          "materialId": "ceiling-acoustic-half",
+          "thicknessMm": null,
+          "place": "Room side, dropped ceiling"
+        },
+        {
+          "materialId": "floor-hw-concrete-4in",
+          "thicknessMm": 88.9,
+          "place": "Concrete on steel deck above"
+        }
+      ],
+      "source": "1/2 in acoustic tile R-1.26 and 3.5 in heavyweight concrete at R-0.08 per inch.",
+      "notes": "Room side toward the floor above. When the space above is conditioned this is not part of the envelope."
+    },
+    {
+      "id": "asm-ceiling-attic",
+      "name": "Gypsum ceiling below an attic, R-38",
+      "category": "ceiling",
+      "family": "ceiling-gypsum",
+      "typicalUse": "Small retail, clinics, and wood-framed buildings",
+      "orderLabel": "Room side → outside",
+      "series": false,
+      "layers": [
+        {
+          "materialId": "wall-gypsum-half",
+          "thicknessMm": null,
+          "place": "Room side, gypsum ceiling"
+        },
+        {
+          "materialId": "roof-attic-zone5",
+          "thicknessMm": null,
+          "place": "Attic insulation and roof (code assembly)"
+        }
+      ],
+      "source": "1/2 in gypsum R-0.45 and the IECC zone 5 attic roof, U-0.027.",
+      "notes": "Room side toward the outside. The attic row is a whole-element U-factor."
+    },
+    {
+      "id": "asm-ceiling-walkin-freezer",
+      "name": "Insulated ceiling panel, freezer",
+      "category": "ceiling",
+      "family": "ceiling-panel",
+      "typicalUse": "Walk-in freezers and freezer rooms",
+      "orderLabel": "Room side → outside",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "ceiling-walkin-freezer-xps",
+          "thicknessMm": null,
+          "place": "Freezer ceiling panel"
+        }
+      ],
+      "source": "U.S. Cooler freezer ceiling, 4 in extruded polystyrene, minimum R-32.",
+      "notes": "Metal skins are not a separate layer."
     },
     {
       "id": "asm-roof-flat",
-      "name": "Flat roof, membrane on polyiso",
+      "name": "Exposed roof deck, membrane on R-30 polyiso",
       "category": "roof",
-      "typicalUse": "Exposed roof, with no dropped ceiling",
+      "typicalUse": "No ceiling: warehouses, factories, gyms, and open-ceiling retail or restaurants",
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
@@ -313,13 +643,32 @@
         }
       ],
       "source": "3/8 in built-up roofing R-0.33 and polyiso scaled from R-7.2 per inch to about R-30. R-30 ci is the IECC zone 5 value for insulation entirely above the deck.",
-      "notes": "Outside to inside. The deck is not in the cited R table. Use this when the ceiling is the roof."
+      "notes": "Outside to inside. The deck is not in the cited R table. Use this when the ceiling is the roof.",
+      "family": "roof-above-deck"
+    },
+    {
+      "id": "asm-roof-metal-building",
+      "name": "Exposed metal building roof, R-19 + R-11 liner",
+      "category": "roof",
+      "family": "roof-metal-building",
+      "typicalUse": "No ceiling: factories, warehouses, workshops, and pre-engineered gyms",
+      "orderLabel": "Outside → inside",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "roof-metal-building-zone5",
+          "thicknessMm": null,
+          "place": "Whole roof (code assembly)"
+        }
+      ],
+      "source": "IECC commercial envelope sample, Table C402.1.4, climate zone 5, metal building roof, U-0.035.",
+      "notes": "One whole-element row; purlins bridge the insulation, so a layer sum does not apply. Confirm the climate zone."
     },
     {
       "id": "asm-window-dining",
-      "name": "Dining window, low-E double glazing",
+      "name": "Window, low-E double glazing",
       "category": "window",
-      "typicalUse": "Dining room and storefront",
+      "typicalUse": "Offices, storefronts, classrooms, and dining rooms",
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
@@ -334,9 +683,9 @@
     },
     {
       "id": "asm-window-gas",
-      "name": "Window, low-E with gas fill",
+      "name": "Window, low-E double glazing with gas fill",
       "category": "window",
-      "typicalUse": "Higher-performance dining glazing",
+      "typicalUse": "Higher-performance glazing for any space",
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
@@ -351,9 +700,9 @@
     },
     {
       "id": "asm-door-restaurant",
-      "name": "Restaurant door, insulated metal",
+      "name": "Insulated metal door",
       "category": "door",
-      "typicalUse": "Entry, kitchen, and service doors",
+      "typicalUse": "Entry, service, and exit doors",
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
@@ -370,7 +719,7 @@
       "id": "asm-door-uninsulated",
       "name": "Uninsulated hollow metal door",
       "category": "door",
-      "typicalUse": "Older service door",
+      "typicalUse": "Older service and utility doors",
       "orderLabel": "Outside → inside",
       "series": true,
       "layers": [
@@ -382,6 +731,23 @@
       ],
       "source": "ASHRAE 90.1-2007 uninsulated double-layer metal door, U-0.70.",
       "notes": "Swap this onto a door that has no insulation."
+    },
+    {
+      "id": "asm-door-wood",
+      "name": "Solid-core wood door",
+      "category": "door",
+      "typicalUse": "Interior doors: offices, hotel rooms, and classrooms",
+      "orderLabel": "Outside → inside",
+      "series": true,
+      "layers": [
+        {
+          "materialId": "door-wood-solid",
+          "thicknessMm": null,
+          "place": "Door leaf"
+        }
+      ],
+      "source": "Building Material R-Values table, solid-core wood, 1-3/4 in, R-2.17.",
+      "notes": "Door leaf only; the frame is not a layer."
     }
   ]
 }

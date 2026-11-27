@@ -41,6 +41,7 @@ Run with `npm run dev` (port 3100).
 | Duct catalogue, air types, colours | `src/domain/ductCatalog.ts` |
 | Duct flow directions and sums | `src/domain/ducts.ts` |
 | Check phase issues | `src/domain/checks.ts` |
+| Floors, walls, ceilings (components, families, suggestions) | `src/domain/construction-assemblies.json`, `src/domain/envelopeDefaults.ts` |
 
 ## Guides
 
@@ -56,6 +57,8 @@ Run with `npm run dev` (port 3100).
   test routine.
 - [docs/agents/theme.md](docs/agents/theme.md): light and dark themes, colour tokens, `ink()` / `wash()`, the 3D scene
   look, and how to check a colour change.
+- [docs/agents/constructions.md](docs/agents/constructions.md): floors, walls and ceilings named by how they are
+  built and grouped by energy-code class, floor finishes, suggestions by position and construction, and how to add a component.
 - [docs/agents/tutorials.md](docs/agents/tutorials.md): Settings → How to use, tutorial content, and the script that
   captures the annotated pictures. Re-run it when the UI a tutorial shows changes.
 - [docs/proposals/user-built-spaces-loads-systems.md](docs/proposals/user-built-spaces-loads-systems.md): the plan

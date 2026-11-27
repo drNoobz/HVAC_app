@@ -79,18 +79,19 @@ import { polygonArea } from '@/domain/wallDraw';
 import {
   assemblyCategoriesForFace,
   assemblyCategoriesForOpening,
-  constructionCategoryLabel,
   findAssembly,
   findConstruction,
+  groupAssemblies,
   formatResistance,
   formatThickness,
   resolveStack,
   stackResistance,
+  type AssemblyCategory,
   type ConstructionAssembly,
-  type ConstructionCategory,
   type ConstructionMaterial,
 } from '@/domain/constructionLibrary';
-import { PLAN_SIDES, WALL_TYPES, edgePortions, facePortions, findInterface, interfaceTargets, northDegrees, wallPlaceLabel, type InterfaceTarget, type WallPortion } from '@/domain/walls';
+import { acceptsFloorFinish, BUILDING_CONSTRUCTIONS, FLOOR_FINISHES, floorFinishOf, matchingFloorAssembly, projectConstruction, suggestForRoom, withFloorFinish, type Suggestion } from '@/domain/envelopeDefaults';
+import { WALL_TYPES, isOutsideInterfaceKey, wallKindFor, wallName, edgePortions, facePortions, findInterface, interfaceTargets, northDegrees, wallPlaceLabel, type InterfaceTarget, type WallPortion } from '@/domain/walls';
 import { StackEditor } from './StackEditor';
 import { TextField, UnitField } from './Fields';
 import { SiteClimateFields } from './SiteClimateFields';
@@ -131,7 +132,7 @@ export function Inspector({
         <SiteClimateFields project={project} materials={materials} assemblies={assemblies} onChange={onChange} />
       )}
       {selection.kind === 'room' && (
-        <RoomFields project={project} roomId={selection.id} assemblies={assemblies} onChange={onChange} onSelect={onSelect} nameFocus={nameFocus} />
+        <RoomFields project={project} roomId={selection.id} materials={materials} assemblies={assemblies} onChange={onChange} onSelect={onSelect} nameFocus={nameFocus} />
       )}
       {selection.kind === 'interface' && (
         <InterfaceFields project={project} interfaceKey={selection.key} materials={materials} assemblies={assemblies} onChange={onChange} />
@@ -232,6 +233,24 @@ function ProjectFields({
         </select>
       </label>
       <TextField label="Subtype" value={project.subtype} onCommit={subtype => onChange({ ...project, subtype })} />
+      <label className="field" title="How the shell is built. Floors, walls and ceilings that fit it are suggested first.">
+        <span>Construction</span>
+        <select
+          value={projectConstruction(project) ?? ''}
+          onChange={event => {
+            const next = BUILDING_CONSTRUCTIONS.find(item => item.id === event.target.value)?.id;
+            const { construction: _old, ...rest } = project;
+            onChange(next ? { ...rest, construction: next } : rest);
+          }}
+        >
+          <option value="">Not set</option>
+          {BUILDING_CONSTRUCTIONS.map(item => (
+            <option key={item.id} value={item.id}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
       </section>
       <section className="prop-block">
       <p className="prop-section">Settings</p>
@@ -274,38 +293,87 @@ function ComponentSelect({
   assemblies,
   categories,
   value,
+  suggested = null,
   onChange,
 }: {
   label: string;
   assemblies: ConstructionAssembly[];
-  categories: readonly string[];
+  categories: readonly AssemblyCategory[];
   value: string | null;
+  /** Components listed first, from where the surface sits and how the building is built. */
+  suggested?: Suggestion | null;
   onChange: (id: string | null) => void;
 }) {
-  const options = assemblies.filter(item => categories.includes(item.category));
   const current = findAssembly(assemblies, value);
   return (
-    <label className="field">
+    <label className="field" title={suggested ? `Suggested: ${suggested.reason}` : undefined}>
       <span>{label}</span>
       <select value={value ?? ''} onChange={event => onChange(event.target.value || null)}>
         <option value="">Unassigned</option>
         {value && !current && <option value={value}>{value}</option>}
-        {categories.map(category => {
-          const items = options.filter(item => item.category === category);
-          if (items.length === 0) return null;
-          return (
-            <optgroup key={category} label={constructionCategoryLabel[category as ConstructionCategory]}>
-              {items.map(item => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </optgroup>
-          );
-        })}
+        {groupAssemblies(assemblies, categories, suggested).map(group => (
+          <optgroup key={group.key} label={group.label}>
+            {group.items.map(item => (
+              <option key={`${group.key}-${item.id}`} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </optgroup>
+        ))}
       </select>
     </label>
   );
+}
+
+/** Floor finish on top of the floor's structure. Hidden for floors that take none (insulated panels). */
+function FloorFinishSelect({
+  project,
+  room,
+  assemblies,
+  materials,
+  onChange,
+}: {
+  project: Project;
+  room: Room;
+  assemblies: ConstructionAssembly[];
+  materials: ConstructionMaterial[];
+  onChange: (project: Project) => void;
+}) {
+  const floor = room.surfaces.floor;
+  if (!floor.constructionId || !acceptsFloorFinish(floor.constructionId)) return null;
+  const layers = resolveStack(floor, assemblies, materials);
+  return (
+    <label className="field">
+      <span>Floor finish</span>
+      <select
+        value={floorFinishOf(layers)}
+        onChange={event => {
+          const next = withFloorFinish(layers, event.target.value);
+          const matched = matchingFloorAssembly(next, assemblies);
+          const constructionId = matched ?? floor.constructionId;
+          const assembly = findAssembly(assemblies, constructionId);
+          const note = matched && assembly ? `${assembly.name}. ${assembly.notes}` : floor.note;
+          onChange(
+            updateRoom(project, room.id, {
+              assumption: false,
+              surfaces: { ...room.surfaces, floor: { ...floor, materialKey: null, constructionId, layers: next, note } },
+            })
+          );
+        }}
+      >
+        {FLOOR_FINISHES.map(finish => (
+          <option key={finish.id} value={finish.id}>
+            {finish.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function suggestForInterface(project: Project, roomId: string | undefined, shared: boolean): Suggestion | null {
+  const room = project.rooms.find(item => item.id === roomId);
+  return room ? suggestForRoom(project, room, 'wall', shared) : null;
 }
 
 function assignSurface(project: Project, room: Room, face: 'floor' | 'ceiling', constructionId: string | null, assemblies: ConstructionAssembly[]): Project {
@@ -458,7 +526,7 @@ function EdgeWallFields({
     ? (project.interfaceWalls?.[sole.key] ?? { materialKey: null, constructionId: null, layers: [], note: UNASSIGNED_SURFACE })
     : (room.edgeWalls?.[edge] ?? { materialKey: null, constructionId: null, layers: [], note: UNASSIGNED_SURFACE });
   const layers = resolveStack(assignment, assemblies, materials);
-  const kind = WALL_TYPES.find(type => type.assemblyId === assignment.constructionId)?.id ?? '';
+  const kind = wallKindFor(assignment.constructionId);
   const write = (next: typeof assignment) => {
     if (sole) {
       onChange(updateInterfaceAssignment(project, sole.key, next));
@@ -475,7 +543,7 @@ function EdgeWallFields({
     <div className="stack props">
       <header className="prop-head">
         <p className="prop-kicker">{room.name}</p>
-        <h2>Wall {edge + 1}</h2>
+        <h2>{wallName(room, { edge }, project.rooms, project.northDeg)}</h2>
       </header>
       <div className="stat-row">
         <span>{formatLength(lengthM, project.units, 2)}</span>
@@ -505,6 +573,7 @@ function EdgeWallFields({
           assemblies={assemblies}
           categories={assemblyCategoriesForFace('walls')}
           value={assignment.constructionId ?? null}
+          suggested={suggestForRoom(project, room, 'wall', !!sole && !isOutsideInterfaceKey(sole.key))}
           onChange={setAssembly}
         />
       </section>
@@ -551,7 +620,7 @@ function WallFaceFields({
   const stack = sole ? (project.interfaceWalls?.[sole.key] ?? { materialKey: null, constructionId: null, layers: [], note: UNASSIGNED_SURFACE }) : assignment;
   const layers = resolveStack(stack, assemblies, materials);
   const thickness = stackThicknessMm(layers, materials);
-  const kind = WALL_TYPES.find(type => type.assemblyId === stack.constructionId)?.id ?? '';
+  const kind = wallKindFor(stack.constructionId);
   const parts = wallParts(room, `f:${face}`, project.rooms, openings);
   const openingPanel = (id: string) => (
     <OpeningFields key={id} project={project} roomId={room.id} openingId={id} materials={materials} assemblies={assemblies} onChange={onChange} onSelect={onSelect} />
@@ -593,7 +662,7 @@ function WallFaceFields({
     <div className="stack props">
       <header className="prop-head">
         <p className="prop-kicker">Wall</p>
-        <h2>{PLAN_SIDES[face].title} wall</h2>
+        <h2>{wallName(room, { face }, project.rooms, project.northDeg)}</h2>
       </header>
       <PortionLines portions={facePortions(room, face, project.rooms)} units={project.units} />
       <section className="prop-block">
@@ -632,6 +701,7 @@ function WallFaceFields({
           assemblies={assemblies}
           categories={assemblyCategoriesForFace('walls')}
           value={stack.constructionId ?? null}
+          suggested={suggestForRoom(project, room, 'wall', !!sole && !isOutsideInterfaceKey(sole.key))}
           onChange={setAssembly}
         />
       </section>
@@ -686,7 +756,7 @@ function InterfaceFields({
   const assignment = project.interfaceWalls?.[hit.key] ?? { materialKey: null, constructionId: null, layers: [], note: UNASSIGNED_SURFACE };
   const layers = resolveStack(assignment, assemblies, materials);
   const thickness = stackThicknessMm(layers, materials);
-  const kind = WALL_TYPES.find(type => type.assemblyId === assignment.constructionId)?.id ?? '';
+  const kind = wallKindFor(assignment.constructionId);
   const write = (next: typeof assignment) => onChange(updateInterfaceAssignment(project, hit.key, next));
   return (
     <div className="stack props">
@@ -731,6 +801,7 @@ function InterfaceFields({
           assemblies={assemblies}
           categories={assemblyCategoriesForFace('walls')}
           value={assignment.constructionId ?? null}
+          suggested={suggestForInterface(project, hit.sides[0]?.roomId, !isOutsideInterfaceKey(hit.key))}
           onChange={constructionId => onChange(setInterfaceAssembly(project, hit.key, constructionId, assemblies))}
         />
       </section>
@@ -862,6 +933,7 @@ function SurfaceFields({
         assemblies={assemblies}
         categories={assemblyCategoriesForFace(face)}
         value={assignment.constructionId ?? null}
+        suggested={face === 'walls' ? null : suggestForRoom(project, room, face)}
         onChange={constructionId =>
           onChange(
             face === 'walls' && wallFace
@@ -894,6 +966,7 @@ function SurfaceFields({
 function RoomFields({
   project,
   roomId,
+  materials,
   assemblies,
   onChange,
   onSelect,
@@ -901,6 +974,7 @@ function RoomFields({
 }: {
   project: Project;
   roomId: string;
+  materials: ConstructionMaterial[];
   assemblies: ConstructionAssembly[];
   onChange: (project: Project) => void;
   onSelect: (selection: Selection) => void;
@@ -977,10 +1051,13 @@ function RoomFields({
             assemblies={assemblies}
             categories={assemblyCategoriesForFace(face)}
             value={assignment.constructionId ?? null}
+            suggested={suggestForRoom(project, room, face)}
             onChange={constructionId => setSurface(face, constructionId)}
           />
         );
-      })}
+      }).flatMap((select, index) =>
+        index === 0 ? [select, <FloorFinishSelect key="finish" project={project} room={room} assemblies={assemblies} materials={materials} onChange={onChange} />] : [select]
+      )}
       </section>
       <RoomLoadsBlock project={project} roomId={room.id} onSelect={onSelect} />
       <div className="button-row">
@@ -1036,7 +1113,7 @@ function OpeningFields({
   return (
     <div className="stack props">
       <header className="prop-head">
-        <p className="prop-kicker">{room.name} · {PLAN_SIDES[opening.face].title}</p>
+        <p className="prop-kicker">{room.name} · {wallName(room, { face: opening.face }, project.rooms, project.northDeg)}</p>
         <h2>{opening.kind}</h2>
       </header>
       {opening.kind !== 'opening' && (
@@ -1117,7 +1194,7 @@ function OpeningFields({
         >
           {WALL_FACES.map(face => (
             <option key={face.id} value={face.id}>
-              {wallPlaceLabel(room, face.id, project.rooms)}
+              {wallPlaceLabel(room, face.id, project.rooms, project.northDeg)}
             </option>
           ))}
         </select>
