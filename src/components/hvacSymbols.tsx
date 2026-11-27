@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { SensorKind, ValveKind } from '@/domain/types';
+import { ink, PLAN_COLOR } from '@/domain/theme';
 
 /**
  * HVAC drawing symbols after ANSI/ASHRAE Standard 134 (graphic symbols for HVAC and refrigeration) and ANSI/ISA-5.1
@@ -10,12 +11,12 @@ import type { SensorKind, ValveKind } from '@/domain/types';
  * Coordinates are the caller's: plan metres with +y up. Line weights do not scale with zoom.
  */
 
-export const SYMBOL_INK = '#2a2e32';
+export const SYMBOL_INK = PLAN_COLOR.ink;
 
 const NS = 'non-scaling-stroke' as const;
 
 function stroke(color: string, width = 1.1, fill = 'none') {
-  return { stroke: color, strokeWidth: width, fill, vectorEffect: NS, pointerEvents: 'none' as const };
+  return { stroke: ink(color), strokeWidth: width, fill: ink(fill), vectorEffect: NS, pointerEvents: 'none' as const };
 }
 
 /** Text upright on screen inside a +y-up frame that is rotated by `yaw` degrees. */
@@ -38,7 +39,7 @@ export function UprightText({
 }) {
   return (
     <g transform={`translate(${x} ${y}) rotate(${-yaw}) scale(1,-1)`} pointerEvents="none">
-      <text textAnchor="middle" dominantBaseline="central" fontSize={size} fontWeight={weight} fill={color}>
+      <text textAnchor="middle" dominantBaseline="central" fontSize={size} fontWeight={weight} fill={ink(color)}>
         {children}
       </text>
     </g>
@@ -68,24 +69,24 @@ export function ControlDamper({ x, y, h, length, color, blades = 'opposed', oper
   const tilt = 0.6;
   return (
     <g pointerEvents="none">
-      <rect x={x - length / 2} y={y - h / 2} width={length} height={h} {...stroke(color, 1.1, '#fff')} />
+      <rect x={x - length / 2} y={y - h / 2} width={length} height={h} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
       {Array.from({ length: count }, (_, index) => {
         const by = y - h / 2 + (h * (index + 0.5)) / count;
         const sign = blades === 'parallel' || index % 2 === 0 ? 1 : -1;
         return (
           <g key={index}>
             <line x1={x - half * tilt * sign} y1={by - half} x2={x + half * tilt * sign} y2={by + half} {...stroke(color, 1.2)} />
-            <circle cx={x} cy={by} r={h * 0.025} fill={color} />
+            <circle cx={x} cy={by} r={h * 0.025} fill={ink(color)} />
           </g>
         );
       })}
       {operator === 'motor' ? (
-        <MotorOperator at={x} from={y + operatorSide * (h / 2)} side={operatorSide} size={h * 0.13} color={color} />
+        <MotorOperator at={x} from={y + operatorSide * (h / 2)} side={operatorSide} size={h * 0.13} color={ink(color)} />
       ) : (
         // Gravity damper: counterweight arm on the top blade.
         <g>
           <line x1={x} y1={y + h / 2 - h / (count * 2)} x2={x + length * 0.9} y2={y + h / 2 - h / (count * 2) + h * 0.12} {...stroke(color)} />
-          <circle cx={x + length * 0.9} cy={y + h / 2 - h / (count * 2) + h * 0.12} r={h * 0.04} fill={color} />
+          <circle cx={x + length * 0.9} cy={y + h / 2 - h / (count * 2) + h * 0.12} r={h * 0.04} fill={ink(color)} />
         </g>
       )}
     </g>
@@ -103,8 +104,8 @@ export function MotorOperator({ at, from, side, size, color, letter = 'M', along
   return (
     <g pointerEvents="none">
       <line x1={x1} y1={y1} x2={x2} y2={y2} {...stroke(color)} />
-      <circle cx={cx} cy={cy} r={size} {...stroke(color, 1.1, '#fff')} />
-      <UprightText x={cx} y={cy} size={size * 1.15} color={color}>
+      <circle cx={cx} cy={cy} r={size} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
+      <UprightText x={cx} y={cy} size={size * 1.15} color={ink(color)}>
         {letter}
       </UprightText>
     </g>
@@ -117,7 +118,7 @@ export function DuctFilter({ x, y, h, length, color }: InDuct) {
   const points = Array.from({ length: folds + 1 }, (_, i) => `${x + (i % 2 === 0 ? -length * 0.32 : length * 0.32)},${y - h / 2 + (h * i) / folds}`).join(' ');
   return (
     <g pointerEvents="none">
-      <rect x={x - length / 2} y={y - h / 2} width={length} height={h} {...stroke(color, 1.1, '#fff')} />
+      <rect x={x - length / 2} y={y - h / 2} width={length} height={h} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
       <polyline points={points} {...stroke(color)} />
     </g>
   );
@@ -127,14 +128,14 @@ export function DuctFilter({ x, y, h, length, color }: InDuct) {
 export function DuctCoil({ x, y, h, length, color, piped }: InDuct & { piped: boolean }) {
   return (
     <g pointerEvents="none">
-      <rect x={x - length / 2} y={y - h / 2} width={length} height={h} {...stroke(color, 1.1, '#fff')} />
+      <rect x={x - length / 2} y={y - h / 2} width={length} height={h} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
       <line x1={x - length / 2} y1={y - h / 2} x2={x + length / 2} y2={y + h / 2} {...stroke(color)} />
       {piped && (
         <>
-          <UprightText x={x + length * 0.2} y={y + h * 0.36} size={h * 0.13} color={color} weight={500}>
+          <UprightText x={x + length * 0.2} y={y + h * 0.36} size={h * 0.13} color={ink(color)} weight={500}>
             S
           </UprightText>
-          <UprightText x={x - length * 0.2} y={y - h * 0.36} size={h * 0.13} color={color} weight={500}>
+          <UprightText x={x - length * 0.2} y={y - h * 0.36} size={h * 0.13} color={ink(color)} weight={500}>
             R
           </UprightText>
         </>
@@ -150,10 +151,10 @@ export function CentrifugalFan({ x, y, h, color, dir }: { x: number; y: number; 
     <g pointerEvents="none">
       <path
         d={`M ${x - dir * r * 1.12} ${y} A ${r * 1.12} ${r * 1.12} 0 1 ${dir > 0 ? 0 : 1} ${x} ${y - r * 1.12} L ${x + dir * r * 1.45} ${y - r * 1.12} L ${x + dir * r * 1.45} ${y - r * 0.1}`}
-        {...stroke(color, 1.1, '#fff')}
+        {...stroke(color, 1.1, PLAN_COLOR.halo)}
       />
       <circle cx={x} cy={y} r={r * 0.78} {...stroke(color)} />
-      <circle cx={x} cy={y} r={r * 0.1} fill={color} />
+      <circle cx={x} cy={y} r={r * 0.1} fill={ink(color)} />
     </g>
   );
 }
@@ -162,9 +163,9 @@ export function CentrifugalFan({ x, y, h, color, dir }: { x: number; y: number; 
 export function AxialFan({ x, y, h, length, color }: InDuct) {
   return (
     <g pointerEvents="none">
-      <ellipse cx={x} cy={y + h * 0.2} rx={length * 0.16} ry={h * 0.18} {...stroke(color, 1.1, '#fff')} />
-      <ellipse cx={x} cy={y - h * 0.2} rx={length * 0.16} ry={h * 0.18} {...stroke(color, 1.1, '#fff')} />
-      <circle cx={x} cy={y} r={h * 0.035} fill={color} />
+      <ellipse cx={x} cy={y + h * 0.2} rx={length * 0.16} ry={h * 0.18} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
+      <ellipse cx={x} cy={y - h * 0.2} rx={length * 0.16} ry={h * 0.18} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
+      <circle cx={x} cy={y} r={h * 0.035} fill={ink(color)} />
     </g>
   );
 }
@@ -173,7 +174,7 @@ export function AxialFan({ x, y, h, length, color }: InDuct) {
 export function HeatExchanger({ x, y0, y1, length, color }: { x: number; y0: number; y1: number; length: number; color: string }) {
   return (
     <g pointerEvents="none">
-      <rect x={x - length / 2} y={y0} width={length} height={y1 - y0} {...stroke(color, 1.1, '#fff')} />
+      <rect x={x - length / 2} y={y0} width={length} height={y1 - y0} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
       <line x1={x - length / 2} y1={y0} x2={x + length / 2} y2={y1} {...stroke(color)} />
       <line x1={x - length / 2} y1={y1} x2={x + length / 2} y2={y0} {...stroke(color)} />
     </g>
@@ -184,7 +185,7 @@ export function HeatExchanger({ x, y0, y1, length, color }: { x: number; y0: num
 export function Humidifier({ x, y, h, length, color }: InDuct) {
   return (
     <g pointerEvents="none">
-      <rect x={x - length / 2} y={y - h / 2} width={length} height={h} {...stroke(color, 1.1, '#fff')} />
+      <rect x={x - length / 2} y={y - h / 2} width={length} height={h} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
       <line x1={x} y1={y - h * 0.4} x2={x} y2={y + h * 0.4} {...stroke(color)} />
       {[0.25, 0.5, 0.75].map(f => (
         <line key={f} x1={x} y1={y - h / 2 + h * f} x2={x + length * 0.3} y2={y - h / 2 + h * f + h * 0.05} {...stroke(color, 0.9)} />
@@ -205,11 +206,11 @@ export function CondenserSection({ x0, x1, y0, y1, fans, color }: { x0: number; 
   const fins = Array.from({ length: steps + 1 }, (_, i) => `${x0 + ((x1 - x0) * i) / steps},${y0 + (i % 2 === 0 ? coil * 0.15 : coil * 0.85)}`).join(' ');
   return (
     <g pointerEvents="none">
-      <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} {...stroke(color, 1.1, '#fff')} />
+      <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
       <rect x={x0} y={y0} width={x1 - x0} height={coil} {...stroke(color, 0.9)} />
       <polyline points={fins} {...stroke(color, 0.8)} />
       {fans.map((fan, index) => (
-        <PropellerFan key={index} x={fan.x} y={fan.y} r={fan.r} color={color} />
+        <PropellerFan key={index} x={fan.x} y={fan.y} r={fan.r} color={ink(color)} />
       ))}
     </g>
   );
@@ -219,14 +220,14 @@ export function CondenserSection({ x0, x1, y0, y1, fans, color }: { x0: number; 
 export function PropellerFan({ x, y, r, color }: { x: number; y: number; r: number; color: string }) {
   return (
     <g pointerEvents="none">
-      <circle cx={x} cy={y} r={r} {...stroke(color, 1.1, '#fff')} />
+      <circle cx={x} cy={y} r={r} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
       {[0, 1, 2].map(i => {
         const a = (i * 2 * Math.PI) / 3;
         const bx = x + Math.cos(a) * r * 0.5;
         const by = y + Math.sin(a) * r * 0.5;
         return <ellipse key={i} cx={bx} cy={by} rx={r * 0.42} ry={r * 0.17} transform={`rotate(${(a * 180) / Math.PI} ${bx} ${by})`} {...stroke(color)} />;
       })}
-      <circle cx={x} cy={y} r={r * 0.1} fill={color} />
+      <circle cx={x} cy={y} r={r * 0.1} fill={ink(color)} />
     </g>
   );
 }
@@ -241,14 +242,14 @@ export function Valve({ x, y, size, kind, color }: { x: number; y: number; size:
   const body = `M ${x - s * 0.6} ${y + s} L ${x + s * 0.6} ${y + s} L ${x} ${y} Z M ${x - s * 0.6} ${y - s} L ${x + s * 0.6} ${y - s} L ${x} ${y} Z`;
   return (
     <g pointerEvents="none">
-      <path d={body} {...stroke(color, 1.1, '#fff')} />
-      {kind === 'three-way' && <path d={`M ${x - s} ${y - s * 0.6} L ${x - s} ${y + s * 0.6} L ${x} ${y} Z`} {...stroke(color, 1.1, '#fff')} />}
-      {(kind === 'two-way' || kind === 'three-way') && <MotorOperator at={y} from={x} side={1} size={s * 0.55} color={color} alongX />}
+      <path d={body} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
+      {kind === 'three-way' && <path d={`M ${x - s} ${y - s * 0.6} L ${x - s} ${y + s * 0.6} L ${x} ${y} Z`} {...stroke(color, 1.1, PLAN_COLOR.halo)} />}
+      {(kind === 'two-way' || kind === 'three-way') && <MotorOperator at={y} from={x} side={1} size={s * 0.55} color={ink(color)} alongX />}
       {kind === 'solenoid' && (
         <g>
           <line x1={x} y1={y} x2={x + s * 1.3} y2={y} {...stroke(color)} />
-          <rect x={x + s * 1.3} y={y - s * 0.5} width={s} height={s} {...stroke(color, 1.1, '#fff')} />
-          <UprightText x={x + s * 1.8} y={y} size={s * 0.7} color={color}>
+          <rect x={x + s * 1.3} y={y - s * 0.5} width={s} height={s} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
+          <UprightText x={x + s * 1.8} y={y} size={s * 0.7} color={ink(color)}>
             S
           </UprightText>
         </g>
@@ -257,7 +258,7 @@ export function Valve({ x, y, size, kind, color }: { x: number; y: number; size:
         // Self-contained regulator: diaphragm operator with a sensing line to the upstream pipe.
         <g>
           <line x1={x} y1={y} x2={x + s * 1.2} y2={y} {...stroke(color)} />
-          <path d={`M ${x + s * 1.2} ${y - s * 0.6} A ${s * 0.6} ${s * 0.6} 0 0 1 ${x + s * 1.2} ${y + s * 0.6} Z`} {...stroke(color, 1.1, '#fff')} />
+          <path d={`M ${x + s * 1.2} ${y - s * 0.6} A ${s * 0.6} ${s * 0.6} 0 0 1 ${x + s * 1.2} ${y + s * 0.6} Z`} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
           <polyline points={`${x + s * 1.5},${y + s * 0.3} ${x + s * 2.2},${y + s * 0.3} ${x + s * 2.2},${y + s * 1.8} ${x},${y + s * 1.8}`} {...stroke(color, 0.8)} strokeDasharray="2 2" />
         </g>
       )}
@@ -265,9 +266,9 @@ export function Valve({ x, y, size, kind, color }: { x: number; y: number; size:
         // Thermostatic expansion valve: capillary to a sensing bulb.
         <g>
           <line x1={x} y1={y} x2={x + s * 1.2} y2={y} {...stroke(color)} />
-          <path d={`M ${x + s * 1.2} ${y - s * 0.6} A ${s * 0.6} ${s * 0.6} 0 0 1 ${x + s * 1.2} ${y + s * 0.6} Z`} {...stroke(color, 1.1, '#fff')} />
+          <path d={`M ${x + s * 1.2} ${y - s * 0.6} A ${s * 0.6} ${s * 0.6} 0 0 1 ${x + s * 1.2} ${y + s * 0.6} Z`} {...stroke(color, 1.1, PLAN_COLOR.halo)} />
           <polyline points={`${x + s * 1.8},${y} ${x + s * 2.6},${y} ${x + s * 2.6},${y + s * 1.6}`} {...stroke(color, 0.8)} strokeDasharray="2 2" />
-          <rect x={x + s * 2.4} y={y + s * 1.6} width={s * 0.4} height={s * 0.8} fill={color} />
+          <rect x={x + s * 2.4} y={y + s * 1.6} width={s * 0.4} height={s * 0.8} fill={ink(color)} />
         </g>
       )}
     </g>
@@ -288,23 +289,23 @@ export const ISA_LETTERS: Record<SensorKind, string> = {
   airflow: 'FT',
 };
 
-export function InstrumentBubble({ x, y, r, sensor, tag, color, yaw = 0, fill = '#fff', strokeWidth = 1.1 }: { x: number; y: number; r: number; sensor: SensorKind; tag: string; color: string; yaw?: number; fill?: string; strokeWidth?: number }) {
+export function InstrumentBubble({ x, y, r, sensor, tag, color, yaw = 0, fill = PLAN_COLOR.halo, strokeWidth = 1.1 }: { x: number; y: number; r: number; sensor: SensorKind; tag: string; color: string; yaw?: number; fill?: string; strokeWidth?: number }) {
   const letters = ISA_LETTERS[sensor];
   const loop = tag.length > 6 ? `${tag.slice(0, 6)}…` : tag;
   return (
     <g>
-      <circle cx={x} cy={y} r={r} fill={fill} stroke={color} strokeWidth={strokeWidth} vectorEffect={NS} />
+      <circle cx={x} cy={y} r={r} fill={ink(fill)} stroke={ink(color)} strokeWidth={strokeWidth} vectorEffect={NS} />
       <g transform={`translate(${x} ${y}) rotate(${-yaw}) scale(1,-1)`} pointerEvents="none">
-        <text y={-r * 0.3} textAnchor="middle" dominantBaseline="central" fontSize={r * (letters.length > 2 ? 0.55 : 0.68)} fontWeight={700} fill={color}>
+        <text y={-r * 0.3} textAnchor="middle" dominantBaseline="central" fontSize={r * (letters.length > 2 ? 0.55 : 0.68)} fontWeight={700} fill={ink(color)}>
           {letters}
         </text>
-        <text y={r * 0.36} textAnchor="middle" dominantBaseline="central" fontSize={r * (loop.length > 4 ? 0.36 : 0.46)} fontWeight={500} fill={color}>
+        <text y={r * 0.36} textAnchor="middle" dominantBaseline="central" fontSize={r * (loop.length > 4 ? 0.36 : 0.46)} fontWeight={500} fill={ink(color)}>
           {loop}
         </text>
       </g>
       {sensor === 'co2' && (
         <g transform={`translate(${x} ${y}) rotate(${-yaw}) scale(1,-1)`} pointerEvents="none">
-          <text x={r * 1.25} y={-r * 0.7} textAnchor="start" dominantBaseline="central" fontSize={r * 0.42} fill={color}>
+          <text x={r * 1.25} y={-r * 0.7} textAnchor="start" dominantBaseline="central" fontSize={r * 0.42} fill={ink(color)}>
             CO₂
           </text>
         </g>
@@ -363,12 +364,12 @@ export function PlanSymbol({ kind, x0, x1, y0, y1, color }: { kind: PlanSymbolKi
             const a = (i * Math.PI) / 4;
             return <line key={i} x1={cx + Math.cos(a) * r * 0.35} y1={cy + Math.sin(a) * r * 0.35} x2={cx + Math.cos(a + 0.45) * r * 0.85} y2={cy + Math.sin(a + 0.45) * r * 0.85} {...stroke(color, 0.9)} />;
           })}
-          <circle cx={cx} cy={cy} r={r * 0.12} fill={color} />
+          <circle cx={cx} cy={cy} r={r * 0.12} fill={ink(color)} />
         </g>
       );
     }
     case 'axial-fan':
-      return <PropellerFan x={cx} y={cy} r={Math.min(w, h) * 0.4} color={color} />;
+      return <PropellerFan x={cx} y={cy} r={Math.min(w, h) * 0.4} color={ink(color)} />;
     default:
       return null;
   }

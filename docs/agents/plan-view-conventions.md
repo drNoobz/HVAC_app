@@ -16,6 +16,9 @@ consistent when adding equipment, packages or layers.
 
 ## Colours: one per kind of air
 
+These are the light-theme values. In dark mode the plan draws every data colour through `ink()` or `wash()`, so new
+colours must too: see [theme.md](theme.md).
+
 - Ducts are coloured **only by air type**, never by system or room. `SERVICE_COLOR` in `src/domain/ductCatalog.ts`:
   - supply `#1d4e89` (blue)
   - return `#c47b12` (orange)
@@ -103,7 +106,8 @@ Rules live in `src/domain/smartDrop.ts`; Studio's `placeEquipment`, `beginDuctAt
   - `dropRole(product)`: unit (has a `unit` spec, or is an AHU, MAU, ERV or split), head (hood, exhaust fan,
     bath fan), member (terminals and air-path parts), free (plant, items with no ports).
   - Units ask, in a small menu at the drop point, "Pregenerated system: …" (a matching system package, with the
-    dropped product swapped in and its terminals scaled to the new airflow) or "… only, in a new system" (the
+    dropped product swapped in, its terminals scaled to the new airflow, and its round ducts resized with
+    the square root of the airflow, snapped to a listed size) or "… only, in a new system" (the
     user's decision, 2026-11-27).
   - Heads join a system of their kind within 6 m, otherwise they ask like a unit.
   - Members join the nearest system that carries their **main** air (port service, not `accepts`), so an

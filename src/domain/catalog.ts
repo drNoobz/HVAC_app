@@ -394,6 +394,31 @@ export const CATALOG: CatalogProduct[] = [
     ],
   },
   {
+    id: 'rtu-4',
+    manufacturer: 'Carrier',
+    model: '48FC*M05',
+    name: 'WeatherMaker packaged rooftop, gas/electric',
+    category: 'system-equipment',
+    supplier: 'Carrier Corporation (USA)',
+    mount: 'roof',
+    dimensions: feet(74 / 12, 47 / 12, 33 / 12, '74 × 47 × 33 in (Carrier 48FC physical data, 4 ton); about 543 lb'),
+    airflow: flow(1600, '1600 CFM planning value (400 CFM/ton); Carrier does not state a rated CFM on the spec page'),
+    cooling: tons(4, '4 ton nominal, single-stage cooling (48FC 04–06)'),
+    heating: kBtu(110, 'Medium gas heat, 110 kBtu/h input; 67 and 150 kBtu/h are the other options'),
+    electrical: 'Voltage / MCA / MOCP from Carrier product data for the selected voltage.',
+    connections: 'Supply and return ducts, gas, condensate, power. Roof curb sized to unit.',
+    documentUrl: 'https://www.carrier.com/us/en/commercial/packaged-outdoor/48fc/technical-specifications/',
+    image: null,
+    source: 'Carrier WeatherMaker 48FC technical specifications, physical data table: 4 ton, 74 × 47 × 33 in, 543 lb, gas heat input 67 / 110 / 150 kBtu/h.',
+    reviewStatus: 'needs-confirmation',
+    gaps: [
+      'Supply airflow is a planning value at 400 CFM/ton; take the rated and fan-table airflow from the 48FC04-07 product data.',
+      'Model code 48FC*M05 (size 05, medium heat) is inferred from the size order; confirm on a submittal.',
+      'Heating capacity depends on the ordered gas heat level; the value here is input, not output.',
+      'No product image in this app.',
+    ],
+  },
+  {
     id: 'rtu-75',
     manufacturer: 'Carrier',
     model: '48FC*M08',
@@ -1027,6 +1052,7 @@ function rooftop(cfm: number, heatingW: number, coolingW: number, condenserFans:
 const UNITS: Record<string, UnitSpec> = {
   'rtu-12': rooftop(3750, 200 * 293.07107, 12.5 * 3516.85, 2),
   'rtu-75': rooftop(2650, 150 * 293.07107, 7.5 * 3516.85, 1),
+  'rtu-4': rooftop(1600, 110 * 293.07107, 4 * 3516.85, 1),
   'mau-40': {
     sections: [
       { kind: 'oa-damper', position: 'NC', ducted: false, flowM3s: 4000 * CFM_M3S, note: 'Intake hood with bird screen on the unit.' },

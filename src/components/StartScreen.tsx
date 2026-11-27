@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { cloneProject, createBlankProject } from '@/domain/projectOps';
 import { BUILTIN_TEMPLATES, createSampleProject } from '@/domain/templates';
 import { type Project, type StoredTemplate } from '@/domain/types';
+import { SettingsButton } from './Settings';
 
 export function StartScreen({
   projects,
@@ -91,6 +92,7 @@ export function StartScreen({
           )}
         </section>
       </main>
+      <SettingsButton floating />
     </div>
   );
 }

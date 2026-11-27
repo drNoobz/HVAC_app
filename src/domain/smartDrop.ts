@@ -135,7 +135,35 @@ export function packageAround(pack: SystemPackage, memberKey: string, product: C
     if (ratio !== 1 && item.designCfm != null && sameSystem(item)) return { ...item, designCfm: Math.round((item.designCfm * ratio) / 5) * 5 };
     return item;
   });
-  return { pack: { ...pack, members }, drop: at };
+  // Round ducts in that system keep about the same velocity: diameter scales with the square root of the airflow,
+  // snapped up to a listed size. Rectangular ducts keep their sizes.
+  const systemKey = member.system ?? pack.systems[0]?.key;
+  const ducts =
+    ratio === 1
+      ? pack.ducts
+      : pack.ducts.map(duct => {
+          if (duct.shape !== 'round' || (duct.system ?? pack.systems[0]?.key) !== systemKey) return duct;
+          const target = duct.widthIn * Math.sqrt(ratio);
+          const listed = (getDuctProduct(duct.catalogId)?.sizes ?? []).map(size => size.widthM / 0.0254).sort((a, b) => a - b);
+          const fit = listed.find(size => size >= target - 0.05) ?? listed[listed.length - 1];
+          return fit ? { ...duct, widthIn: Math.round(fit) } : duct;
+        });
+  // CFM figures in that system's notes follow the new unit ("Supply is 3,750 CFM" → "Supply is 1,600 CFM").
+  const systems =
+    ratio === 1
+      ? pack.systems
+      : pack.systems.map(system =>
+          system.key !== systemKey
+            ? system
+            : {
+                ...system,
+                notes: system.notes.replace(/(\d{1,3}(?:,\d{3})+|\d+) CFM/g, (_match, figure: string) => {
+                  const scaled = Math.round((Number(figure.replace(/,/g, '')) * ratio) / 5) * 5;
+                  return `${scaled.toLocaleString('en-US')} CFM`;
+                }),
+              }
+        );
+  return { pack: { ...pack, systems, members, ducts }, drop: at };
 }
 
 function segmentDistance(points: readonly { x: number; y: number }[], x: number, y: number): number {

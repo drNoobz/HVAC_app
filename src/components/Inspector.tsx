@@ -1,6 +1,7 @@
 'use client';
 
 import { Fragment, useState } from 'react';
+import { ink } from '@/domain/theme';
 import { CATEGORY_LABEL, getProduct, type CatalogProduct } from '@/domain/catalog';
 import {
   addOpening,
@@ -1218,7 +1219,8 @@ function SystemFields({
   for (const item of members) {
     const product = getProduct(item.catalogId);
     if (!product) continue;
-    if (product.airflow) {
+    // Terminals pass the unit's air on; counting them too would double the system's airflow.
+    if (product.airflow && !product.terminal) {
       airflowM3s += product.airflow.valueM3s * item.quantity;
       hasAirflow = true;
     }
@@ -2474,7 +2476,7 @@ function DuctFields({
     <div className="stack props">
       <header className="prop-head">
         <p className="prop-kicker">
-          {stream && <span className="duct-swatch" style={{ background: stream.color }} />}
+          {stream && <span className="duct-swatch" style={{ background: ink(stream.color) }} />}
           {stream?.label ?? 'Duct'}
         </p>
         <h2>{ductProduct ? `${ductProduct.manufacturer} ${ductProduct.model}` : 'Uncatalogued duct'}</h2>

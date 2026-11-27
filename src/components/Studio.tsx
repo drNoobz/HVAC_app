@@ -70,6 +70,8 @@ import { LoadIcon } from './LoadIcon';
 import { Inspector } from './Inspector';
 import { LibraryPanel } from './LibraryPanel';
 import { SchedulePanel } from './SchedulePanel';
+import { SettingsButton } from './Settings';
+import { ink, wash } from '@/domain/theme';
 
 const Viewport = dynamic(() => import('./Viewport'), {
   ssr: false,
@@ -1133,7 +1135,7 @@ export function Studio({
                               title="Select this equipment"
                               onClick={() => select({ kind: 'equipment', id: port.hit.equipmentId })}
                             >
-                              <i className="pick-swatch" style={{ background: port.color }} />
+                              <i className="pick-swatch" style={{ background: ink(port.color) }} />
                               <span>
                                 {port.name} · {port.service}
                               </span>
@@ -1166,7 +1168,7 @@ export function Studio({
                         {(project.plantLoops ?? []).map(loop => (
                           <li key={loop.id}>
                             <button type="button" className={selection.kind === 'loop' && selection.id === loop.id ? 'active' : ''} onClick={() => select({ kind: 'loop', id: loop.id })}>
-                              <i className="pick-swatch" style={{ background: loopSwatch(loop) }} />
+                              <i className="pick-swatch" style={{ background: ink(loopSwatch(loop)) }} />
                               <span>{loop.name}</span>
                               <span className="pick-meta">{LOOP_FLUID_LABEL[loop.fluid]}</span>
                             </button>
@@ -1291,7 +1293,7 @@ export function Studio({
                         {spaceWalls.map(type => (
                           <li key={type.id}>
                             <CatalogDragRow token={catalogToken({ kind: 'wall', id: type.id })} title={type.detail}>
-                              <i className="pick-swatch" style={{ background: wallColor(type.assemblyId) }} />
+                              <i className="pick-swatch" style={{ background: ink(wallColor(type.assemblyId)) }} />
                               <span>{type.label}</span>
                             </CatalogDragRow>
                           </li>
@@ -1565,18 +1567,18 @@ export function Studio({
                 <div className="strip-scroll">
                 {step === 'spaces' && (
                   <div className="plan-legend strip-legend">
-                    <div><i className="swatch" style={{ background: wallColor('asm-wall-dining') }} />Exterior</div>
-                    <div><i className="swatch" style={{ background: wallColor('asm-wall-kitchen') }} />Service</div>
-                    <div><i className="swatch" style={{ background: wallColor('asm-wall-partition') }} />Partition</div>
-                    <div><i className="swatch" style={{ background: wallColor('asm-wall-walkin') }} />Walk-in</div>
-                    <div><i className="swatch" style={{ background: wallColor('asm-wall-glass') }} />Glass</div>
-                    <div><i className="swatch" style={{ background: INTERFACE_COLOR }} />Interface</div>
-                    <div><i className="swatch" style={{ background: wallColor(null) }} />No construction</div>
+                    <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-dining')) }} />Exterior</div>
+                    <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-kitchen')) }} />Service</div>
+                    <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-partition')) }} />Partition</div>
+                    <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-walkin')) }} />Walk-in</div>
+                    <div><i className="swatch" style={{ background: ink(wallColor('asm-wall-glass')) }} />Glass</div>
+                    <div><i className="swatch" style={{ background: ink(INTERFACE_COLOR) }} />Interface</div>
+                    <div><i className="swatch" style={{ background: ink(wallColor(null)) }} />No construction</div>
                   </div>
                 )}
                 {step === 'spaces' && wallType && (
                   <span className="opt-chip">
-                    <i className="pick-swatch" style={{ background: wallColor(wallType.assemblyId) }} />
+                    <i className="pick-swatch" style={{ background: ink(wallColor(wallType.assemblyId)) }} />
                     Painting {wallType.label}
                     <button type="button" aria-label="Stop painting walls" onClick={() => setWallTypeId(null)}>
                       ×
@@ -1644,6 +1646,7 @@ export function Studio({
         )}
       </div>
       <footer className="statusbar">
+        <SettingsButton />
         <span>{project.buildingType}{project.subtype ? ` · ${project.subtype}` : ''}</span>
         <span>{project.units === 'IP' ? 'IP display' : 'SI display'}</span>
         <span>
@@ -2079,7 +2082,7 @@ function ProjectTree({
             content={
               <>
                 <strong>
-                  <i className="room-dot" style={{ background: roomFill(room.use) }} />
+                  <i className="room-dot" style={{ background: wash(roomFill(room.use)) }} />
                   <span>{room.name}</span>
                   {room.assumption && <i className="dot" title="Assumption" />}
                 </strong>
@@ -2438,7 +2441,7 @@ function DuctLegend({ currentId }: { currentId?: string }) {
     <div className="duct-legend" aria-label="Duct colors">
       {DUCT_STREAMS.map(item => (
         <span key={item.id} className={currentId === item.id ? 'is-current' : ''}>
-          <i style={{ background: item.color }} />
+          <i style={{ background: ink(item.color) }} />
           {item.label}
         </span>
       ))}
@@ -2730,7 +2733,7 @@ function DuctBar({
           <input type="checkbox" checked={showSize} onChange={event => onShowSize(event.target.checked)} />
           Show duct width
         </label>
-        {stream && <span className="duct-swatch" style={{ background: stream.color }} title={stream.label} />}
+        {stream && <span className="duct-swatch" style={{ background: ink(stream.color) }} title={stream.label} />}
       </div>
       <DuctLegend currentId={stream?.id} />
       {systems.length === 0 && <p className="muted">Add a {product.systemKinds.join(', ')} system before drawing this duct.</p>}

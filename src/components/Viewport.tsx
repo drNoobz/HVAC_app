@@ -8,6 +8,7 @@ import { parseCatalogDrag } from '@/domain/catalogDrag';
 import type { EditorTool, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
 import { outlineCentroid, runGeom, solidSpans, WALL_THICK_M } from '@/domain/wallDraw';
 import { doorArc, doorHinge, doorSwingSide } from '@/domain/doorSwing';
+import { currentTheme, useTheme, type Theme } from '@/domain/theme';
 import { INTERFACE_COLOR, MARK_COLOR, colorNumber, edgePortions, facePortions, interfaceConstructionColor, portionFill, portionInterfaceKey, roomFill, snapDrawnRect, snapPointToWalls } from '@/domain/walls';
 
 const SNAP_M = 0.05;
@@ -57,6 +58,19 @@ function disposeNode(node: THREE.Object3D): void {
       item.dispose();
     });
   });
+}
+
+/** Sky, light and grid for each theme. The model's own colours stay the same in both. */
+const SCENE_LOOK: Record<Theme, { background: number; sky: number; groundLight: number; light: number; gridMajor: number; gridMinor: number }> = {
+  light: { background: 0xd7e1e8, sky: 0xf7fafc, groundLight: 0xc5d0d6, light: 1.15, gridMajor: 0x8aa0ae, gridMinor: 0xc9d3db },
+  dark: { background: 0x0c1115, sky: 0xdde6ee, groundLight: 0x33404b, light: 1.05, gridMajor: 0x3b4a55, gridMinor: 0x1d262d },
+};
+
+function makeGrid(theme: Theme): THREE.GridHelper {
+  const look = SCENE_LOOK[theme];
+  const grid = new THREE.GridHelper(80, 80, look.gridMajor, look.gridMinor);
+  grid.rotation.x = Math.PI / 2;
+  return grid;
 }
 
 function makeLabel(text: string, accent: string): THREE.Sprite | null {
@@ -462,6 +476,8 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
   const toolRef = useRef(tool);
   const handlersRef = useRef({ onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu });
   const sceneRef = useRef<THREE.Scene | null>(null);
+  const lookRef = useRef<{ hemi: THREE.HemisphereLight; grid: THREE.GridHelper } | null>(null);
+  const theme = useTheme();
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const groundRef = useRef<THREE.Mesh | null>(null);
@@ -488,10 +504,28 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
   handlersRef.current = { onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu };
 
   useEffect(() => {
+    const scene = sceneRef.current;
+    const parts = lookRef.current;
+    if (!scene || !parts) return;
+    const look = SCENE_LOOK[theme];
+    scene.background = new THREE.Color(look.background);
+    parts.hemi.color.setHex(look.sky);
+    parts.hemi.groundColor.setHex(look.groundLight);
+    parts.hemi.intensity = look.light;
+    const grid = makeGrid(theme);
+    scene.remove(parts.grid);
+    parts.grid.geometry.dispose();
+    (parts.grid.material as THREE.Material).dispose();
+    scene.add(grid);
+    lookRef.current = { hemi: parts.hemi, grid };
+  }, [theme]);
+
+  useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xd7e1e8);
+    const look = SCENE_LOOK[currentTheme()];
+    scene.background = new THREE.Color(look.background);
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
     camera.up.set(0, 0, 1);
     const overhead = viewPoses(roomsRef.current).top;
@@ -508,13 +542,14 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
     controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     controls.update();
 
-    scene.add(new THREE.HemisphereLight(0xf7fafc, 0xc5d0d6, 1.15));
+    const hemi = new THREE.HemisphereLight(look.sky, look.groundLight, look.light);
+    scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xffffff, 0.9);
     sun.position.set(18, -24, 28);
     scene.add(sun);
-    const grid = new THREE.GridHelper(80, 80, 0x8aa0ae, 0xc9d3db);
-    grid.rotation.x = Math.PI / 2;
+    const grid = makeGrid(currentTheme());
     scene.add(grid);
+    lookRef.current = { hemi, grid };
     scene.add(new THREE.AxesHelper(2));
 
     const ground = new THREE.Mesh(
@@ -752,6 +787,7 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
       renderer.dispose();
       renderer.domElement.remove();
       sceneRef.current = null;
+      lookRef.current = null;
       cameraRef.current = null;
       controlsRef.current = null;
       contentRef.current = null;

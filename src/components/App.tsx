@@ -8,6 +8,8 @@ import { cloneProject } from '@/domain/projectOps';
 import { loadState, saveState } from '@/domain/storage';
 import type { Project, StoredTemplate } from '@/domain/types';
 import { LibraryPanel } from './LibraryPanel';
+import { SettingsButton } from './Settings';
+import { useThemeSync } from '@/domain/theme';
 import { StartScreen } from './StartScreen';
 import { Studio } from './Studio';
 
@@ -21,6 +23,7 @@ export default function App() {
   const [addedMaterials, setAddedMaterials] = useState<ConstructionMaterial[]>([]);
   const [addedAssemblies, setAddedAssemblies] = useState<ConstructionAssembly[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  useThemeSync();
 
   useEffect(() => {
     const block = (event: WheelEvent) => {
@@ -80,6 +83,7 @@ export default function App() {
           </button>
         </header>
         <LibraryPanel added={addedMaterials} onChange={setAddedMaterials} addedAssemblies={addedAssemblies} onAssembliesChange={setAddedAssemblies} />
+        <SettingsButton floating />
       </div>
     );
   }

@@ -20,6 +20,14 @@ Run with `npm run dev` (port 3100).
   - End commit messages with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
   - End PR bodies with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 - Every number in a template is a planning assumption. Notes in the code and UI say so; keep that wording.
+- **Two themes.** Every colour must work in light and dark. Use the CSS tokens in `globals.css`; pass data colours
+  (air, walls, loads) through `ink()` or `wash()`; never hard-code a hex in a component. Check both themes. See
+  [docs/agents/theme.md](docs/agents/theme.md).
+- **Keep the tutorials current.** Settings → How to use is how users learn the app. Any change that adds, renames,
+  moves or removes something a user sees (a button, field, catalogue item, menu, drop behaviour, phase) is not done
+  until the tutorials match: update the steps in `src/tutorials/`, re-run `npm run tutorial:screenshots`, and look at
+  every picture. A new feature a user needs to learn gets a step or a new tutorial. Say in your wrap-up what changed
+  in the tutorials, or why nothing had to. See [docs/agents/tutorials.md](docs/agents/tutorials.md).
 
 ## Where things are
 
@@ -46,6 +54,10 @@ Run with `npm run dev` (port 3100).
   the latest review of the full-service template, with open findings.
 - [docs/agents/browser-testing.md](docs/agents/browser-testing.md): typecheck command, and the localStorage-safe
   test routine.
+- [docs/agents/theme.md](docs/agents/theme.md): light and dark themes, colour tokens, `ink()` / `wash()`, the 3D scene
+  look, and how to check a colour change.
+- [docs/agents/tutorials.md](docs/agents/tutorials.md): Settings → How to use, tutorial content, and the script that
+  captures the annotated pictures. Re-run it when the UI a tutorial shows changes.
 - [docs/proposals/user-built-spaces-loads-systems.md](docs/proposals/user-built-spaces-loads-systems.md): the plan
   for users building spaces, loads, units and systems by drag and drop (smart drops, space types, unit builder).
 

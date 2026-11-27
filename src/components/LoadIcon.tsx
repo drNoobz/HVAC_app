@@ -1,4 +1,5 @@
 import { LOAD_CATEGORY_COLOR, type LoadCategory } from '@/domain/loadCatalog';
+import { ink } from '@/domain/theme';
 
 const stroke = {
   fill: 'none',
@@ -65,7 +66,7 @@ export function LoadSymbol({ category, hair = false }: { category: LoadCategory;
 
 export function LoadIcon({ category }: { category: LoadCategory }) {
   return (
-    <svg className="load-icon" viewBox="0 0 24 24" aria-hidden="true" style={{ color: LOAD_CATEGORY_COLOR[category] }}>
+    <svg className="load-icon" viewBox="0 0 24 24" aria-hidden="true" style={{ color: ink(LOAD_CATEGORY_COLOR[category]) }}>
       <LoadSymbol category={category} />
     </svg>
   );

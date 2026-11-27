@@ -19,16 +19,17 @@ import { locateOpening, NO_WALL_RUNS, outlineCentroid, outlineRoomOk, pointInOut
 import { METERS_PER_FOOT, formatArea, formatFlow, formatLength, formatNumber, lengthUnit, mToLength } from '@/domain/units';
 import { doorArc, doorHinge, doorSwingSide, doorwayKey, openingEnds } from '@/domain/doorSwing';
 import { clampSharedEdge, moveRoomEdge, slideOpeningsTogether } from '@/domain/spanFit';
+import { fade, ink, PLAN_COLOR, wash } from '@/domain/theme';
 import { INTERFACE_COLOR, MARK_COLOR, WALL_FACE_IDS, edgePortions, facePortions, findInterface, interfaceConstructionColor, interfaceTargets, northDegrees, roomFill, snapDrawnRect, snapPointToWalls, snapSpaceDelta, snapWallEdge, touchingRooms, wallColor, type WallPortion } from '@/domain/walls';
 
 const SNAP_M = 0.05;
 const DRAG_PX = 5;
 const MIN_DRAW_M = 0.4;
-const PAPER = '#f4f4f2';
-const INK = '#2a2e32';
-const DIM = '#0e6e66';
-const SELECT = '#f6ad55';
-const SELECT_FILL = 'rgba(246,173,85,0.28)';
+const PAPER = PLAN_COLOR.paper;
+const INK = PLAN_COLOR.ink;
+const DIM = PLAN_COLOR.dim;
+const SELECT = PLAN_COLOR.select;
+const SELECT_FILL = PLAN_COLOR.selectFill;
 const HAIR = 1.15;
 
 export interface PlanLayers {
@@ -130,20 +131,20 @@ function LoadMarks({
         if (!size) {
           return (
             <g key={item.id} data-hit="load" data-id={item.id} onContextMenu={menu}>
-              {active && <circle cx={item.xM} cy={item.yM} r={r * 1.5} fill="none" stroke={SELECT} strokeWidth={2.25} vectorEffect="non-scaling-stroke" />}
-              <circle cx={item.xM} cy={item.yM} r={r} fill={color} stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+              {active && <circle cx={item.xM} cy={item.yM} r={r * 1.5} fill="none" stroke={ink(SELECT)} strokeWidth={2.25} vectorEffect="non-scaling-stroke" />}
+              <circle cx={item.xM} cy={item.yM} r={r} fill={ink(color)} stroke={PLAN_COLOR.halo} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
               <g transform={`translate(${item.xM} ${item.yM}) scale(1,-1)`} pointerEvents="none">
                 {product ? (
-                  <g transform={`scale(${r / 16})`} color="#fff">
+                  <g transform={`scale(${r / 16})`} color={PLAN_COLOR.halo}>
                     <g transform="translate(-12 -12)">
                       <LoadSymbol category={product.category} hair />
                     </g>
                   </g>
                 ) : (
-                  <text textAnchor="middle" y={fontM * 0.3} fontSize={fontM * 0.85} fontWeight={600} fill="#fff">?</text>
+                  <text textAnchor="middle" y={fontM * 0.3} fontSize={fontM * 0.85} fontWeight={600} fill={PLAN_COLOR.halo}>?</text>
                 )}
                 {(labels || active) && (
-                  <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.load} textAnchor="middle" y={r + fontM * 1.05} fontSize={fontM * 0.66} fill={INK}>
+                  <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.load} textAnchor="middle" y={r + fontM * 1.05} fontSize={fontM * 0.66} fill={ink(INK)}>
                     {loadLabel(item, product)}
                   </text>
                 )}
@@ -166,14 +167,14 @@ function LoadMarks({
               y={item.yM - width / 2}
               width={length}
               height={width}
-              fill={color}
+              fill={ink(color)}
               fillOpacity={active ? 0.28 : 0.16}
-              stroke={active ? SELECT : color}
+              stroke={ink(active ? SELECT : color)}
               strokeWidth={active ? 2.25 : HAIR}
               vectorEffect="non-scaling-stroke"
             />
             {showIcon && (
-              <g transform={`translate(${item.xM} ${item.yM}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none" color={active ? SELECT : color}>
+              <g transform={`translate(${item.xM} ${item.yM}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none" color={ink(active ? SELECT : color)}>
                 <g transform={`scale(${iconM / 18}) translate(-12 -12)`}>
                   <LoadSymbol category={product.category} hair />
                 </g>
@@ -181,15 +182,15 @@ function LoadMarks({
             )}
             {(labels || active) && (
               <g transform={`translate(${item.xM} ${item.yM + width / 2 + fontM * 0.7}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
-                <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.load} textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.62} fill={active ? SELECT : color}>
+                <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.load} textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.62} fill={ink(active ? SELECT : color)}>
                   {label}
                 </text>
               </g>
             )}
             {active && (
               <g data-hit="load-rotate" data-id={item.id} aria-label="Rotate appliance">
-                <line x1={item.xM + length / 2} y1={item.yM} x2={item.xM + length / 2 + handle} y2={item.yM} stroke={SELECT} strokeWidth={HAIR} vectorEffect="non-scaling-stroke" pointerEvents="none" />
-                <circle cx={item.xM + length / 2 + handle} cy={item.yM} r={fontM * 0.48} fill={PAPER} stroke={SELECT} strokeWidth={2.25} vectorEffect="non-scaling-stroke" />
+                <line x1={item.xM + length / 2} y1={item.yM} x2={item.xM + length / 2 + handle} y2={item.yM} stroke={ink(SELECT)} strokeWidth={HAIR} vectorEffect="non-scaling-stroke" pointerEvents="none" />
+                <circle cx={item.xM + length / 2 + handle} cy={item.yM} r={fontM * 0.48} fill={ink(PAPER)} stroke={ink(SELECT)} strokeWidth={2.25} vectorEffect="non-scaling-stroke" />
               </g>
             )}
           </g>
@@ -476,14 +477,14 @@ function NorthMark({ degrees, onCommit }: { degrees: number; onCommit: (deg: num
     >
       <svg viewBox="0 0 80 80" aria-hidden="true" shapeRendering="geometricPrecision">
         <g transform={`rotate(${shown} 40 40)`}>
-          <circle cx="40" cy="40" r="31" fill="none" stroke="#1c1f22" strokeWidth="1.25" />
-          <text x="40" y="24" textAnchor="middle" fontSize="13" fontWeight="650" fill="#1c1f22" fontFamily='"IBM Plex Sans", "Segoe UI", sans-serif'>N</text>
-          <polygon points="40,28 45.5,40 40,37" fill="#1c1f22" />
-          <polygon points="40,28 34.5,40 40,37" fill="#5e686c" />
-          <polygon points="40,52 45.5,40 40,43" fill="#f4f4f2" stroke="#1c1f22" strokeWidth="1.15" strokeLinejoin="round" />
-          <polygon points="40,52 34.5,40 40,43" fill="#f4f4f2" stroke="#1c1f22" strokeWidth="1.15" strokeLinejoin="round" />
-          <path d="M12 40 H20 M60 40 H68" fill="none" stroke="#1c1f22" strokeWidth="1.25" />
-          <circle cx="40" cy="40" r="1.6" fill="#1c1f22" />
+          <circle cx="40" cy="40" r="31" fill="none" stroke={PLAN_COLOR.compass} strokeWidth="1.25" />
+          <text x="40" y="24" textAnchor="middle" fontSize="13" fontWeight="650" fill={PLAN_COLOR.compass} fontFamily='"IBM Plex Sans", "Segoe UI", sans-serif'>N</text>
+          <polygon points="40,28 45.5,40 40,37" fill={PLAN_COLOR.compass} />
+          <polygon points="40,28 34.5,40 40,37" fill={PLAN_COLOR.compass2} />
+          <polygon points="40,52 45.5,40 40,43" fill={PLAN_COLOR.paper} stroke={PLAN_COLOR.compass} strokeWidth="1.15" strokeLinejoin="round" />
+          <polygon points="40,52 34.5,40 40,43" fill={PLAN_COLOR.paper} stroke={PLAN_COLOR.compass} strokeWidth="1.15" strokeLinejoin="round" />
+          <path d="M12 40 H20 M60 40 H68" fill="none" stroke={PLAN_COLOR.compass} strokeWidth="1.25" />
+          <circle cx="40" cy="40" r="1.6" fill={PLAN_COLOR.compass} />
         </g>
       </svg>
     </button>
@@ -1567,7 +1568,7 @@ export function PlanView({
           <g opacity={fade.spaces}>
           {rooms.map(room => {
             const shaped = (room.outline?.length ?? 0) >= 3;
-            const fill = showSpaces ? (room.id === highlightedRoom?.id ? SELECT_FILL : roomFill(room.use)) : 'none';
+            const fill = showSpaces ? (room.id === highlightedRoom?.id ? SELECT_FILL : wash(roomFill(room.use))) : 'none';
             const stroke = showSpaces ? 'none' : '#b7b7b0';
             const selectRoom = (event: ReactMouseEvent) => {
               event.stopPropagation();
@@ -1581,8 +1582,8 @@ export function PlanView({
                 data-hit="room"
                 data-room={room.id}
                 points={room.outline!.map(point => `${point.x},${point.y}`).join(' ')}
-                fill={fill}
-                stroke={stroke}
+                fill={ink(fill)}
+                stroke={ink(stroke)}
                 strokeWidth={showSpaces ? 0 : HAIR}
                 vectorEffect="non-scaling-stroke"
                 onClick={selectRoom}
@@ -1597,8 +1598,8 @@ export function PlanView({
                 y={room.yM}
                 width={room.lengthM}
                 height={room.widthM}
-                fill={fill}
-                stroke={stroke}
+                fill={ink(fill)}
+                stroke={ink(stroke)}
                 strokeWidth={showSpaces ? 0 : HAIR}
                 vectorEffect="non-scaling-stroke"
                 onClick={selectRoom}
@@ -1621,9 +1622,9 @@ export function PlanView({
               const active = selection.kind === 'opening' && (selection.id === opening.id || (opening.kind === 'door' && doorwayKey(room, opening) === selectedDoorway));
               return (
                 <g key={opening.id} pointerEvents="none">
-                  <rect {...gap} fill={roomFill(room.use)} />
+                  <rect {...gap} fill={wash(roomFill(room.use))} />
                   {showSwing(room, opening) && (
-                    <g fill="none" stroke={active ? SELECT : MARK_COLOR.door} strokeWidth={active ? 2.25 : HAIR}>
+                    <g fill="none" stroke={ink(active ? SELECT : MARK_COLOR.door)} strokeWidth={active ? 2.25 : HAIR}>
                       <line x1={hingeX} y1={hingeY} x2={hingeX + swing.nx * opening.widthM} y2={hingeY + swing.ny * opening.widthM} vectorEffect="non-scaling-stroke" />
                       <polyline points={arcPoints(hingeX, hingeY, opening.widthM, swing.from, swing.to)} vectorEffect="non-scaling-stroke" />
                     </g>
@@ -1765,11 +1766,11 @@ export function PlanView({
                 const center = spaceLabelAnchor(room, planEquipment, font, room.name, detail);
                 return (
                   <g key={`${room.id}-label`} transform={`translate(${center.x} ${center.y}) scale(1,-1)`} pointerEvents="none">
-                    <text data-label={highlightedRoom?.id === room.id ? LABEL_ACTIVE : LABEL_PRIORITY.room} textAnchor="middle" fontSize={font * spaceText} fontWeight={500} fill={INK}>
+                    <text data-label={highlightedRoom?.id === room.id ? LABEL_ACTIVE : LABEL_PRIORITY.room} textAnchor="middle" fontSize={font * spaceText} fontWeight={500} fill={ink(INK)}>
                       {room.name}
                     </text>
                     {(layers.labels || highlightedRoom?.id === room.id) && (
-                      <text data-label={highlightedRoom?.id === room.id ? LABEL_ACTIVE : LABEL_PRIORITY.roomDetail} textAnchor="middle" y={font * 1.4 * spaceText} fontSize={font * 0.68 * spaceText} fill="#5e6368">
+                      <text data-label={highlightedRoom?.id === room.id ? LABEL_ACTIVE : LABEL_PRIORITY.roomDetail} textAnchor="middle" y={font * 1.4 * spaceText} fontSize={font * 0.68 * spaceText} fill={ink('#5e6368')}>
                         {detail}
                       </text>
                     )}
@@ -1803,7 +1804,7 @@ export function PlanView({
                 fontM={font}
                 labelScale={equipmentText}
                 systemName={showSystems && (layers.labels || (shownSystemId != null && system?.id === shownSystemId)) ? system?.name : undefined}
-                color={showSystems ? terminalAirColor(item.catalogId) : undefined}
+                color={ink(showSystems ? terminalAirColor(item.catalogId) : undefined)}
                 streamColor={unitStreamColor}
               />
             );
@@ -1815,18 +1816,18 @@ export function PlanView({
           )}
           {layers.controls && showSystems && <g opacity={fade.equipment}><SensorMarks project={project} rooms={rooms} selection={selection} tool={tool} fontM={font} onSelect={onSelect} /></g>}
           {draft && (
-            <rect x={draft.xM} y={draft.yM} width={draft.lengthM} height={draft.widthM} fill="rgba(14,110,102,0.08)" stroke={DIM} strokeWidth={HAIR} vectorEffect="non-scaling-stroke" />
+            <rect x={draft.xM} y={draft.yM} width={draft.lengthM} height={draft.widthM} fill={PLAN_COLOR.draft} stroke={ink(DIM)} strokeWidth={HAIR} vectorEffect="non-scaling-stroke" />
           )}
           {(chain || (aim && tool.kind === 'wall')) && <ChainPreview points={chain ?? []} aim={aim} units={project.units} fontM={font} />}
           {tool.kind === 'duct' && (ductChain || ductAim) && (
-            <DuctDraft points={ductChain ?? []} aim={ductAim} units={project.units} fontM={font} view={view} sizeLabel={ductSizeLabel(tool, project.units)} widthM={showDuctSize ? tool.widthM : 0} color={SERVICE_COLOR[tool.service] ?? DIM} />
+            <DuctDraft points={ductChain ?? []} aim={ductAim} units={project.units} fontM={font} view={view} sizeLabel={ductSizeLabel(tool, project.units)} widthM={showDuctSize ? tool.widthM : 0} color={ink(SERVICE_COLOR[tool.service] ?? DIM)} />
           )}
           {spot && (tool.kind === 'door' || tool.kind === 'window') && <OpeningGhost spot={spot} kind={tool.kind} />}
           {highlightedRoom && ((highlightedRoom.outline?.length ?? 0) >= 3 ? (
             <polygon
               points={highlightedRoom.outline!.map(point => `${point.x},${point.y}`).join(' ')}
               fill="none"
-              stroke={SELECT}
+              stroke={ink(SELECT)}
               strokeWidth={2.25}
               vectorEffect="non-scaling-stroke"
               pointerEvents="none"
@@ -1838,7 +1839,7 @@ export function PlanView({
               width={highlightedRoom.lengthM}
               height={highlightedRoom.widthM}
               fill="none"
-              stroke={SELECT}
+              stroke={ink(SELECT)}
               strokeWidth={2.25}
               vectorEffect="non-scaling-stroke"
               pointerEvents="none"
@@ -1853,8 +1854,8 @@ export function PlanView({
             return (
               <polygon
                 points={wallQuad(start.x, start.y, end.x, end.y)}
-                fill={SELECT_FILL}
-                stroke={SELECT}
+                fill={ink(SELECT_FILL)}
+                stroke={ink(SELECT)}
                 strokeWidth={2.25}
                 vectorEffect="non-scaling-stroke"
                 pointerEvents="none"
@@ -1867,8 +1868,8 @@ export function PlanView({
             return (
               <polygon
                 points={wallQuad(target.x0, target.y0, target.x1, target.y1)}
-                fill={SELECT_FILL}
-                stroke={SELECT}
+                fill={ink(SELECT_FILL)}
+                stroke={ink(SELECT)}
                 strokeWidth={2.25}
                 vectorEffect="non-scaling-stroke"
                 pointerEvents="none"
@@ -1878,8 +1879,8 @@ export function PlanView({
           {showSpaces && !locked && dimRoom && selectedWall && (measuredRoom?.outline?.length ?? 0) < 3 && (
             <rect
               {...wallBand(dimRoom, selectedWall, graphicWall(dimRoom.surfaces.walls[selectedWall].constructionId).thickness)}
-              fill={SELECT_FILL}
-              stroke={SELECT}
+              fill={ink(SELECT_FILL)}
+              stroke={ink(SELECT)}
               strokeWidth={2.25}
               vectorEffect="non-scaling-stroke"
               pointerEvents="none"
@@ -1893,8 +1894,8 @@ export function PlanView({
             return (
               <rect
                 {...openingGap(room, opening, graphic.thickness)}
-                fill={SELECT_FILL}
-                stroke={SELECT}
+                fill={ink(SELECT_FILL)}
+                stroke={ink(SELECT)}
                 strokeWidth={2.25}
                 vectorEffect="non-scaling-stroke"
                 pointerEvents="none"
@@ -1957,19 +1958,19 @@ function AirKey({ entries, mixed }: { entries: readonly AirKeyEntry[]; mixed: bo
   const swatch = (color: string, dash: string | undefined, asDouble: boolean) =>
     asDouble ? (
       <svg className="air-key-swatch" viewBox="0 0 20 8" aria-hidden="true">
-        <line x1="0" y1="4" x2="20" y2="4" stroke={color} strokeWidth="7" />
-        <line x1="0" y1="4" x2="20" y2="4" stroke={pale(color, 0.88)} strokeWidth="4.6" />
+        <line x1="0" y1="4" x2="20" y2="4" stroke={ink(color)} strokeWidth="7" />
+        <line x1="0" y1="4" x2="20" y2="4" stroke={fade(color, 0.88)} strokeWidth="4.6" />
       </svg>
     ) : (
       <svg className="air-key-swatch" viewBox="0 0 20 8" aria-hidden="true">
-        <line x1="0" y1="4" x2="20" y2="4" stroke={color} strokeWidth="1.8" strokeDasharray={dash ? '4 2.5' : undefined} />
+        <line x1="0" y1="4" x2="20" y2="4" stroke={ink(color)} strokeWidth="1.8" strokeDasharray={dash ? '4 2.5' : undefined} />
       </svg>
     );
   if (collapsed) {
     return (
       <button type="button" className="air-key is-collapsed" onClick={toggle} title="Show the air key" aria-label="Show the air key">
         {rows.map(row => (
-          <i key={`${row.label}|${row.color}`} style={{ background: row.color }} />
+          <i key={`${row.label}|${row.color}`} style={{ background: ink(row.color) }} />
         ))}
         <span>Key</span>
       </button>
@@ -1989,7 +1990,7 @@ function AirKey({ entries, mixed }: { entries: readonly AirKeyEntry[]; mixed: bo
       ].map(tag => (
         <span key={tag.label}>
           <svg className="air-key-swatch" viewBox="0 0 20 8" aria-hidden="true">
-            <polygon points={tag.points} fill={tag.color} />
+            <polygon points={tag.points} fill={ink(tag.color)} />
           </svg>
           {tag.label}
         </span>
@@ -1998,14 +1999,14 @@ function AirKey({ entries, mixed }: { entries: readonly AirKeyEntry[]; mixed: bo
         <svg className="air-key-swatch" viewBox="0 0 20 8" aria-hidden="true">
           {double ? (
             <>
-              <line x1="0" y1="4" x2="20" y2="4" stroke="#5e6368" strokeWidth="7" />
-              <line x1="0" y1="4" x2="20" y2="4" stroke="#f4f6f8" strokeWidth="4.6" />
-              <polyline points="8.5,2 11.5,4 8.5,6" fill="none" stroke="#2a2e32" strokeWidth="1.1" />
+              <line x1="0" y1="4" x2="20" y2="4" stroke={ink('#5e6368')} strokeWidth="7" />
+              <line x1="0" y1="4" x2="20" y2="4" stroke={PLAN_COLOR.halo} strokeWidth="4.6" />
+              <polyline points="8.5,2 11.5,4 8.5,6" fill="none" stroke={PLAN_COLOR.ink} strokeWidth="1.1" />
             </>
           ) : (
             <>
-              <line x1="0" y1="4" x2="20" y2="4" stroke="#2a2e32" strokeWidth="1.6" />
-              <polyline points="8,1 12,4 8,7" fill="none" stroke="#2a2e32" strokeWidth="1.6" />
+              <line x1="0" y1="4" x2="20" y2="4" stroke={PLAN_COLOR.ink} strokeWidth="1.6" />
+              <polyline points="8,1 12,4 8,7" fill="none" stroke={PLAN_COLOR.ink} strokeWidth="1.6" />
             </>
           )}
         </svg>
@@ -2058,7 +2059,7 @@ function RoomDimensions({
   const widthEdge = widthRight ? room.xM + room.lengthM + outside : room.xM - outside;
   const widthX = widthRight ? room.xM + room.lengthM + gap : room.xM - gap;
   return (
-    <g pointerEvents="none" stroke={DIM} strokeWidth={HAIR}>
+    <g pointerEvents="none" stroke={ink(DIM)} strokeWidth={HAIR}>
       <line x1={room.xM} y1={lengthEdge} x2={room.xM} y2={lengthY} vectorEffect="non-scaling-stroke" />
       <line x1={room.xM + room.lengthM} y1={lengthEdge} x2={room.xM + room.lengthM} y2={lengthY} vectorEffect="non-scaling-stroke" />
       <Dimension x1={room.xM} y1={lengthY} x2={room.xM + room.lengthM} y2={lengthY} label={formatLength(room.lengthM, units, 2)} fontM={fontM} outwardX={0} outwardY={lengthBelow ? -1 : 1} />
@@ -2097,12 +2098,12 @@ function Dimension({
   const ny = (dx / span) * fontM * 0.22;
   const vertical = Math.abs(dy) > Math.abs(dx);
   return (
-    <g stroke={DIM} strokeWidth={HAIR}>
+    <g stroke={ink(DIM)} strokeWidth={HAIR}>
       <line x1={x1} y1={y1} x2={x2} y2={y2} vectorEffect="non-scaling-stroke" />
       <line x1={x1 - nx} y1={y1 - ny} x2={x1 + nx} y2={y1 + ny} vectorEffect="non-scaling-stroke" />
       <line x1={x2 - nx} y1={y2 - ny} x2={x2 + nx} y2={y2 + ny} vectorEffect="non-scaling-stroke" />
       <g transform={`translate(${midX} ${midY}) scale(1,-1)${vertical ? ' rotate(-90)' : ''}`}>
-        <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.85} fill={DIM} stroke="none">
+        <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.85} fill={ink(DIM)} stroke="none">
           {label}
         </text>
       </g>
@@ -2411,10 +2412,10 @@ function DuctLayer({
       {doubleLayers.map(({ key, runs }) => (
         <g key={key} pointerEvents="none">
           {runs.map(({ run, points }) => (
-            <polyline key={`w-${run.id}`} points={points} fill="none" stroke={selection.kind === 'duct' && selection.id === run.id ? SELECT : colorOf(run)} strokeWidth={run.widthM + wallM * 2} strokeLinejoin="miter" strokeMiterlimit={3} />
+            <polyline key={`w-${run.id}`} points={points} fill="none" stroke={ink(selection.kind === 'duct' && selection.id === run.id ? SELECT : colorOf(run))} strokeWidth={run.widthM + wallM * 2} strokeLinejoin="miter" strokeMiterlimit={3} />
           ))}
           {runs.map(({ run, points }) => (
-            <polyline key={`i-${run.id}`} points={points} fill="none" stroke={pale(selection.kind === 'duct' && selection.id === run.id ? SELECT : colorOf(run), 0.9)} strokeWidth={run.widthM} strokeLinejoin="miter" strokeMiterlimit={3} />
+            <polyline key={`i-${run.id}`} points={points} fill="none" stroke={fade(selection.kind === 'duct' && selection.id === run.id ? SELECT : colorOf(run), 0.9)} strokeWidth={run.widthM} strokeLinejoin="miter" strokeMiterlimit={3} />
           ))}
         </g>
       ))}
@@ -2460,11 +2461,11 @@ function DuctLayer({
               }}
             />
             {showSize && !double && run.points.slice(1).map((point, index) => (
-              <polygon key={`${run.id}-w-${index}`} points={wallQuad(run.points[index].x, run.points[index].y, point.x, point.y, run.widthM)} fill={color} fillOpacity={0.16} stroke={color} strokeWidth={1} vectorEffect="non-scaling-stroke" pointerEvents="none" />
+              <polygon key={`${run.id}-w-${index}`} points={wallQuad(run.points[index].x, run.points[index].y, point.x, point.y, run.widthM)} fill={ink(color)} fillOpacity={0.16} stroke={ink(color)} strokeWidth={1} vectorEffect="non-scaling-stroke" pointerEvents="none" />
             ))}
-            {!double && <polyline points={drawn} fill="none" stroke={active ? SELECT : color} strokeWidth={active ? 2.6 : 1.7} strokeDasharray={SERVICE_DASH[run.service]} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" pointerEvents="none" />}
+            {!double && <polyline points={drawn} fill="none" stroke={ink(active ? SELECT : color)} strokeWidth={active ? 2.6 : 1.7} strokeDasharray={SERVICE_DASH[run.service]} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" pointerEvents="none" />}
             {carried?.toward && flowChevrons(carried.toward === 'end' ? run.points : [...run.points].reverse(), fontM, underLabel).map((chevron, index) => (
-              <polyline key={`${run.id}-a-${index}`} points={chevron} fill="none" stroke={active ? SELECT : color} strokeWidth={1.7} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" pointerEvents="none" />
+              <polyline key={`${run.id}-a-${index}`} points={chevron} fill="none" stroke={ink(active ? SELECT : color)} strokeWidth={1.7} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" pointerEvents="none" />
             ))}
             {crossings.map((hit, index) => {
               const normal = segmentNormal(run.points, hit.x, hit.y);
@@ -2477,7 +2478,7 @@ function DuctLayer({
                   y1={hit.y - normal.ny * tick}
                   x2={hit.x + normal.nx * tick}
                   y2={hit.y + normal.ny * tick}
-                  stroke={color}
+                  stroke={ink(color)}
                   strokeWidth={1.6}
                   vectorEffect="non-scaling-stroke"
                   pointerEvents="none"
@@ -2491,7 +2492,7 @@ function DuctLayer({
               const offset = inside ? 0 : Math.max(fontM * 1.15, (double ? run.widthM / 2 + wallM : 0) + fontM * 0.55);
               return (
                 <g transform={`translate(${label.x + label.nx * offset} ${label.y + label.ny * offset}) scale(1,-1) rotate(${label.deg})`} pointerEvents="none">
-                  <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.duct} textAnchor="middle" dominantBaseline={inside ? 'central' : undefined} fontSize={size} fill={active ? SELECT : color} fontWeight={600}>
+                  <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.duct} textAnchor="middle" dominantBaseline={inside ? 'central' : undefined} fontSize={size} fill={ink(active ? SELECT : color)} fontWeight={600}>
                     {text}
                   </text>
                 </g>
@@ -2501,7 +2502,7 @@ function DuctLayer({
               if (Math.abs(meters) <= 0.05) return null;
               const point = end === 0 ? run.points[0] : run.points[run.points.length - 1];
               if (!point) return null;
-              return <circle key={end} cx={point.x} cy={point.y} r={fontM * 0.4} fill="#fff" stroke={color} strokeWidth={1.6} vectorEffect="non-scaling-stroke" pointerEvents="none"><title>{`Riser ${formatLength(Math.abs(meters), project.units, 2)}`}</title></circle>;
+              return <circle key={end} cx={point.x} cy={point.y} r={fontM * 0.4} fill={PLAN_COLOR.halo} stroke={ink(color)} strokeWidth={1.6} vectorEffect="non-scaling-stroke" pointerEvents="none"><title>{`Riser ${formatLength(Math.abs(meters), project.units, 2)}`}</title></circle>;
             })}
           </g>
         );
@@ -2511,13 +2512,13 @@ function DuctLayer({
         const branches = (project.ducts ?? []).filter(run => run.start.nodeId === node.id || run.end.nodeId === node.id).length;
         const target = tool.kind === 'duct' && tool.systemId === node.systemId && tool.service === node.service;
         return (
-          <circle key={node.id} data-hit="duct-node" data-id={node.id} cx={node.x} cy={node.y} r={fontM * (target ? 0.42 : 0.26)} fill={color} stroke="#fff" strokeWidth={1.2} vectorEffect="non-scaling-stroke" pointerEvents="none">
+          <circle key={node.id} data-hit="duct-node" data-id={node.id} cx={node.x} cy={node.y} r={fontM * (target ? 0.42 : 0.26)} fill={ink(color)} stroke={PLAN_COLOR.halo} strokeWidth={1.2} vectorEffect="non-scaling-stroke" pointerEvents="none">
             <title>{`Junction · ${branches} runs`}</title>
           </circle>
         );
       })}
       {ports.map(port => (
-        <circle key={`${port.equipmentId}-${port.portId}`} cx={port.x} cy={port.y} r={fontM * 0.34} fill="#fff" stroke={DIM} strokeWidth={1.6} vectorEffect="non-scaling-stroke" pointerEvents="none" />
+        <circle key={`${port.equipmentId}-${port.portId}`} cx={port.x} cy={port.y} r={fontM * 0.34} fill={PLAN_COLOR.halo} stroke={ink(DIM)} strokeWidth={1.6} vectorEffect="non-scaling-stroke" pointerEvents="none" />
       ))}
     </g>
   );
@@ -2662,21 +2663,21 @@ function DuctDraft({
   return (
     <g pointerEvents="none">
       {widthM > 0 && points.slice(1).map((point, index) => (
-        <polygon key={`band-${index}`} points={wallQuad(points[index].x, points[index].y, point.x, point.y, widthM)} fill={color} fillOpacity={0.16} stroke={color} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        <polygon key={`band-${index}`} points={wallQuad(points[index].x, points[index].y, point.x, point.y, widthM)} fill={ink(color)} fillOpacity={0.16} stroke={ink(color)} strokeWidth={1} vectorEffect="non-scaling-stroke" />
       ))}
       {widthM > 0 && last && rubber && (
-        <polygon points={wallQuad(last.x, last.y, rubber.x, rubber.y, widthM)} fill={color} fillOpacity={0.1} stroke={color} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        <polygon points={wallQuad(last.x, last.y, rubber.x, rubber.y, widthM)} fill={ink(color)} fillOpacity={0.1} stroke={ink(color)} strokeWidth={1} vectorEffect="non-scaling-stroke" />
       )}
       {points.length > 1 && (
-        <polyline points={points.map(point => `${point.x},${point.y}`).join(' ')} fill="none" stroke={color} strokeWidth={1.7} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
+        <polyline points={points.map(point => `${point.x},${point.y}`).join(' ')} fill="none" stroke={ink(color)} strokeWidth={1.7} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
       )}
       {last && rubber && (
-        <line x1={last.x} y1={last.y} x2={rubber.x} y2={rubber.y} stroke={color} strokeWidth={1.7} strokeDasharray="0.18 0.12" vectorEffect="non-scaling-stroke" />
+        <line x1={last.x} y1={last.y} x2={rubber.x} y2={rubber.y} stroke={ink(color)} strokeWidth={1.7} strokeDasharray="0.18 0.12" vectorEffect="non-scaling-stroke" />
       )}
       {points.map((point, index) => (
-        <circle key={index} cx={point.x} cy={point.y} r={0.08} fill={point.portId ? color : '#fff'} stroke={color} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
+        <circle key={index} cx={point.x} cy={point.y} r={0.08} fill={ink(point.portId ? color : PLAN_COLOR.halo)} stroke={ink(color)} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
       ))}
-      {aim && <circle cx={aim.x} cy={aim.y} r={0.1} fill={aim.portId ? color : '#fff'} stroke={color} strokeWidth={1.8} vectorEffect="non-scaling-stroke" />}
+      {aim && <circle cx={aim.x} cy={aim.y} r={0.1} fill={ink(aim.portId ? color : PLAN_COLOR.halo)} stroke={ink(color)} strokeWidth={1.8} vectorEffect="non-scaling-stroke" />}
       {mid && (
         <DragReadout x={mid.x} y={mid.y} view={view} fontM={fontM * 0.92} text={`${formatLength(length, units, 1)} · ${wallAngleDeg(last!.x, last!.y, rubber!.x, rubber!.y)}° · ${sizeLabel}`} />
       )}
@@ -2770,8 +2771,8 @@ function EquipmentMark({
         y={item.yM - width / 2}
         width={length}
         height={width}
-        fill={open ? 'rgba(255,255,255,0.94)' : fill}
-        stroke={active ? SELECT : stroke}
+        fill={ink(open ? PLAN_COLOR.card : ink(fill))}
+        stroke={ink(active ? SELECT : stroke)}
         strokeWidth={active ? 2.25 : HAIR}
         strokeDasharray={roof || open ? '4 2.5' : undefined}
         vectorEffect="non-scaling-stroke"
@@ -2798,15 +2799,15 @@ function EquipmentMark({
       {/* Transfer grille: a slotted face in the door, and an arrow through it showing which side the air goes to. */}
       {isTransferGrille(item.catalogId) && (
         <g pointerEvents="none">
-          <rect x={item.xM - length / 2} y={item.yM - fontM * 0.18} width={length} height={fontM * 0.36} fill="#fff" stroke={active ? SELECT : stroke} strokeWidth={1.2} vectorEffect="non-scaling-stroke" />
+          <rect x={item.xM - length / 2} y={item.yM - fontM * 0.18} width={length} height={fontM * 0.36} fill={PLAN_COLOR.halo} stroke={ink(active ? SELECT : stroke)} strokeWidth={1.2} vectorEffect="non-scaling-stroke" />
           {[-0.3, 0, 0.3].map(u => (
-            <line key={u} x1={item.xM + u * length} y1={item.yM - fontM * 0.18} x2={item.xM + u * length} y2={item.yM + fontM * 0.18} stroke={active ? SELECT : stroke} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            <line key={u} x1={item.xM + u * length} y1={item.yM - fontM * 0.18} x2={item.xM + u * length} y2={item.yM + fontM * 0.18} stroke={ink(active ? SELECT : stroke)} strokeWidth={1} vectorEffect="non-scaling-stroke" />
           ))}
-          <line x1={item.xM} y1={item.yM - fontM * 0.95} x2={item.xM} y2={item.yM + fontM * 0.75} stroke={active ? SELECT : stroke} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
+          <line x1={item.xM} y1={item.yM - fontM * 0.95} x2={item.xM} y2={item.yM + fontM * 0.75} stroke={ink(active ? SELECT : stroke)} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
           <polyline
             points={`${item.xM - fontM * 0.28},${item.yM + fontM * 0.55} ${item.xM},${item.yM + fontM * 0.95} ${item.xM + fontM * 0.28},${item.yM + fontM * 0.55}`}
             fill="none"
-            stroke={active ? SELECT : stroke}
+            stroke={ink(active ? SELECT : stroke)}
             strokeWidth={1.6}
             strokeLinejoin="round"
             strokeLinecap="round"
@@ -2844,14 +2845,14 @@ function EquipmentMark({
             />
           ))}
       {showSymbol && (
-        <PlanSymbol kind={planSymbol} x0={item.xM - length / 2} x1={item.xM + length / 2} y0={item.yM - width / 2} y1={item.yM + width / 2} color={active ? SELECT : stroke} />
+        <PlanSymbol kind={planSymbol} x0={item.xM - length / 2} x1={item.xM + length / 2} y0={item.yM - width / 2} y1={item.yM + width / 2} color={ink(active ? SELECT : stroke)} />
       )}
       <g transform={`translate(${item.xM} ${isTransferGrille(item.catalogId) ? item.yM - chipH / 2 - fontM * 1.15 : item.yM + width / 2 + chipH / 2 + fontM * 0.1}) rotate(${-item.yawDeg}) scale(1,-1)`} pointerEvents="none">
-        <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.equipment} textAnchor="middle" dominantBaseline="middle" y={systemName ? -chipH * 0.18 : 0} fontSize={fontM * 0.62 * textScale} fill={active ? SELECT : stroke}>
+        <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.equipment} textAnchor="middle" dominantBaseline="middle" y={systemName ? -chipH * 0.18 : 0} fontSize={fontM * 0.62 * textScale} fill={ink(active ? SELECT : stroke)}>
           {label}
         </text>
         {systemName && (
-          <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.systemName} textAnchor="middle" dominantBaseline="middle" y={chipH * 0.28} fontSize={fontM * 0.52 * textScale} fill={active ? SELECT : stroke}>
+          <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.systemName} textAnchor="middle" dominantBaseline="middle" y={chipH * 0.28} fontSize={fontM * 0.52 * textScale} fill={ink(active ? SELECT : stroke)}>
             {systemName}
           </text>
         )}
@@ -2863,7 +2864,7 @@ function EquipmentMark({
             y1={item.yM}
             x2={item.xM + length / 2 + fontM * 0.9}
             y2={item.yM}
-            stroke={SELECT}
+            stroke={ink(SELECT)}
             strokeWidth={HAIR}
             vectorEffect="non-scaling-stroke"
             pointerEvents="none"
@@ -2872,8 +2873,8 @@ function EquipmentMark({
             cx={item.xM + length / 2 + fontM * 0.9}
             cy={item.yM}
             r={fontM * 0.48}
-            fill={PAPER}
-            stroke={SELECT}
+            fill={ink(PAPER)}
+            stroke={ink(SELECT)}
             strokeWidth={2.25}
             vectorEffect="non-scaling-stroke"
           />
@@ -2881,7 +2882,7 @@ function EquipmentMark({
             cx={item.xM + length / 2 + fontM * 0.9}
             cy={item.yM}
             r={fontM * 0.18}
-            fill={SELECT}
+            fill={ink(SELECT)}
             stroke="none"
             pointerEvents="none"
           />
@@ -2907,8 +2908,8 @@ function DragReadout({ x, y, text, fontM, view }: { x: number; y: number; text: 
   }
   return (
     <g transform={`translate(${drawX} ${drawY}) scale(1,-1)`} pointerEvents="none">
-      <rect x={-width / 2} y={-height / 2} width={width} height={height} rx={height / 2} fill={DIM} />
-      <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.78} fill="#fff" stroke="none" fontWeight={600}>
+      <rect x={-width / 2} y={-height / 2} width={width} height={height} rx={height / 2} fill={ink(DIM)} />
+      <text textAnchor="middle" dominantBaseline="middle" fontSize={fontM * 0.78} fill={PLAN_COLOR.halo} stroke="none" fontWeight={600}>
         {text}
       </text>
     </g>
@@ -2941,10 +2942,10 @@ function SheetGrid({ view, pxPerM }: { view: ViewBox; pxPerM: number }) {
   return (
     <g pointerEvents="none">
       {vertical.map(x => (
-        <line key={`x${x}`} x1={x} y1={y0} x2={x} y2={y1} stroke={isMajor(x) ? '#d0d0ca' : '#e4e4de'} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        <line key={`x${x}`} x1={x} y1={y0} x2={x} y2={y1} stroke={ink(isMajor(x) ? PLAN_COLOR.gridMajor : PLAN_COLOR.grid)} strokeWidth={1} vectorEffect="non-scaling-stroke" />
       ))}
       {horizontal.map(y => (
-        <line key={`y${y}`} x1={x0} y1={y} x2={x1} y2={y} stroke={isMajor(y) ? '#d0d0ca' : '#e4e4de'} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        <line key={`y${y}`} x1={x0} y1={y} x2={x1} y2={y} stroke={ink(isMajor(y) ? PLAN_COLOR.gridMajor : PLAN_COLOR.grid)} strokeWidth={1} vectorEffect="non-scaling-stroke" />
       ))}
     </g>
   );
@@ -2982,9 +2983,9 @@ function WallSpan({
   if (portion.kind === 'interface' || portion.endM - portion.startM < 0.02) return null;
   const line = spanLine(x1, y1, x2, y2, portion.startM, portion.endM);
   if (!constructionId) {
-    return <line {...line} stroke={wallColor(null)} strokeWidth={HAIR} strokeDasharray="0.16 0.1" vectorEffect="non-scaling-stroke" />;
+    return <line {...line} stroke={ink(wallColor(null))} strokeWidth={HAIR} strokeDasharray="0.16 0.1" vectorEffect="non-scaling-stroke" />;
   }
-  return <polygon points={wallQuad(line.x1, line.y1, line.x2, line.y2, thickness)} fill={wallColor(constructionId)} fillOpacity={glass ? 0.55 : 1} />;
+  return <polygon points={wallQuad(line.x1, line.y1, line.x2, line.y2, thickness)} fill={ink(wallColor(constructionId))} fillOpacity={glass ? 0.55 : 1} />;
 }
 
 function PlanWalls({ rooms, interfaceWalls }: { rooms: readonly Room[]; interfaceWalls?: Project['interfaceWalls'] }) {
@@ -3000,7 +3001,7 @@ function PlanWalls({ rooms, interfaceWalls }: { rooms: readonly Room[]; interfac
           const constructionId = room.edgeWalls?.[index]?.constructionId;
           const graphic = graphicWall(constructionId);
           if (graphic.role !== 'none') {
-            return <polygon key={`${room.id}-edge-${index}`} points={wallQuad(point.x, point.y, next.x, next.y, graphic.thickness)} fill={wallColor(constructionId)} fillOpacity={graphic.role === 'glass' ? 0.55 : 1} />;
+            return <polygon key={`${room.id}-edge-${index}`} points={wallQuad(point.x, point.y, next.x, next.y, graphic.thickness)} fill={ink(wallColor(constructionId))} fillOpacity={graphic.role === 'glass' ? 0.55 : 1} />;
           }
           return edgePortions(room, index, rooms).map((portion, portionIndex) => (
             <WallSpan
@@ -3021,7 +3022,7 @@ function PlanWalls({ rooms, interfaceWalls }: { rooms: readonly Room[]; interfac
         <rect
           key={`${item.room.id}-${item.face}`}
           {...wallBand(item.room, item.face, item.graphic.thickness)}
-          fill={wallColor(item.id)}
+          fill={ink(wallColor(item.id))}
           fillOpacity={item.graphic.role === 'glass' ? 0.55 : 1}
         />
       ))}
@@ -3054,7 +3055,7 @@ function PlanWalls({ rooms, interfaceWalls }: { rooms: readonly Room[]; interfac
               y1={target.y0}
               x2={target.x1}
               y2={target.y1}
-              stroke={INTERFACE_COLOR}
+              stroke={ink(INTERFACE_COLOR)}
               strokeWidth={2.6}
               vectorEffect="non-scaling-stroke"
             />
@@ -3065,7 +3066,7 @@ function PlanWalls({ rooms, interfaceWalls }: { rooms: readonly Room[]; interfac
           <polygon
             key={`iface-${target.key}`}
             points={wallQuad(target.x0, target.y0, target.x1, target.y1, graphic.role === 'none' ? 0.14 : graphic.thickness)}
-            fill={color}
+            fill={ink(color)}
             fillOpacity={graphic.role === 'glass' ? 0.55 : 1}
           />
         );
@@ -3085,7 +3086,7 @@ function WindowMark({
 }) {
   const vertical = face === 'px' || face === 'nx';
   return (
-    <g stroke={active ? SELECT : MARK_COLOR.window} strokeWidth={active ? 2.25 : HAIR} fill="none">
+    <g stroke={ink(active ? SELECT : MARK_COLOR.window)} strokeWidth={active ? 2.25 : HAIR} fill="none">
       {[-1, 0, 1].map(part => {
         const offset = part * 0.045;
         return (
@@ -3132,8 +3133,8 @@ function DrawnWalls({
               <polygon
                 key={index}
                 points={points}
-                fill={selected ? '#d9843f' : '#60707a'}
-                stroke={selected ? SELECT : 'none'}
+                fill={ink(selected ? PLAN_COLOR.selectStrong : ink('#60707a'))}
+                stroke={ink(selected ? SELECT : 'none')}
                 strokeWidth={2}
                 vectorEffect="non-scaling-stroke"
                 data-hit="wall-run"
@@ -3152,7 +3153,7 @@ function DrawnWalls({
               return (
                 <g key={opening.id} pointerEvents="none">
                   {opening.kind === 'door' && (
-                    <g fill="none" stroke={active ? SELECT : MARK_COLOR.door} strokeWidth={active ? 2.25 : HAIR}>
+                    <g fill="none" stroke={ink(active ? SELECT : MARK_COLOR.door)} strokeWidth={active ? 2.25 : HAIR}>
                       <line x1={ends.x0} y1={ends.y0} x2={ends.x0 + ends.nx * opening.widthM} y2={ends.y0 + ends.ny * opening.widthM} vectorEffect="non-scaling-stroke" />
                       <polyline points={arcPoints(ends.x0, ends.y0, opening.widthM, from, from + delta)} vectorEffect="non-scaling-stroke" />
                     </g>
@@ -3221,8 +3222,8 @@ function OpeningGhost({ spot, kind }: { spot: OpeningSpot; kind: 'door' | 'windo
     to = from + delta;
   }
   return (
-    <g pointerEvents="none" fill="none" stroke={color} strokeWidth={2.25}>
-      <polygon points={slot} fill="rgba(255,255,255,0.72)" vectorEffect="non-scaling-stroke" />
+    <g pointerEvents="none" fill="none" stroke={ink(color)} strokeWidth={2.25}>
+      <polygon points={slot} fill={PLAN_COLOR.card} vectorEffect="non-scaling-stroke" />
       {kind === 'door' && (
         <>
           <line x1={spot.x0} y1={spot.y0} x2={spot.x0 + swing.nx * spot.widthM} y2={spot.y0 + swing.ny * spot.widthM} vectorEffect="non-scaling-stroke" />
@@ -3242,7 +3243,7 @@ function SlantedWindow({
   active: boolean;
 }) {
   return (
-    <g stroke={active ? SELECT : MARK_COLOR.window} strokeWidth={active ? 2.25 : HAIR} fill="none">
+    <g stroke={ink(active ? SELECT : MARK_COLOR.window)} strokeWidth={active ? 2.25 : HAIR} fill="none">
       {[-1, 0, 1].map(part => {
         const offset = part * 0.045;
         return (
@@ -3260,7 +3261,7 @@ function SlantedWindow({
   );
 }
 
-const GUIDE = '#c43b6a';
+const GUIDE = PLAN_COLOR.guide;
 
 function ChainPreview({
   points,
@@ -3278,7 +3279,7 @@ function ChainPreview({
   return (
     <g pointerEvents="none">
       {points.slice(1).map((point, index) => (
-        <polygon key={index} points={wallQuad(points[index].x, points[index].y, point.x, point.y)} fill="rgba(14,110,102,0.16)" stroke={DIM} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+        <polygon key={index} points={wallQuad(points[index].x, points[index].y, point.x, point.y)} fill={PLAN_COLOR.draftStrong} stroke={ink(DIM)} strokeWidth={2} vectorEffect="non-scaling-stroke" />
       ))}
       {aim?.guides.map((guide, index) => {
         const length = Math.hypot(guide.x1 - guide.x0, guide.y1 - guide.y0);
@@ -3288,10 +3289,10 @@ function ChainPreview({
         if (textDeg > 90 || textDeg < -90) textDeg += 180;
         return (
           <g key={`guide-${index}`}>
-            <line x1={guide.x0} y1={guide.y0} x2={guide.x1} y2={guide.y1} stroke={GUIDE} strokeWidth={1.25} strokeDasharray="0.18 0.12" vectorEffect="non-scaling-stroke" />
+            <line x1={guide.x0} y1={guide.y0} x2={guide.x1} y2={guide.y1} stroke={ink(GUIDE)} strokeWidth={1.25} strokeDasharray="0.18 0.12" vectorEffect="non-scaling-stroke" />
             {length > 0.2 && (
               <g transform={`translate(${midX} ${midY}) scale(1,-1) rotate(${textDeg})`}>
-                <text textAnchor="middle" y={-fontM * 0.55} fontSize={fontM * 0.55} fill={GUIDE} fontWeight={600}>
+                <text textAnchor="middle" y={-fontM * 0.55} fontSize={fontM * 0.55} fill={ink(GUIDE)} fontWeight={600}>
                   {formatLength(length, units, 1)}
                 </text>
               </g>
@@ -3301,10 +3302,10 @@ function ChainPreview({
       })}
       {last && aim && <WallDraftCue line={{ x0: last.x, y0: last.y, x1: aim.x, y1: aim.y }} units={units} fontM={fontM} marks={false} />}
       {points.map((point, index) => (
-        <rect key={`pt-${index}`} x={point.x - handle / 2} y={point.y - handle / 2} width={handle} height={handle} fill={index === 0 && aim?.close ? GUIDE : '#fff'} stroke={index === 0 && aim?.close ? GUIDE : DIM} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
+        <rect key={`pt-${index}`} x={point.x - handle / 2} y={point.y - handle / 2} width={handle} height={handle} fill={ink(index === 0 && aim?.close ? GUIDE : PLAN_COLOR.halo)} stroke={ink(index === 0 && aim?.close ? GUIDE : DIM)} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
       ))}
       {aim && (
-        <circle cx={aim.x} cy={aim.y} r={handle * 0.42} fill={aim.kind === 'grid' ? '#fff' : GUIDE} stroke={aim.close ? GUIDE : DIM} strokeWidth={1.8} vectorEffect="non-scaling-stroke" />
+        <circle cx={aim.x} cy={aim.y} r={handle * 0.42} fill={ink(aim.kind === 'grid' ? PLAN_COLOR.halo : GUIDE)} stroke={ink(aim.close ? GUIDE : DIM)} strokeWidth={1.8} vectorEffect="non-scaling-stroke" />
       )}
     </g>
   );
@@ -3333,12 +3334,12 @@ function WallDraftCue({
   const side = Math.max(0.55, fontM * 1.7);
   return (
     <g pointerEvents="none">
-      <polygon points={wallQuad(line.x0, line.y0, line.x1, line.y1)} fill="rgba(14,110,102,0.16)" stroke={DIM} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+      <polygon points={wallQuad(line.x0, line.y0, line.x1, line.y1)} fill={PLAN_COLOR.draftStrong} stroke={ink(DIM)} strokeWidth={2} vectorEffect="non-scaling-stroke" />
       {marks && [[geom.x0, geom.y0], [geom.x1, geom.y1]].map(([x, y], index) => (
-        <rect key={index} x={x - handle / 2} y={y - handle / 2} width={handle} height={handle} fill="#fff" stroke={DIM} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
+        <rect key={index} x={x - handle / 2} y={y - handle / 2} width={handle} height={handle} fill={PLAN_COLOR.halo} stroke={ink(DIM)} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
       ))}
       <g transform={`translate(${midX} ${midY}) scale(1,-1) rotate(${textDeg})`}>
-        <text textAnchor="middle" y={-fontM * 0.85} fontSize={fontM * 0.62} fill={DIM} fontWeight={600}>
+        <text textAnchor="middle" y={-fontM * 0.85} fontSize={fontM * 0.62} fill={ink(DIM)} fontWeight={600}>
           {length}
         </text>
       </g>
@@ -3427,14 +3428,14 @@ function PipeLayer({
                   >
                     <title>{`${loop.name} · ${LOOP_FLUID_LABEL[loop.fluid]}`}</title>
                   </polyline>
-                  <polyline points={supply} fill="none" stroke={active ? SELECT : color} strokeWidth={active ? 2.2 : 1.3} vectorEffect="non-scaling-stroke" strokeLinejoin="round" pointerEvents="none" />
-                  {liquid && <polyline points={ret} fill="none" stroke={active ? SELECT : color} strokeWidth={active ? 2.2 : 1.3} strokeDasharray="5 3" vectorEffect="non-scaling-stroke" strokeLinejoin="round" pointerEvents="none" />}
+                  <polyline points={supply} fill="none" stroke={ink(active ? SELECT : color)} strokeWidth={active ? 2.2 : 1.3} vectorEffect="non-scaling-stroke" strokeLinejoin="round" pointerEvents="none" />
+                  {liquid && <polyline points={ret} fill="none" stroke={ink(active ? SELECT : color)} strokeWidth={active ? 2.2 : 1.3} strokeDasharray="5 3" vectorEffect="non-scaling-stroke" strokeLinejoin="round" pointerEvents="none" />}
                   {arrows.map((chevron, arrowIndex) => (
-                    <polyline key={`a-${arrowIndex}`} points={chevron} fill="none" stroke={active ? SELECT : color} strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" pointerEvents="none" />
+                    <polyline key={`a-${arrowIndex}`} points={chevron} fill="none" stroke={ink(active ? SELECT : color)} strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" pointerEvents="none" />
                   ))}
                   {index === 0 && (allLabels || related) && Math.abs(corner.x - plant.xM) > fontM * 4 && (
                     <g transform={`translate(${mid.x} ${mid.y + gap + fontM * 0.55}) scale(1,-1)`} pointerEvents="none">
-                      <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.pipe} textAnchor="middle" fontSize={fontM * 0.58} fontWeight={600} fill={active ? SELECT : color}>
+                      <text data-label={active ? LABEL_ACTIVE : LABEL_PRIORITY.pipe} textAnchor="middle" fontSize={fontM * 0.58} fontWeight={600} fill={ink(active ? SELECT : color)}>
                         {loop.name}
                       </text>
                     </g>
@@ -3489,9 +3490,9 @@ function OutsideAirTag({ x, y, face, role, size, yawDeg, detail }: { x: number; 
   const tagX = x + face * (gap + arrowLen + size * 0.4 + reach);
   return (
     <g pointerEvents="none" data-label={LABEL_PRIORITY.outside}>
-      <polygon points={arrow} fill={color} stroke="#fff" strokeWidth={0.8} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      <polygon points={arrow} fill={ink(color)} stroke={PLAN_COLOR.halo} strokeWidth={0.8} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       <g transform={`translate(${tagX} ${y}) rotate(${-yawDeg}) scale(1,-1)`}>
-        <rect x={-wide / 2} y={-tall / 2} width={wide} height={tall} rx={size * 0.35} fill={color} stroke="#fff" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        <rect x={-wide / 2} y={-tall / 2} width={wide} height={tall} rx={size * 0.35} fill={ink(color)} stroke={PLAN_COLOR.halo} strokeWidth={1} vectorEffect="non-scaling-stroke" />
         {lines.map((line, index) => (
           <text
             key={line}
@@ -3500,7 +3501,7 @@ function OutsideAirTag({ x, y, face, role, size, yawDeg, detail }: { x: number; 
             y={-tall / 2 + size * 0.75 + index * size * 1.05}
             fontSize={index === 0 ? size * 0.92 : size * 0.78}
             fontWeight={index === 0 ? 700 : 500}
-            fill="#fff"
+            fill={PLAN_COLOR.halo}
           >
             {line}
           </text>
@@ -3562,7 +3563,7 @@ function SensorMarks({
             >
               <title>{point.tag}</title>
               {/* ISA-5.1 field-mounted transmitter: function letters over the tag. */}
-              <InstrumentBubble x={cx} y={cy} r={r} sensor={point.sensor} tag={point.tag} color={active || served ? SELECT : '#4a5560'} strokeWidth={active ? 2.25 : 1.2} />
+              <InstrumentBubble x={cx} y={cy} r={r} sensor={point.sensor} tag={point.tag} color={ink(active || served ? SELECT : '#4a5560')} strokeWidth={active ? 2.25 : 1.2} />
             </g>
           );
         });
@@ -3624,18 +3625,10 @@ function sectionColor(section: UnitSection, loops: readonly PlantLoop[]): string
   return DIAGRAM_INK;
 }
 
-/** A hex colour mixed toward white: `amount` 0 keeps it, 1 is white. Solid, so overlapping duct pieces stay even. */
-function pale(hex: string, amount: number): string {
-  const m = /^#([0-9a-f]{6})$/i.exec(hex);
-  if (!m) return '#f4f6f8';
-  const n = parseInt(m[1], 16);
-  const mix = (c: number) => Math.round(c + (255 - c) * amount);
-  return `rgb(${mix((n >> 16) & 255)},${mix((n >> 8) & 255)},${mix(n & 255)})`;
-}
 
 /** Unit diagrams open on their own once the unit is this long on screen. */
 const UNIT_DETAIL_PX = 220;
-const DIAGRAM_INK = '#2a2e32';
+const DIAGRAM_INK = PLAN_COLOR.ink;
 
 /** Length of a component along its duct, as a share of the duct height. */
 function componentLength(kind: UnitSection['kind']): number {
@@ -3702,28 +3695,28 @@ function ComponentSymbol({ component, px, py, h, length, color, piped }: { compo
     case 'exhaust-damper': {
       // A relief damper with no duct is a barometric (gravity) damper on the casing.
       const gravity = section.kind === 'exhaust-damper' && section.ducted === false;
-      return <ControlDamper x={px} y={py} h={h} length={length} color={color} operator={gravity ? 'gravity' : 'motor'} operatorSide={component.side as 1 | -1} />;
+      return <ControlDamper x={px} y={py} h={h} length={length} color={ink(color)} operator={gravity ? 'gravity' : 'motor'} operatorSide={component.side as 1 | -1} />;
     }
     case 'filter':
-      return <DuctFilter x={px} y={py} h={h} length={length} color={color} />;
+      return <DuctFilter x={px} y={py} h={h} length={length} color={ink(color)} />;
     case 'cooling-coil':
     case 'heating-coil':
-      return <DuctCoil x={px} y={py} h={h} length={length} color={color} piped={piped} />;
+      return <DuctCoil x={px} y={py} h={h} length={length} color={ink(color)} piped={piped} />;
     case 'supply-fan':
-      return <CentrifugalFan x={px} y={py} h={h} color={color} dir={component.dir} />;
+      return <CentrifugalFan x={px} y={py} h={h} color={ink(color)} dir={component.dir} />;
     case 'relief-fan':
-      return <AxialFan x={px} y={py} h={h} length={length} color={color} />;
+      return <AxialFan x={px} y={py} h={h} length={length} color={ink(color)} />;
     case 'heat-recovery':
-      return <HeatExchanger x={px} y0={span.y0} y1={span.y1} length={length} color={color} />;
+      return <HeatExchanger x={px} y0={span.y0} y1={span.y1} length={length} color={ink(color)} />;
     case 'mixing-box':
-      return <MixingPlenum x={px} y0={span.y0} y1={span.y1} length={length} color={color} />;
+      return <MixingPlenum x={px} y0={span.y0} y1={span.y1} length={length} color={ink(color)} />;
     case 'humidifier':
-      return <Humidifier x={px} y={py} h={h} length={length} color={color} />;
+      return <Humidifier x={px} y={py} h={h} length={length} color={ink(color)} />;
     case 'condenser': {
       const block = component.block;
       if (!block) return null;
       const ox = px - component.x;
-      return <CondenserSection x0={ox + block.x0} x1={ox + block.x1} y0={span.y0} y1={span.y1} fans={block.fans.map(fan => ({ x: ox + fan.x, y: fan.y + (py - component.y), r: fan.r }))} color={color} />;
+      return <CondenserSection x0={ox + block.x0} x1={ox + block.x1} y0={span.y0} y1={span.y1} fans={block.fans.map(fan => ({ x: ox + fan.x, y: fan.y + (py - component.y), r: fan.r }))} color={ink(color)} />;
     }
     default:
       return null;
@@ -3785,7 +3778,7 @@ function UnitInternals({
     upright(
       x,
       y,
-      <text textAnchor="middle" dominantBaseline="middle" fontSize={size} fontWeight={weight} fill={fill}>
+      <text textAnchor="middle" dominantBaseline="middle" fontSize={size} fontWeight={weight} fill={ink(fill)}>
         {value}
       </text>,
     );
@@ -3795,8 +3788,8 @@ function UnitInternals({
       x,
       y,
       <>
-        <rect x={-w / 2} y={-size * 0.75} width={w} height={size * 1.5} fill="#fff" stroke={color} strokeWidth={0.9} vectorEffect="non-scaling-stroke" />
-        <text textAnchor="middle" dominantBaseline="central" fontSize={size} fontWeight={600} fill={color}>
+        <rect x={-w / 2} y={-size * 0.75} width={w} height={size * 1.5} fill={PLAN_COLOR.halo} stroke={ink(color)} strokeWidth={0.9} vectorEffect="non-scaling-stroke" />
+        <text textAnchor="middle" dominantBaseline="central" fontSize={size} fontWeight={600} fill={ink(color)}>
           {value}
         </text>
       </>,
@@ -3819,18 +3812,18 @@ function UnitInternals({
     <g>
       {/* Duct walls: stroke every piece, then fill over the inside so only the outline of the joined ducts remains. */}
       <g pointerEvents="none">
-        {allRects.flatMap(({ duct, rects }) => rects.map((rect, i) => <rect key={`${duct.id}-o${i}`} x={cx + rect.x} y={cy + rect.y} width={rect.w} height={rect.h} fill="none" stroke={DIAGRAM_INK} strokeWidth={2.4} vectorEffect="non-scaling-stroke" />))}
-        {ends.map(({ port, shape }) => <polygon key={`end-o-${port.role}`} points={shift(shape)} fill="none" stroke={DIAGRAM_INK} strokeWidth={2.4} vectorEffect="non-scaling-stroke" strokeLinejoin="miter" />)}
-        {allRects.flatMap(({ duct, rects }) => rects.map((rect, i) => <rect key={`${duct.id}-f${i}`} x={cx + rect.x} y={cy + rect.y} width={rect.w} height={rect.h} fill="#fff" />))}
-        {ends.map(({ port, shape }) => <polygon key={`end-f-${port.role}`} points={shift(shape)} fill="#fff" />)}
+        {allRects.flatMap(({ duct, rects }) => rects.map((rect, i) => <rect key={`${duct.id}-o${i}`} x={cx + rect.x} y={cy + rect.y} width={rect.w} height={rect.h} fill="none" stroke={ink(DIAGRAM_INK)} strokeWidth={2.4} vectorEffect="non-scaling-stroke" />))}
+        {ends.map(({ port, shape }) => <polygon key={`end-o-${port.role}`} points={shift(shape)} fill="none" stroke={ink(DIAGRAM_INK)} strokeWidth={2.4} vectorEffect="non-scaling-stroke" strokeLinejoin="miter" />)}
+        {allRects.flatMap(({ duct, rects }) => rects.map((rect, i) => <rect key={`${duct.id}-f${i}`} x={cx + rect.x} y={cy + rect.y} width={rect.w} height={rect.h} fill={PLAN_COLOR.halo} />))}
+        {ends.map(({ port, shape }) => <polygon key={`end-f-${port.role}`} points={shift(shape)} fill={PLAN_COLOR.halo} />)}
         {allRects.flatMap(({ duct, rects }) =>
           rects.map((rect, i) => (
-            <rect key={`${duct.id}-t${i}`} x={cx + rect.x} y={cy + rect.y} width={rect.w} height={rect.h} fill={pale(duct.id === selectedDuctId ? SELECT : streamColor(duct.stream), duct.id === selectedDuctId ? 0.78 : 0.9)} />
+            <rect key={`${duct.id}-t${i}`} x={cx + rect.x} y={cy + rect.y} width={rect.w} height={rect.h} fill={fade(duct.id === selectedDuctId ? SELECT : streamColor(duct.stream), duct.id === selectedDuctId ? 0.78 : 0.9)} />
           )),
         )}
         {ends.map(({ port, shape }) => {
           const stream: UnitStream = port.role === 'oa' ? 'outdoor' : port.role === 'ra' ? 'return' : port.role === 'sa' ? 'supply' : 'exhaust';
-          return <polygon key={`end-t-${port.role}`} points={shift(shape)} fill={pale(streamColor(stream), 0.9)} />;
+          return <polygon key={`end-t-${port.role}`} points={shift(shape)} fill={fade(streamColor(stream), 0.9)} />;
         })}
       </g>
       {/* Pick targets for the ducts, with one arrow each showing which way the air moves. */}
@@ -3853,13 +3846,13 @@ function UnitInternals({
           <g key={duct.id} data-hit="unit-duct" data-id={item.id} data-link={duct.id}>
             <title>{`${UNIT_STREAM_LABEL[duct.stream]} duct`}</title>
             {rects.map((rect, i) => (
-              <rect key={i} x={cx + rect.x} y={cy + rect.y} width={rect.w} height={rect.h} fill="transparent" stroke={active ? SELECT : 'none'} strokeWidth={active ? 1.6 : 0} vectorEffect="non-scaling-stroke" />
+              <rect key={i} x={cx + rect.x} y={cy + rect.y} width={rect.w} height={rect.h} fill="transparent" stroke={ink(active ? SELECT : 'none')} strokeWidth={active ? 1.6 : 0} vectorEffect="non-scaling-stroke" />
             ))}
             {arrow && size > 0 && (
               <polyline
                 points={`${cx + arrow.x - arrow.ux * size * 0.5 - arrow.uy * size * 0.6},${cy + arrow.y - arrow.uy * size * 0.5 + arrow.ux * size * 0.6} ${cx + arrow.x + arrow.ux * size * 0.5},${cy + arrow.y + arrow.uy * size * 0.5} ${cx + arrow.x - arrow.ux * size * 0.5 + arrow.uy * size * 0.6},${cy + arrow.y - arrow.uy * size * 0.5 - arrow.ux * size * 0.6}`}
                 fill="none"
-                stroke={color}
+                stroke={ink(color)}
                 strokeWidth={1.6}
                 strokeLinejoin="round"
                 strokeLinecap="round"
@@ -3939,21 +3932,21 @@ function UnitInternals({
         return (
           <g key={section.id} data-hit="unit-section" data-id={item.id} data-section={section.id}>
             <title>{sectionSummary(section)}</title>
-            <rect x={px - hitW / 2} y={hitY0} width={hitW} height={hitY1 - hitY0} fill={selected ? SELECT_FILL : 'transparent'} stroke={selected ? SELECT : 'none'} strokeWidth={selected ? 1.6 : 0} strokeDasharray="3 2" vectorEffect="non-scaling-stroke" />
-            <ComponentSymbol component={component} px={px} py={py} h={h} length={along} color={color} piped={piped} />
+            <rect x={px - hitW / 2} y={hitY0} width={hitW} height={hitY1 - hitY0} fill={ink(selected ? SELECT_FILL : 'transparent')} stroke={ink(selected ? SELECT : 'none')} strokeWidth={selected ? 1.6 : 0} strokeDasharray="3 2" vectorEffect="non-scaling-stroke" />
+            <ComponentSymbol component={component} px={px} py={py} h={h} length={along} color={ink(color)} piped={piped} />
             {/* Coil piping: supply and return stubs from the coil to the casing, valves just outside. */}
             {/* Refrigerant lines from a DX coil to the condenser. */}
             {refrigerant && (
               <g pointerEvents="none">
                 {[-1, 1].map(k => (
-                  <line key={k} x1={px + k * along * 0.25} y1={py - h / 2} x2={px + k * along * 0.25} y2={cy + condenser.y1} stroke={color} strokeWidth={1} strokeDasharray={k > 0 ? '3 2' : undefined} vectorEffect="non-scaling-stroke" />
+                  <line key={k} x1={px + k * along * 0.25} y1={py - h / 2} x2={px + k * along * 0.25} y2={cy + condenser.y1} stroke={ink(color)} strokeWidth={1} strokeDasharray={k > 0 ? '3 2' : undefined} vectorEffect="non-scaling-stroke" />
                 ))}
               </g>
             )}
             {coil && !refrigerant && (piped || valves.length > 0) && (
               <g pointerEvents="none">
                 {[-1, 1].map(k => (
-                  <line key={k} x1={px + k * along * 0.25} y1={py - h / 2} x2={px + k * along * 0.25} y2={cy - width / 2} stroke={color} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                  <line key={k} x1={px + k * along * 0.25} y1={py - h / 2} x2={px + k * along * 0.25} y2={cy - width / 2} stroke={ink(color)} strokeWidth={1} vectorEffect="non-scaling-stroke" />
                 ))}
               </g>
             )}
@@ -3963,8 +3956,8 @@ function UnitInternals({
               return (
                 <g key={valve.id}>
                   <title>{`${valve.tag} · ${VALVE_LABEL[valve.kind]}`}</title>
-                  <line x1={vx} y1={cy - width / 2} x2={vx} y2={vy - valveSize * 2} stroke={color} strokeWidth={1} vectorEffect="non-scaling-stroke" />
-                  <Valve x={vx} y={vy} size={valveSize} kind={valve.kind} color={color} />
+                  <line x1={vx} y1={cy - width / 2} x2={vx} y2={vy - valveSize * 2} stroke={ink(color)} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                  <Valve x={vx} y={vy} size={valveSize} kind={valve.kind} color={ink(color)} />
                   {readable && tagBox(vx - valveSize * 2.2, vy, valve.tag || 'V', t * 0.85, color)}
                 </g>
               );
@@ -4011,9 +4004,9 @@ function UnitInternals({
             }}
           >
             <title>{`${point.tag} · ${SENSOR_LABEL[point.sensor]}`}</title>
-            <line x1={x} y1={tip} x2={x} y2={tagY - side * r} stroke={color} strokeWidth={1} vectorEffect="non-scaling-stroke" />
-            <circle cx={x} cy={tip} r={h * 0.025} fill={color} />
-            {readable ? <InstrumentBubble x={x} y={tagY} r={r} sensor={point.sensor} tag={point.tag} color={color} yaw={item.yawDeg} /> : <circle cx={x} cy={tagY} r={r} fill="#fff" stroke={color} strokeWidth={1} vectorEffect="non-scaling-stroke" />}
+            <line x1={x} y1={tip} x2={x} y2={tagY - side * r} stroke={ink(color)} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            <circle cx={x} cy={tip} r={h * 0.025} fill={ink(color)} />
+            {readable ? <InstrumentBubble x={x} y={tagY} r={r} sensor={point.sensor} tag={point.tag} color={ink(color)} yaw={item.yawDeg} /> : <circle cx={x} cy={tagY} r={r} fill={PLAN_COLOR.halo} stroke={ink(color)} strokeWidth={1} vectorEffect="non-scaling-stroke" />}
             {/* Larger pick target than the probe itself. */}
             <rect x={x - t * 1.4} y={Math.min(tip, tagY) - t} width={t * 2.8} height={Math.abs(tagY - tip) + t * 2} fill="transparent" />
           </g>
