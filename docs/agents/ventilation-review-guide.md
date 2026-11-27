@@ -110,6 +110,10 @@ Excess outdoor air leaves through RTU relief. Say where it goes.
 - Rooms with no terminals at all (storage, prep) are easy to miss. List every room, not every system.
 - Package defaults are sized for the package's own demo room, not the template room they land in. The office ERV
   kept its 800 CFM catalogue planning point.
+- Rates and sums can all pass while the terminals sit in the wrong places. Look at the plan: the supply should
+  cover each room (no third of a room with returns and no diffusers), each return should sit among the diffusers
+  it draws from, and an occupied room should not return only through a doorway into the next room. The
+  restaurant RTU had all its dining returns at one wall and none in the bar (review finding 10).
 - Appliance loads can be placed off the wall even when the hood is on it. Check the geometry, not just the hood
   airflow.
 - Old projects in a user's browser keep the template as it was when they were created. A fix to `templates.ts`

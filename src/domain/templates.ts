@@ -262,67 +262,87 @@ const rtuSections = (): PackageSection[] =>
 
 /**
  * The catalogue rooftop package stretched to serve the dining room, the bar, the corridor, and the storage room
- * from one unit. Supply 3,750 CFM: dining 6 × 500, bar 2 × 275, corridor 120, storage 80. Return 2,550 CFM
- * through the dining grilles (supply less 1,200 CFM minimum outdoor air): the bar and storage return through
- * their doorways, and corridor air leaves through the exhausted restrooms and the kitchen.
+ * from one unit. The unit sits over the middle of the dining room, turned so its return end faces south and its
+ * supply end north. Supply 3,750 CFM: dining 6 × 500 on a 3 × 2 grid that covers the whole room, bar 2 × 275,
+ * corridor 120, storage 80. Return 2,550 CFM (supply less 1,200 CFM minimum outdoor air): two dining grilles on
+ * the room's centre line, between the diffuser columns, and one in the bar, so no supply air crosses the room to
+ * reach a return. Storage returns through its door to the bar grille; corridor air leaves through the exhausted
+ * restrooms and the kitchen.
  */
 const DINING_BAR_RTU: SystemPackage = {
   ...RTU_DUCTED,
   id: 'rtu-ducted-dining-bar',
   name: 'Rooftop unit, dining, bar, corridor and storage',
-  description: '12.5 ton RTU with economizer. Supply trunk → dining (6 diffusers), corridor (1 diffuser), through the wall to the bar (2 diffusers) and on to storage (1 diffuser). Return main → 3 dining grilles.',
+  description: '12.5 ton RTU with economizer over the middle of the dining room. Supply → dining (6 diffusers on a 3 × 2 grid), corridor (1 diffuser), through the wall to the bar (2 diffusers) and on to storage (1 diffuser). Return main → 2 dining grilles between the diffuser columns and 1 bar grille.',
   systems: [
     {
       ...RTU_DUCTED.systems[0],
-      notes: `One rooftop for the dining room, bar, corridor, and storage: same hours and similar loads. Supply 3,750 CFM = dining 3,000 + bar 550 + corridor 120 + storage 80. Minimum outdoor air ${RTU_MIN_OA_CFM.toLocaleString('en-US')} CFM ventilates all four for ${DINING_SEATS} dining and ${BAR_SEATS} bar seats (IMC §403 / ASHRAE 62.1); return 2,550 CFM through the dining grilles. The bar and storage return through their doorways; the corridor air is drawn on by the restroom exhaust and the kitchen. The dining room is over 500 ft² at more than 25 people per 1,000 ft² on an economizer unit, so demand-controlled ventilation applies (IECC §C403.7.1): CO2-2 resets the outdoor air down from the minimum when the room is not full. Best-guess cooling (no solver yet): people 86 × 615 Btu/h ≈ 53,000; outdoor air 4.5 × 1,200 CFM × 9.9 Btu/lb ≈ 53,000 at the Chicago design day; lights ≈ 5,500; envelope and sun ≈ 20,000; about 132,000 Btu/h, 11 tons, inside the unit's 12.5. Terminal airflows are planning values.`,
+      notes: `One rooftop for the dining room, bar, corridor, and storage: same hours and similar loads. Supply 3,750 CFM = dining 3,000 + bar 550 + corridor 120 + storage 80. Minimum outdoor air ${RTU_MIN_OA_CFM.toLocaleString('en-US')} CFM ventilates all four for ${DINING_SEATS} dining and ${BAR_SEATS} bar seats (IMC §403 / ASHRAE 62.1); return 2,550 CFM = 2 dining grilles × 1,050 + bar 450. Each return sits among the diffusers it draws from, about 3 m (10 ft) away, so no supply air has to cross the room to reach a return. Dining and bar are both class 1 air, so both may return to the unit. The bar takes 550 supply and 80 from storage and returns 450, so about 180 CFM spills to the dining room and the bar stays slightly positive. Storage returns through its door to the bar; the corridor air is drawn on by the restroom exhaust and the kitchen. The dining room is over 500 ft² at more than 25 people per 1,000 ft² on an economizer unit, so demand-controlled ventilation applies (IECC §C403.7.1): CO2-2 resets the outdoor air down from the minimum when the room is not full. Best-guess cooling (no solver yet): people 86 × 615 Btu/h ≈ 53,000; outdoor air 4.5 × 1,200 CFM × 9.9 Btu/lb ≈ 53,000 at the Chicago design day; lights ≈ 5,500; envelope and sun ≈ 20,000; about 132,000 Btu/h, 11 tons, inside the unit's 12.5. Terminal airflows and positions are planning values; check each diffuser's throw against its data.`,
     },
   ],
+  // Offsets are from the drop point, the middle of the dining room (6, 4 m). Turned 90°, the unit's return
+  // connection is at its south end (y −1.13 m) and its supply at the north end (y +1.13 m).
   members: [
     ...RTU_DUCTED.members
       .filter(member => member.key === 'rtu')
-      .map(member => (member.key === 'rtu' ? { ...member, sections: rtuSections() } : member)),
-    { key: 'r1a', catalogId: 'grille-ret-24', planOffset: { xM: -2.3, yM: 2.0 }, designCfm: 850 },
-    { key: 'r1b', catalogId: 'grille-ret-24', planOffset: { xM: -2.3, yM: -2.0 }, designCfm: 850 },
-    { key: 'r2', catalogId: 'grille-ret-24', planOffset: { xM: -3.8, yM: 0 }, designCfm: 850 },
-    { key: 'd1a', catalogId: 'diff-sq-24', planOffset: { xM: 2.3, yM: 2.0 }, designCfm: 500 },
-    { key: 'd1b', catalogId: 'diff-sq-24', planOffset: { xM: 2.3, yM: -2.0 }, designCfm: 500 },
-    { key: 'd2a', catalogId: 'diff-sq-24', planOffset: { xM: 4.5, yM: 2.0 }, designCfm: 500 },
-    { key: 'd2b', catalogId: 'diff-sq-24', planOffset: { xM: 4.5, yM: -2.0 }, designCfm: 500 },
-    { key: 'd3a', catalogId: 'diff-sq-24', planOffset: { xM: 6.7, yM: 2.0 }, designCfm: 500 },
-    { key: 'd3b', catalogId: 'diff-sq-24', planOffset: { xM: 6.7, yM: -2.0 }, designCfm: 500 },
-    { key: 'dc', catalogId: 'diff-sq-24', planOffset: { xM: 3.4, yM: 4.9 }, designCfm: 120, notes: 'Corridor supply. Ventilates the corridor; the air moves on to the exhausted restrooms and the kitchen.' },
-    { key: 'd4a', catalogId: 'diff-sq-24', planOffset: { xM: 8.6, yM: -1.6 }, designCfm: 275, notes: 'Bar supply.' },
-    { key: 'd4b', catalogId: 'diff-sq-24', planOffset: { xM: 10.6, yM: -1.6 }, designCfm: 275, notes: 'Bar supply.' },
-    { key: 'dst', catalogId: 'diff-sq-24', planOffset: { xM: 13.4, yM: -1.9 }, designCfm: 80, notes: 'Storage supply: 0.12 CFM/ft² of outdoor air (ASHRAE 62.1) arrives in this air. It returns through the door to the bar.' },
+      .map(member => (member.key === 'rtu' ? { ...member, yawDeg: 90, sections: rtuSections() } : member)),
+    // Dining: 3 columns 4 m (13 ft) apart, 2 rows 4.8 m (16 ft) apart, 1.6–2 m from the walls.
+    { key: 'd1a', catalogId: 'diff-sq-24', planOffset: { xM: -4, yM: 2.4 }, designCfm: 500 },
+    { key: 'd1b', catalogId: 'diff-sq-24', planOffset: { xM: -4, yM: -2.4 }, designCfm: 500 },
+    { key: 'd2a', catalogId: 'diff-sq-24', planOffset: { xM: 0, yM: 2.4 }, designCfm: 500 },
+    { key: 'd2b', catalogId: 'diff-sq-24', planOffset: { xM: 0, yM: -2.4 }, designCfm: 500 },
+    { key: 'd3a', catalogId: 'diff-sq-24', planOffset: { xM: 4, yM: 2.4 }, designCfm: 500 },
+    { key: 'd3b', catalogId: 'diff-sq-24', planOffset: { xM: 4, yM: -2.4 }, designCfm: 500 },
+    // Dining returns on the centre line, each in the middle of four diffusers.
+    { key: 'r1', catalogId: 'grille-ret-24', planOffset: { xM: -2, yM: 0 }, designCfm: 1050, notes: 'Dining return, between the west and middle diffuser columns.' },
+    { key: 'r2', catalogId: 'grille-ret-24', planOffset: { xM: 2, yM: 0 }, designCfm: 1050, notes: 'Dining return, between the middle and east diffuser columns.' },
+    { key: 'dc', catalogId: 'diff-sq-24', planOffset: { xM: 2, yM: 4.9 }, designCfm: 120, notes: 'Corridor supply. Ventilates the corridor; the air moves on to the exhausted restrooms and the kitchen.' },
+    { key: 'd4a', catalogId: 'diff-sq-24', planOffset: { xM: 7.3, yM: -2.4 }, designCfm: 275, notes: 'Bar supply.' },
+    { key: 'd4b', catalogId: 'diff-sq-24', planOffset: { xM: 9.3, yM: -2.4 }, designCfm: 275, notes: 'Bar supply.' },
+    { key: 'rb', catalogId: 'grille-ret-24', planOffset: { xM: 8.3, yM: -0.1 }, designCfm: 450, notes: 'Bar return. Takes the bar air and the storage air that comes through the storage door; the bar keeps about 180 CFM more supply than return, so it stays slightly positive to the dining room.' },
+    { key: 'dst', catalogId: 'diff-sq-24', planOffset: { xM: 12, yM: -1.9 }, designCfm: 80, notes: 'Storage supply: 0.12 CFM/ft² of outdoor air (ASHRAE 62.1) arrives in this air. It returns through the door to the bar return.' },
   ],
   nodes: [
-    { key: 's1', service: 'supply', x: 2.3, y: 0 },
-    { key: 'sc', service: 'supply', x: 3.4, y: 0 },
-    { key: 's2', service: 'supply', x: 4.5, y: 0 },
-    { key: 's3', service: 'supply', x: 6.7, y: 0 },
-    { key: 's4', service: 'supply', x: 8.6, y: 0 },
-    { key: 's5', service: 'supply', x: 10.6, y: 0 },
-    { key: 'r1', service: 'return', x: -2.3, y: 0 },
+    { key: 's0', service: 'supply', x: 0, y: 1.6 },
+    { key: 'sw', service: 'supply', x: -4, y: 1.6 },
+    { key: 'sws', service: 'supply', x: -4, y: -3 },
+    { key: 'sc', service: 'supply', x: 2, y: 1.6 },
+    { key: 'se', service: 'supply', x: 4, y: 1.6 },
+    { key: 'ses', service: 'supply', x: 4, y: -3 },
+    { key: 's4', service: 'supply', x: 7.3, y: -3 },
+    { key: 's5', service: 'supply', x: 9.3, y: -3 },
+    { key: 'r0', service: 'return', x: 0, y: -1.55 },
+    { key: 'rx', service: 'return', x: 2, y: -1.55 },
   ],
   ducts: [
-    // Trunk steps down as each branch leaves: 3,750 → 2,750 → 2,630 → 1,630 → 630 → 355 CFM.
-    roundDuct('supply', 22, memberPort('rtu', 'supply'), junction('s1')),
-    roundDuct('supply', 20, junction('s1'), junction('sc')),
-    roundDuct('supply', 20, junction('sc'), junction('s2')),
-    roundDuct('supply', 16, junction('s2'), junction('s3')),
-    roundDuct('supply', 10, junction('s3'), junction('s4')),
+    // Supply leaves the north end and splits: west 1,500 (three dining diffusers), one diffuser straight ahead,
+    // east 1,750 (corridor, two dining diffusers, bar, storage). Branches run along the north side of the room
+    // and down its west and east thirds, clear of the return main on the centre line.
+    roundDuct('supply', 22, memberPort('rtu', 'supply'), junction('s0')),
+    roundDuct('supply', 10, junction('s0'), memberPort('d2a', 'neck')),
+    roundDuct('supply', 16, junction('s0'), junction('sw')),
+    roundDuct('supply', 10, junction('sw'), memberPort('d1a', 'neck')),
+    roundDuct('supply', 14, junction('sw'), junction('sws')),
+    roundDuct('supply', 10, junction('sws'), memberPort('d1b', 'neck')),
+    roundDuct('supply', 10, junction('sws'), memberPort('d2b', 'neck'), [{ x: 0, y: -3 }]),
+    // East: 1,750 → 1,630 → 1,130 → 630 → 355 CFM.
+    roundDuct('supply', 16, junction('s0'), junction('sc')),
+    roundDuct('supply', 6, junction('sc'), memberPort('dc', 'neck')),
+    roundDuct('supply', 16, junction('sc'), junction('se')),
+    roundDuct('supply', 10, junction('se'), memberPort('d3a', 'neck')),
+    roundDuct('supply', 14, junction('se'), junction('ses')),
+    roundDuct('supply', 10, junction('ses'), memberPort('d3b', 'neck')),
+    roundDuct('supply', 10, junction('ses'), junction('s4')),
+    roundDuct('supply', 8, junction('s4'), memberPort('d4a', 'neck')),
     roundDuct('supply', 8, junction('s4'), junction('s5')),
     roundDuct('supply', 8, junction('s5'), memberPort('d4b', 'neck')),
-    roundDuct('supply', 6, junction('s5'), memberPort('dst', 'neck'), [{ x: 13.4, y: 0 }]),
-    roundDuct('supply', 10, junction('s1'), memberPort('d1a', 'neck')),
-    roundDuct('supply', 10, junction('s1'), memberPort('d1b', 'neck')),
-    roundDuct('supply', 6, junction('sc'), memberPort('dc', 'neck')),
-    roundDuct('supply', 10, junction('s2'), memberPort('d2a', 'neck')),
-    roundDuct('supply', 10, junction('s2'), memberPort('d2b', 'neck')),
-    roundDuct('supply', 10, junction('s3'), memberPort('d3a', 'neck')),
-    roundDuct('supply', 10, junction('s3'), memberPort('d3b', 'neck')),
-    roundDuct('supply', 8, junction('s4'), memberPort('d4a', 'neck')),
-    ...RTU_DUCTED.ducts.filter(duct => duct.service === 'return'),
+    roundDuct('supply', 6, junction('s5'), memberPort('dst', 'neck'), [{ x: 12, y: -3 }]),
+    // Return main from the south end: 2,550 → west grille 1,050; east 1,500 → east grille 1,050 and bar 450.
+    roundDuct('return', 20, memberPort('rtu', 'return'), junction('r0')),
+    roundDuct('return', 14, junction('r0'), memberPort('r1', 'collar'), [{ x: -2, y: -1.55 }]),
+    roundDuct('return', 16, junction('r0'), junction('rx')),
+    roundDuct('return', 14, junction('rx'), memberPort('r2', 'collar')),
+    roundDuct('return', 10, junction('rx'), memberPort('rb', 'collar'), [{ x: 8.3, y: -1.55 }]),
   ],
   points: [...(RTU_DUCTED.points ?? []), { tag: 'CO2-2', sensor: 'co2', member: 'rtu', room: true }],
 };
@@ -483,7 +503,7 @@ export function createFullServiceProject(): Project {
   drop(RESTROOMS, 13.1, 6.5);
   drop(DISH_EXHAUST, 12.2, 14.5);
   drop(OFFICE_VENTILATION, 19.0, 7.0);
-  drop(DINING_BAR_RTU, 4.6, 4, 'Dining & bar comfort');
+  drop(DINING_BAR_RTU, 6, 4, 'Dining & bar comfort');
   drop(OFFICE_SPLIT, 16.62, 7.0);
   next = { ...next, equipment: next.equipment.map(item => ({ ...item, notes: item.notes ? `${EXAMPLE} ${item.notes}` : EXAMPLE })) };
 

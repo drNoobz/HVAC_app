@@ -3,7 +3,7 @@
 - **Reviewed:** 2026-11-25, against the template built by `createFullServiceProject()` in
   `src/domain/templates.ts` (system packages in `src/domain/systemPackages.ts`).
 - **Fixes applied:** 2026-11-26; then a regulations-first pass the same day (code basis, demand-controlled
-  ventilation, Type II dish hood, small office ERV, best-guess capacities). The template-specific packages live in `templates.ts`: `DINING_BAR_RTU`,
+  ventilation, Type II dish hood, small office ERV, best-guess capacities); supply and return layout on 2026-11-28 (finding 10). The template-specific packages live in `templates.ts`: `DINING_BAR_RTU`,
   `KITCHEN_LINE`, `RESTROOMS`, `DISH_EXHAUST`, `OFFICE_VENTILATION`, `OFFICE_SPLIT`.
 - **Method and rate tables:** [ventilation-review-guide.md](ventilation-review-guide.md).
 
@@ -24,10 +24,10 @@ seat count before design use.
 
 | Space | Area | People | Outdoor air needed | What serves it | Status |
 |---|---|---|---|---|---|
-| Dining | 1,033 ft² | 70 (`DINING_SEATS`) | 711 CFM | RTU, 6 × 500 CFM supply, 3 × 850 CFM return | ✅ |
-| Bar | 237 ft² | 16 (`BAR_SEATS`) | 163 CFM | RTU, 2 × 275 CFM; returns through its doorway | ✅ |
+| Dining | 1,033 ft² | 70 (`DINING_SEATS`) | 711 CFM | RTU, 6 × 500 CFM supply on a 3 × 2 grid, 2 × 1,050 CFM return between them | ✅ (returns were all at the west wall) |
+| Bar | 237 ft² | 16 (`BAR_SEATS`) | 163 CFM | RTU, 2 × 275 CFM supply, 1 × 450 CFM return | ✅ (returned through its doorway) |
 | Corridor | 318 ft² | — | 19 CFM | RTU, 1 × 120 CFM | ✅ |
-| Storage | 145 ft² | — | 17 CFM | RTU, 1 × 80 CFM, branched on from the bar; returns through the bar | ✅ (was ❌: nothing served it) |
+| Storage | 145 ft² | — | 17 CFM | RTU, 1 × 80 CFM, branched on from the bar; returns through its door to the bar return | ✅ (was ❌: nothing served it) |
 | Kitchen | 667 ft² | 4 | 110 CFM OA; 467 CFM exhaust | MAU 2 × 775 CFM (100% outdoor air); 10 ft hood at 2,000 CFM | ✅ (hood was 8 ft) |
 | Prep | 220 ft² | 2 | 41 CFM | MAU, 1 × 150 CFM | ✅ (was transfer air only) |
 | Dish | 207 ft² | 2 | 40 CFM OA; 145 CFM exhaust | Type II hood over the dishwasher, 400 CFM; air arrives from prep | ✅ (was a ceiling grille) |
@@ -49,7 +49,8 @@ How the air moves now:
     so it draws from the dining room and corridor.
   - **Restrooms:** 300 CFM negative, drawing from the corridor.
 - The remaining 200 CFM is relieved at the RTU.
-- Air classes are right: return comes only from the dining room. Kitchen, dish and restroom air is exhausted.
+- Air classes are right: return comes only from the dining room and the bar (both class 1). Kitchen, dish and
+  restroom air is exhausted.
 
 The Check phase on a fresh template shows only the planning balance note (2026-11-26).
 
@@ -121,7 +122,8 @@ Each restroom exhausts 150 CFM (70 CFM per WC is required). A 1 in undercut pass
 
 ### 6. Storage had no ventilation — fixed
 
-An 80 CFM diffuser now branches off the bar supply (node `s5`), and its air returns through the door to the bar.
+An 80 CFM diffuser now branches off the bar supply (node `s5`), and its air returns through the door to the bar
+return grille.
 If the room will ever hold chemicals, it needs exhaust at 1.5 CFM/ft² instead.
 
 ### 7. Office ERV oversized — fixed with a placeholder
@@ -147,6 +149,26 @@ CO2-2. The office is under 500 ft², so its CO2-1 is optional.
 | Office split | 193 ft² office, 2 people, one window | 1 ton ✅ (rule of thumb) |
 
 The solver will replace these numbers. The arithmetic is in the system notes, so it is clear what to replace.
+
+### 10. Supply and return were at opposite ends of the dining room — fixed (2026-11-28)
+
+The user noticed that the return air sat far to the left and some supply far to the right. All three dining
+return grilles were in the west fifth of the room (x 0.8–2.3 m of 12 m) and all six diffusers in the east half
+(x 6.9–11.3 m), so the west third had returns and no supply, and supply air crossed about 9–10 m of the room to
+reach a return. The bar had no return: its air crossed the dining room through the doorway (about 11 m), and
+storage air went through the bar first (about 17 m).
+
+With ceiling diffusers mixing the room, a return's exact spot matters less than the supply covering the room;
+but each room should have supply over all of it and a return of its own nearby. Now (`DINING_BAR_RTU`):
+- The RTU sits over the middle of the dining room (drop at 6, 4 m), turned 90° so its return end faces south and
+  its supply end north.
+- Dining: 6 × 500 CFM on a 3 × 2 grid (columns 4 m apart, rows 4.8 m apart, 1.6–2 m from the walls). Supply runs
+  along the north side and down the west and east thirds, clear of the returns.
+- Dining returns: 2 × 1,050 CFM on the centre line, each among four diffusers, about 3 m (10 ft) from them.
+- Bar: its own 450 CFM return. It takes 550 supply plus 80 from storage, so about 180 CFM spills to the dining
+  room and the bar stays slightly positive.
+- Totals are unchanged (return 2,550, outdoor air 1,200), so the air balance and pressure map above still hold.
+  Diffuser throw against spacing is a planning check: confirm it with the diffuser data.
 
 ## Not checked here
 
