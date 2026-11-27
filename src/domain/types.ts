@@ -481,23 +481,6 @@ export const BUILDING_TYPES: { id: BuildingType; label: string }[] = [
   { id: 'other', label: 'Other' },
 ];
 
-export const ROOM_USES = [
-  'Unassigned',
-  'Dining',
-  'Bar',
-  'Kitchen',
-  'Hot line',
-  'Prep',
-  'Dish',
-  'Walk-in',
-  'Restroom',
-  'Corridor',
-  'Storage',
-  'Dry storage',
-  'Office',
-  'Service',
-  'Other',
-] as const;
 
 export const SYSTEM_KINDS: { id: SystemKind; label: string }[] = [
   { id: 'kitchen-exhaust', label: 'Kitchen exhaust' },

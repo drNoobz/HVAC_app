@@ -45,7 +45,8 @@ no colour or kind code. Only add a case when a component must look different fro
   2. **The project's Construction** (project settings: steel frame, concrete, masonry, metal building, wood
      frame, or not set). It picks the exterior wall, the top ceiling or roof, and the slab.
   3. **Special uses only**: wet rooms (tile, washable ceiling) and cold rooms (insulated panels). Do not add
-     suggestions per ordinary use such as "Office"; that was tried and was too specific.
+     suggestions per ordinary use such as "Office"; that was tried and was too specific. Which uses are wet
+     or cold is a flag on the use in `src/domain/spaceUses.ts`; set it there, not in `suggestFor`.
 - **Template picks are separate.** `defaultAssemblyId` holds the restaurant template's per-use picks. Keep them
   unchanged unless the template itself is being redesigned.
 - **Keep the tutorials current.** Component names appear in the simple office tutorial and its pictures

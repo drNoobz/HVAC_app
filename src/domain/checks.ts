@@ -9,6 +9,7 @@ import { planningIssues } from './issues';
 import { getLoadProduct } from './loadCatalog';
 import { hoodOver } from './loads';
 import type { DuctService, Project, Selection } from './types';
+import { isOccupiedUse } from './spaceUses';
 
 export type BuildStep = 'spaces' | 'loads' | 'systems' | 'check';
 
@@ -26,7 +27,6 @@ export interface CheckIssue {
   fixLabel: string;
 }
 
-const PEOPLE_USES = new Set(['Dining', 'Bar', 'Kitchen', 'Hot line', 'Prep', 'Dish', 'Office']);
 
 export function stepForSelection(selection: Selection): Exclude<BuildStep, 'check'> | null {
   switch (selection.kind) {
@@ -93,7 +93,7 @@ export function buildChecks(
   }
   const loads = project.loads ?? [];
   for (const room of project.rooms) {
-    if (!PEOPLE_USES.has(room.use)) continue;
+    if (!isOccupiedUse(room.use)) continue;
     const hasPeople = loads.some(item => item.roomId === room.id && getLoadProduct(item.loadId)?.category === 'people');
     if (!hasPeople) {
       issues.push({

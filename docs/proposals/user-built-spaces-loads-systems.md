@@ -55,6 +55,11 @@ its people rate (Rp), area rate (Ra), default density and air class. Exhaust nee
   and the project's Construction setting (see docs/agents/constructions.md). A space type only adds to them
   when it needs a special surface, like the wet and cold rooms already do (for example acoustic partitions for
   a cinema).
+- **Done so far (2026-11-28):** the room's **Use** picker already lists uses from every building type,
+  grouped like these categories (`src/domain/spaceUses.ts`), with the project's building type first. Each use
+  carries only the occupied, wet and cold flags and a plan fill. The rates (Rp, Ra, density, air class,
+  exhaust) are still to come; when they are added, map each use to its code category there rather than
+  starting a second list.
 
 **In the catalogue:** a Space types group, filtered by the project's building type first (a restaurant project
 shows food-service types on top), with search across all groups.

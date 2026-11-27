@@ -9,6 +9,7 @@
  * Every choice is a planning assumption: the user confirms the actual construction.
  */
 import { builtinAssembly, cloneLayers } from './constructionLibrary';
+import { isColdUse, isWetUse } from './spaceUses';
 import type { BuildingConstruction, Project, Room, StackLayer } from './types';
 
 type Face = 'floor' | 'wall' | 'shared' | 'ceiling';
@@ -65,12 +66,7 @@ export function projectConstruction(project: Pick<Project, 'construction'>): Bui
   return BUILDING_CONSTRUCTIONS.find(item => item.id === project.construction)?.id ?? null;
 }
 
-/**
- * Uses that need a particular surface whatever the building: wet rooms get tile and a washable ceiling, cold rooms
- * get insulated panels. Every other use gets no special treatment. Add generic space types here as they land.
- */
-const WET_USES = new Set(['Kitchen', 'Hot line', 'Prep', 'Dish', 'Restroom']);
-const COLD_USES = new Set(['Walk-in']);
+// Wet and cold rooms (isWetUse, isColdUse) come from src/domain/spaceUses.ts.
 
 /** What lies around a room, read from the plan: another space below or above, or a raised floor over nothing. */
 export interface RoomSituation {
@@ -139,8 +135,8 @@ export function suggestFor(
   context: { use: string; construction: BuildingConstruction | null; situation: RoomSituation }
 ): Suggestion | null {
   const { use, construction, situation } = context;
-  const wet = WET_USES.has(use);
-  const cold = COLD_USES.has(use);
+  const wet = isWetUse(use);
+  const cold = isColdUse(use);
   const shell = construction ?? 'unset';
   const reasons: string[] = [];
   let ids: string[] = [];

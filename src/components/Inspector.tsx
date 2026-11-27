@@ -48,7 +48,6 @@ import { doorDirection, hingeEnds, setDoorDirection, type DoorHinge } from '@/do
 import { placeBeside, resizeSpan, slideOpeningOffset } from '@/domain/spanFit';
 import {
   BUILDING_TYPES,
-  ROOM_USES,
   SURFACE_FACES,
   SYSTEM_KINDS,
   WALL_FACES,
@@ -90,6 +89,7 @@ import {
   type ConstructionAssembly,
   type ConstructionMaterial,
 } from '@/domain/constructionLibrary';
+import { findSpaceUse, OTHER_USE, spaceUseGroupsFor, UNASSIGNED_USE } from '@/domain/spaceUses';
 import { acceptsFloorFinish, BUILDING_CONSTRUCTIONS, FLOOR_FINISHES, floorFinishOf, matchingFloorAssembly, projectConstruction, suggestForRoom, withFloorFinish, type Suggestion } from '@/domain/envelopeDefaults';
 import { WALL_TYPES, isOutsideInterfaceKey, wallKindFor, wallName, edgePortions, facePortions, findInterface, interfaceTargets, northDegrees, wallPlaceLabel, type InterfaceTarget, type WallPortion } from '@/domain/walls';
 import { StackEditor } from './StackEditor';
@@ -1015,10 +1015,16 @@ function RoomFields({
       <label className="field">
         <span>Use</span>
         <select value={room.use} onChange={event => onChange(updateRoom(project, room.id, { use: event.target.value, assumption: false }))}>
-          {ROOM_USES.map(use => (
-            <option key={use}>{use}</option>
+          <option>{UNASSIGNED_USE}</option>
+          {spaceUseGroupsFor(project.buildingType).map(group => (
+            <optgroup key={group.id} label={group.label}>
+              {group.uses.map(use => (
+                <option key={use.name}>{use.name}</option>
+              ))}
+            </optgroup>
           ))}
-          {!ROOM_USES.includes(room.use as (typeof ROOM_USES)[number]) && <option>{room.use}</option>}
+          <option>{OTHER_USE}</option>
+          {room.use !== UNASSIGNED_USE && room.use !== OTHER_USE && !findSpaceUse(room.use) && <option>{room.use}</option>}
         </select>
       </label>
       <section className="prop-block">

@@ -63,7 +63,7 @@ corner. 15 people × 160 ft² ≈ 2,400 ft².
      can type exact values afterwards.
 3. With the space selected, set these in the right panel:
    - **Name:** "Open office"
-   - **Use:** **Office**
+   - **Use:** **Office**, in the **Office** group. Uses are grouped by kind of building; wet and cold rooms also change the suggested floors and ceilings.
    - **Floor:** "Slab on grade 4 in, carpet". Components are named by how they are built and grouped by
      construction class. The **Suggested** group at the top fits where the surface sits (ground floor, top
      floor, outside or shared wall) and the project's Construction; hover a field to see why.

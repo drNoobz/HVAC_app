@@ -1,6 +1,7 @@
 import { normalizeSite } from './climate';
 import { assemblyFamily, builtinAssembly, cloneLayers } from './constructionLibrary';
 import { defaultAssemblyId } from './envelopeDefaults';
+import { spaceUseFill } from './spaceUses';
 import type { ControlPoint, DuctNode, DuctRun, LoadItem, PlantLoop, Project, Room, SurfaceAssignment, WallFace } from './types';
 
 export const WALL_FACE_IDS: WallFace[] = ['px', 'nx', 'py', 'ny'];
@@ -34,24 +35,9 @@ export const PLAN_SIDES: Record<WallFace, { title: string; edge: 'top' | 'left' 
   ny: { title: 'Bottom', edge: 'bottom' },
 };
 
-const ROOM_FILL: Record<string, string> = {
-  Dining: '#f3e4c4',
-  Bar: '#ead7b4',
-  Kitchen: '#f3cfc2',
-  'Hot line': '#f0c0ae',
-  Prep: '#f6ddd2',
-  Dish: '#d5e4ea',
-  'Walk-in': '#d2e2f2',
-  Restroom: '#e2dff2',
-  Corridor: '#e6eaec',
-  Storage: '#e5e3d4',
-  'Dry storage': '#e5e3d4',
-  Office: '#d9e7dc',
-  Service: '#e6eaec',
-};
-
+/** Plan fill for a room, from its use (src/domain/spaceUses.ts). */
 export function roomFill(use: string): string {
-  return ROOM_FILL[use] ?? '#e4ebf0';
+  return spaceUseFill(use);
 }
 
 /** Shared by the plan and the 3D view. */

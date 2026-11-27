@@ -42,6 +42,7 @@ Run with `npm run dev` (port 3100).
 | Duct flow directions and sums | `src/domain/ducts.ts` |
 | Check phase issues | `src/domain/checks.ts` |
 | Floors, walls, ceilings (components, families, suggestions) | `src/domain/construction-assemblies.json`, `src/domain/envelopeDefaults.ts` |
+| Space uses (grouped Use list, occupied / wet / cold flags, plan fills) | `src/domain/spaceUses.ts` |
 
 ## Guides
 

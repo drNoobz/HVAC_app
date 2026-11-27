@@ -96,7 +96,7 @@ export const SIMPLE_OFFICE: Tutorial = {
       alt: 'The space selected, with its settings in the right panel',
       callouts: [
         'Change **Name** to "Open office".',
-        'Set **Use** to **Office**.',
+        'Set **Use** to **Office**, in the **Office** group. Uses are grouped by kind of building (office, retail, food, education, assembly, lodging and healthcare, industrial, shared spaces). Wet rooms such as restrooms and cold rooms such as walk-ins also change what is suggested below.',
         'Set **Floor** to "Slab on grade 4 in, carpet". Floors, walls and ceilings are named by how they are built and grouped by construction class. The **Suggested** group at the top fits where the surface sits (ground floor, top floor, outside or shared wall) and the project\'s **Construction**; hover a field to see why.',
         '**Floor finish** now reads **Carpet**. Change it to tile, vinyl, hardwood or bare concrete at any time; the floor under it stays the same.',
         'Set **Ceiling** to "Exposed roof deck, membrane on R-30 polyiso", for a single-storey building with no dropped ceiling.',
