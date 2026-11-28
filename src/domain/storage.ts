@@ -1,3 +1,4 @@
+import { assignTags } from './tags';
 import type { Project, StoredTemplate } from './types';
 import { normalizeProject } from './walls';
 
@@ -27,7 +28,7 @@ export function loadState(): PlannerState {
     }
     return {
       schemaVersion: 1,
-      projects: parsed.projects.map(project => normalizeProject(project, EMPTY_WALL_NOTE)),
+      projects: parsed.projects.map(project => assignTags(normalizeProject(project, EMPTY_WALL_NOTE))),
       templates: parsed.templates.map(template => ({ ...template, project: normalizeProject(template.project, EMPTY_WALL_NOTE) })),
     };
   } catch {

@@ -148,6 +148,8 @@ export interface HvacSystem {
   name: string;
   kind: SystemKind;
   notes: string;
+  /** The app names it from its kind and the spaces it serves, until the user types a name (`systemNames.ts`). */
+  autoName?: boolean;
 }
 
 export type DuctService = 'supply' | 'return' | 'exhaust' | 'outdoor' | 'relief' | 'mixed';
@@ -321,6 +323,8 @@ export interface DuctRun {
 export interface PlacedEquipment {
   id: string;
   catalogId: string;
+  /** Drawing tag, such as RTU-1 or SD-3. Missing until `assignTags` numbers it; the user can rename it. */
+  tag?: string;
   roomId: string | null;
   systemId: string | null;
   /** Footprint center, meters. */

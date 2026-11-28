@@ -220,7 +220,7 @@ export const SIMPLE_OFFICE: Tutorial = {
     {
       id: 'system',
       title: 'Name the system',
-      intro: 'The new system is selected, so the right panel shows it.',
+      intro: 'The new system is selected, so the right panel shows it. The app names a new system by what it does and the spaces it serves, here **Heating and cooling · Open office**, and keeps that name up to date until you type your own.',
       image: '13-system.webp',
       alt: 'The placed rooftop system',
       callouts: [
@@ -257,6 +257,21 @@ export const SIMPLE_OFFICE: Tutorial = {
           text: '**Why 4 tons?** The room needs about 2.75 tons and the 300 CFM of outdoor air about one more. The unit’s gas heat (110 kBtu/h input, about 88 kBtu/h output) covers the room’s 32,300 Btu/h plus warming the outdoor air (about 24,000 Btu/h).',
         },
       ],
+    },
+    {
+      id: 'tree',
+      title: 'Find things by their tag',
+      intro: 'Every unit, diffuser and grille gets a tag, as on a drawing: RTU-1, SD-1, RG-1. The plan, the 3D view and the Systems tree all use it.',
+      image: '14b-tree.webp',
+      alt: 'A supply diffuser selected on the plan and in the Systems tree',
+      callouts: [
+        'Click a diffuser on the plan. Its label is its tag.',
+        'The left panel’s **Project** tab opens the tree to the same diffuser and highlights it.',
+        'The tree lists each system by the air it moves (supply, return, outdoor air, exhaust), then by room. Each row shows the tag, what it is and its airflow.',
+        'Each air has its ducts folded into one group, such as **Supply ducts**. Open it to see each run by what it serves, with its size in inches. Every duct is listed once, here. **Equipment** and **Ducts** at the top of the tree show only one kind; **All** shows both.',
+        'To rename an item, change **Tag** in the right panel. New items get the next free number.',
+      ],
+      after: [{ kind: 'p', text: 'A red **!** on a system, air group or duct row means a clash; **Check** lists it. Anything that belongs to no system is listed under **Not in a system** at the bottom of the tree.' }],
     },
     {
       id: 'branch',

@@ -448,6 +448,30 @@ async function main() {
       ]);
     });
 
+    // 14b. Tags and the Systems tree: click a diffuser on the plan, the tree opens to its row.
+    await run(async t => {
+      await t.tab('Project');
+      const diffuser = t.project().equipment.find(item => item.catalogId.startsWith('diff'));
+      await t.clickAt(diffuser.xM, diffuser.yM);
+      await t.sleep(300);
+    });
+    await shot('14b-tree', t => {
+      const diffuser = t.project().equipment.find(item => item.catalogId.startsWith('diff'));
+      const active = t.side().querySelector('.tree-row.active');
+      t.mark([
+        { el: t.plan().querySelector(`g[data-hit="equipment"][data-id="${diffuser.id}"]`), pad: 8 },
+        { el: active, pad: 1, badge: 'r' },
+        { el: t.treeRow('Collapse Supply air'), pad: 1, badge: 'r' },
+        { el: t.treeRow('Expand Supply ducts'), pad: 1, badge: 'r' },
+        { el: t.fieldLabel('Tag'), badge: 'r' },
+      ]);
+    });
+    await run(async t => {
+      await t.tab('Catalogue');
+      const unit = t.project().equipment.find(item => item.catalogId === 'rtu-4');
+      await t.clickAt(unit.xM, unit.yM);
+    });
+
     // 15. Branch
     await run(async t => {
       await t.expand('Ducts');

@@ -15,6 +15,7 @@ import { getLoadProduct, LOAD_CATEGORY_COLOR } from './loadCatalog';
 import { loadLabel, loadPlanSize } from './loads';
 import type { DuctService, Project, Room, Selection, WallFace } from './types';
 import { formatArea, formatFlow } from './units';
+import { equipmentTag } from './tags';
 import { fade, ink } from './theme';
 import { LABEL_PRIORITY } from './viewRules';
 import { outlineCentroid, polygonArea, runGeom, solidSpans, WALL_THICK_M } from './wallDraw';
@@ -451,11 +452,13 @@ function addEquipment(pieces: ScenePiece[], labels: SceneLabel[], project: Proje
       // The neck: from the top of the terminal up into the duct, part of the duct run.
       pieces.push({ key: `eq:${item.id}:neck`, category: 'ducts', shape: 'tube', from: [item.xM, item.yM, top - 0.01], to: [item.xM, item.yM, hang.z], radius: hang.neckRadius, color: hang.color, systemId: hang.systemId, pick: { kind: 'duct', id: hang.runId } });
     }
-    const name = product ? product.model || product.name : 'Equipment';
+    // The tag, as on the plan and in the Systems tree; the model shows as detail.
+    const name = equipmentTag(item);
     labels.push({
       key: `eq:${item.id}:label`,
       category: terminal ? 'terminals' : 'equipment',
       text: item.quantity > 1 ? `${name} ×${item.quantity}` : name,
+      ...(product?.model ? { detail: product.model } : {}),
       at: [item.xM, item.yM, top + 0.3],
       priority: LABEL_PRIORITY.equipment,
       detailOnly: true,

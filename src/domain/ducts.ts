@@ -2,7 +2,7 @@ import { equipmentSizeM, getProduct, isSchematicOnly } from './catalog';
 import { designFlow, placedPorts, portFlow } from './airUnits';
 import { streamFor } from './ductCatalog';
 import type { DuctEnd, DuctNode, DuctPenetration, DuctRun, DuctService, DuctView, PlacedEquipment, Project, Room, StreamDesign, SystemKind, WallFace, WallRun } from './types';
-import { formatFlow, formatLength, formatNumber } from './units';
+import { formatFlow, formatNumber } from './units';
 import { pointInOutline, roomLoop, type DrawPoint } from './wallDraw';
 
 export function ductViewOf(run: Pick<DuctRun, 'view'> | undefined | null): DuctView {
@@ -296,9 +296,12 @@ export function polylineLength(points: readonly { x: number; y: number }[]): num
   return length;
 }
 
+/** Duct sizes the way catalogues and drawings give them: whole inches, or millimetres. */
 export function ductSizeLabel(run: Pick<DuctRun, 'shape' | 'widthM' | 'heightM'>, units: Project['units']): string {
-  if (run.shape === 'rect') return `${formatLength(run.widthM, units, 2)} × ${formatLength(run.heightM ?? run.widthM, units, 2)}`;
-  return `ø ${formatLength(run.widthM, units, 2)}`;
+  const one = (m: number) => (units === 'IP' ? `${Math.round(m / 0.0254)}` : `${Math.round(m * 1000)}`);
+  const unit = units === 'IP' ? 'in' : 'mm';
+  if (run.shape === 'rect') return `${one(run.widthM)} × ${one(run.heightM ?? run.widthM)} ${unit}`;
+  return `ø ${one(run.widthM)} ${unit}`;
 }
 
 export function portWorld(

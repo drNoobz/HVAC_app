@@ -174,6 +174,23 @@ The 3D view follows these conventions too. It draws the list `buildScene(project
   of the crossing and the middle piece lowered to pass under the other with a 50 mm gap. Near equipment at a run end
   the low piece runs on to the end, so the drop never lands inside a diffuser. `pruneNodes` never merges runs at
   different heights, so a hop survives later edits.
+- **Tags, not model names:** equipment is named by its stored tag (`PlacedEquipment.tag`, `src/domain/tags.ts`):
+  RTU-1, SD-3, RG-2, EF-1. Plan labels, 3D labels (model as detail) and tree rows show the tag; the model and
+  manufacturer stay in the inspector. `assignTags` runs on every edit and load and only fills missing tags, so a
+  user's rename is never changed. Templates need not set tags.
+- **Duct sizes** read in whole inches in IP (`ø 14 in`, `16 × 10 in`) and mm in SI (`ductSizeLabel`).
+- **Systems tree** (`systemOutline` in `src/domain/systemTree.ts`): system → head equipment, then one group per air
+  (supply, return, outdoor, mixed, exhaust, relief) → room → terminals by tag, with a folded duct group per air
+  ("Supply ducts") whose rows name what each run serves ("Main · SD-1–6", "H-2 → EF-4"). Each duct is listed once,
+  there: the user asked for no separate duct list (the old "Duct runs" panel was removed). **All · Equipment ·
+  Ducts** chips narrow the tree; in Ducts the runs sit straight under their air. Equipment and ducts in no system (or a
+  deleted one) go under **Not in a system** at the bottom, and Check lists each. Never list items by product name
+  alone, and never show a row of identical names. A clash puts a red "!" on the duct row and on every group above
+  it. Selecting on the canvas opens the path (`outlinePath`) and highlights the row.
+- **System names** (`src/domain/systemNames.ts`): a system the app creates (drop, system template, + Add system) has
+  `autoName` and is named "kind · spaces it serves" ("Heating and cooling · Open office", two spaces then "+n"),
+  kept up to date on every edit and numbered when taken. Typing a name turns `autoName` off; clearing it turns it
+  back on. Project templates (the restaurant) keep their written names.
 - **Flow marks:** flat chevrons painted on the top of the duct, about one every 3 m, like the air key's Flow mark.
   They are unlit, so they read the same from any angle. No arrows or cones stand outside a duct.
 - **Look:** a sun with soft shadows and a cool fill light. Shadows is a setting (Layers → Visibility and graphics);

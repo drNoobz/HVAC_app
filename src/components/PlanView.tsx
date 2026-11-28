@@ -24,6 +24,7 @@ import { doorArc, doorHinge, doorSwingSide, doorwayKey, openingEnds } from '@/do
 import { clampSharedEdge, moveRoomEdge, slideOpeningsTogether } from '@/domain/spanFit';
 import { fade, ink, PLAN_COLOR, wash } from '@/domain/theme';
 import type { DuctClash } from '@/domain/clashes';
+import { equipmentTag } from '@/domain/tags';
 import { INTERFACE_COLOR, MARK_COLOR, WALL_FACE_IDS, edgePortions, facePortions, findInterface, interfaceConstructionColor, interfaceTargets, northDegrees, roomFill, snapDrawnRect, snapPointToWalls, snapSpaceDelta, snapWallEdge, touchingRooms, wallColor, type WallPortion } from '@/domain/walls';
 
 const SNAP_M = 0.05;
@@ -2724,7 +2725,8 @@ function EquipmentMark({
   onContextMenu: (selection: Selection, x: number, y: number) => void;
 }) {
   const product = getProduct(item.catalogId);
-  const { name, roof } = equipmentLabel(item.catalogId);
+  const { roof } = equipmentLabel(item.catalogId);
+  const name = equipmentTag(item);
   const size = equipmentSizeM(product);
   const length = Math.max(size.lengthM, 0.05);
   const width = Math.max(size.widthM, 0.05);

@@ -41,6 +41,7 @@ Run with `npm run dev` (port 3100).
 | Duct catalogue, air types, colours | `src/domain/ductCatalog.ts` |
 | Duct flow directions and sums | `src/domain/ducts.ts` |
 | Check phase issues, duct clashes | `src/domain/checks.ts`, `src/domain/clashes.ts` |
+| Equipment tags (RTU-1, SD-3), Systems tree grouping, automatic system names | `src/domain/tags.ts`, `src/domain/systemTree.ts`, `src/domain/systemNames.ts` |
 | Floors, walls, ceilings (components, families, suggestions) | `src/domain/construction-assemblies.json`, `src/domain/envelopeDefaults.ts` |
 | Space uses (grouped Use list, occupied / wet / cold flags, plan fills) | `src/domain/spaceUses.ts` |
 | 3D view (React Three Fiber), its scene list and Visibility and graphics | `src/components/Viewport.tsx`, `src/domain/scene3d.ts`, `src/domain/view3d.ts` |

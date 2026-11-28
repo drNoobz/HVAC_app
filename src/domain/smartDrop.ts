@@ -209,7 +209,7 @@ export function newSystemName(project: Project, kind: SystemKind, room: Room | n
 /** Add a system of a kind, named for the room at the point. */
 export function createSystemAt(project: Project, kind: SystemKind, point: { xM: number; yM: number }): { project: Project; system: HvacSystem } {
   const room = roomAtPoint(project.rooms, point.xM, point.yM);
-  const system: HvacSystem = { id: createId('sys'), name: newSystemName(project, kind, room), kind, notes: '' };
+  const system: HvacSystem = { id: createId('sys'), name: newSystemName(project, kind, room), kind, notes: '', autoName: true };
   return { project: { ...project, systems: [...project.systems, system] }, system };
 }
 

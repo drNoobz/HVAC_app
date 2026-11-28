@@ -1,5 +1,6 @@
 'use client';
 
+import { equipmentTag } from '@/domain/tags';
 import { Fragment, useState } from 'react';
 import { ink } from '@/domain/theme';
 import { CATEGORY_LABEL, getProduct, type CatalogProduct } from '@/domain/catalog';
@@ -1322,7 +1323,13 @@ function SystemFields({
         <p className="prop-kicker">System</p>
         <h2>{system.name}</h2>
       </header>
-      <TextField label="Name" value={system.name} focusToken={nameFocus} onCommit={name => onChange(updateSystem(project, system.id, { name }))} />
+      <TextField
+        label="Name"
+        value={system.name}
+        focusToken={nameFocus}
+        onCommit={name => onChange(name.trim() ? updateSystem(project, system.id, { name: name.trim(), autoName: false }) : updateSystem(project, system.id, { autoName: true }))}
+      />
+      {system.autoName && <p className="muted">Named from its kind and spaces. Type a name to keep your own.</p>}
       <label className="field">
         <span>Kind</span>
         <select
@@ -1418,6 +1425,18 @@ function productSpecRows(product: CatalogProduct, units: Project['units']): { la
   ];
 }
 
+/** The item's drawing tag (RTU-1, SD-3). Cleared, it gets the next free number again. */
+function TagField({ project, item, onChange }: { project: Project; item: PlacedEquipment; onChange: (project: Project) => void }) {
+  const tag = equipmentTag(item);
+  const twin = project.equipment.some(other => other.id !== item.id && equipmentTag(other) === tag);
+  return (
+    <>
+      <TextField label="Tag" value={tag} onCommit={value => onChange(updateEquipment(project, item.id, { tag: value.trim() || undefined }))} />
+      {twin && <p className="warn-line">Another item is also tagged {tag}.</p>}
+    </>
+  );
+}
+
 function EquipmentFields({
   project,
   equipmentId,
@@ -1443,6 +1462,7 @@ function EquipmentFields({
         <p className="prop-kicker">Equipment</p>
         <h2>{product ? product.name : 'Missing product'}</h2>
       </header>
+      <TagField project={project} item={item} onChange={onChange} />
       {product && (
         <dl className="spec-list">
           {productSpecRows(product, project.units).map(row => (
@@ -2183,6 +2203,7 @@ function UnitFields({
         <h2>{product.model}</h2>
         <p className="muted">{product.name}</p>
       </header>
+      <TagField project={project} item={item} onChange={onChange} />
       <label className="field">
         <span>System</span>
         <select value={item.systemId ?? ''} onChange={event => onChange(updateEquipment(project, item.id, { systemId: event.target.value || null }))}>

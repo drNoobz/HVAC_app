@@ -6,6 +6,9 @@ import { catalogToken, setActiveCatalogDrag, type CatalogDrag } from '@/domain/c
 import { createSystemAt, dropRole, ductStart, joinTarget, packageAround, packagesFor, runUnder, systemDistance, systemKindsFor } from '@/domain/smartDrop';
 import { buildChecks, stepForSelection, type BuildStep, type CheckIssue } from '@/domain/checks';
 import { projectClashes } from '@/domain/clashes';
+import { assignTags, equipmentTag, tagKind } from '@/domain/tags';
+import { refreshSystemNames } from '@/domain/systemNames';
+import { outlinePath, systemOutline, type OutlineShow, type OutlineNode } from '@/domain/systemTree';
 import { siteMissing, siteOf } from '@/domain/climate';
 import { LOOP_FLUID_LABEL, newPlantLoop, SENSOR_LABEL } from '@/domain/controls';
 import { SECTION_LABEL, unitSections } from '@/domain/airUnits';
@@ -57,8 +60,8 @@ import {
   roomAtPoint,
 } from '@/domain/projectOps';
 import { buildBom, buildConstructionBom, buildConstructionSchedule, buildSchedule, projectSummary, scheduleCsv } from '@/domain/schedule';
-import { DUCT_CATALOG, DUCT_STREAMS, ductPairAllowed, getDuctProduct, servicesFor, streamFor, systemsForProduct } from '@/domain/ductCatalog';
-import { ductSizeLabel, DUCT_SERVICES, DUCT_SERVICE_LABEL, openPorts, type DuctDraftPoint } from '@/domain/ducts';
+import { DUCT_CATALOG, DUCT_STREAMS, SERVICE_COLOR, ductPairAllowed, getDuctProduct, servicesFor, streamFor, systemsForProduct } from '@/domain/ductCatalog';
+import { DUCT_SERVICES, DUCT_SERVICE_LABEL, openPorts, type DuctDraftPoint } from '@/domain/ducts';
 import { SURFACE_FACES, SYSTEM_KINDS, WALL_FACES, type DuctService, type EditorTool, type Project, type Selection, type StoredTemplate, type WallFace } from '@/domain/types';
 import { polygonArea } from '@/domain/wallDraw';
 import { INTERFACE_COLOR, WALL_TYPES, edgePortions, findInterface, interfaceForOpening, interfaceTargets, portionSummary, roomFill, wallColor, wallName, wallPlaceLabel, wallRoleLabel } from '@/domain/walls';
@@ -230,8 +233,14 @@ export function Studio({
     past.current = [...past.current, project].slice(-40);
     future.current = [];
     setHistoryTick({ undo: true, redo: false });
-    onChange(next);
+    // New items get the next free tag (SD-7, EF-2); tags already set stay as they are.
+    onChange(refreshSystemNames(assignTags(next)));
   };
+  // A project opened without tags (a new template project, or one saved before tags) is numbered once.
+  useEffect(() => {
+    const tagged = assignTags(project);
+    if (tagged !== project) onChange(tagged);
+  }, [project, onChange]);
   /** A system made for a dropped duct. If the user leaves the duct tool before drawing anything, it goes again. */
   const pendingSystem = useRef<{ id: string; before: Project } | null>(null);
   const latestProject = useRef(project);
@@ -343,6 +352,7 @@ export function Studio({
   const validation = useMemo(() => validateModel(projectToBuildingModel(project)), [project]);
   /** Duct clashes in the 3D model: listed in Check and marked in the Plan and 3D views. */
   const clashes = useMemo(() => projectClashes(project), [project]);
+  const clashRuns = useMemo(() => new Set(clashes.flatMap(clash => (clash.kind === 'duct' ? [clash.runId, clash.otherId] : [clash.runId]))), [clashes]);
   const checks = useMemo(() => {
     const geometry = validation.issues.flatMap(issue =>
       issue.severity === 'error' || issue.severity === 'warning'
@@ -548,7 +558,7 @@ export function Studio({
     const next = addSystem(project, kind);
     const created = next.systems[next.systems.length - 1];
     const name = SYSTEM_KINDS.find(item => item.id === kind)?.label ?? 'New system';
-    edit(updateSystem(next, created.id, { name }));
+    edit(updateSystem(next, created.id, { name, autoName: true }));
     setSelection({ kind: 'system', id: created.id });
   };
   const openSystemMenu = (x: number, y: number) => {
@@ -729,18 +739,11 @@ export function Studio({
     const before = new Set(project.systems.map(system => system.id));
     const placed = applySystemPackage(project, packageOrId, point);
     if (placed === project) return;
-    // A second copy of a template gets numbered system names, so the two stay apart in lists.
-    const taken = new Set(project.systems.map(system => system.name));
-    const next = {
+    // Systems dropped from a template are named by kind and the spaces they serve, numbered when taken.
+    const next = refreshSystemNames({
       ...placed,
-      systems: placed.systems.map(system => {
-        if (before.has(system.id) || !taken.has(system.name)) return system;
-        let n = 2;
-        while (taken.has(`${system.name} ${n}`)) n += 1;
-        taken.add(`${system.name} ${n}`);
-        return { ...system, name: `${system.name} ${n}` };
-      }),
-    };
+      systems: placed.systems.map(system => (before.has(system.id) ? system : { ...system, autoName: true })),
+    });
     edit(next);
     const created = next.systems.find(system => !before.has(system.id));
     setScene('plan');
@@ -1123,18 +1126,7 @@ export function Studio({
                     {project.systems.length === 0 && project.equipment.length === 0 ? (
                       <p className="panel-empty">Add a system, such as kitchen exhaust or make-up air, then place its equipment.</p>
                     ) : (
-                      <ProjectTree scope="systems" project={project} selection={selection} onSelect={select} onContextMenu={openMenu} />
-                    )}
-                  </section>
-                  <section className="panel-section">
-                    <header className="panel-head">
-                      <h3>Duct runs</h3>
-                      <span className="panel-meta">{(project.ducts ?? []).length}</span>
-                    </header>
-                    {(project.ducts ?? []).length === 0 ? (
-                      <p className="panel-empty">No ducts yet. Drag a product from Catalogue onto the plan.</p>
-                    ) : (
-                      <ProjectTree scope="ducts" project={project} selection={selection} onSelect={select} onContextMenu={openMenu} />
+                      <ProjectTree scope="systems" project={project} selection={selection} onSelect={select} onContextMenu={openMenu} clashRuns={clashRuns} />
                     )}
                   </section>
                                   <section className="panel-section">
@@ -1615,7 +1607,8 @@ export function Studio({
                         <select value={targetSystemId} onChange={event => setTargetSystemId(event.target.value)}>
                           <option value="">No system</option>
                           {project.systems.map(system => (
-                            <option key={system.id} value={system.id}>
+                            // Keyed by name too: Chrome keeps a select as wide as an option's old text when it is renamed.
+                            <option key={`${system.id}:${system.name}`} value={system.id}>
                               {system.name}
                             </option>
                           ))}
@@ -1992,12 +1985,15 @@ function ProjectTree({
   onSelect,
   onContextMenu,
   scope,
+  clashRuns,
 }: {
   project: Project;
   selection: Selection;
   onSelect: (selection: Selection) => void;
   onContextMenu: (selection: Selection, x: number, y: number) => void;
-  scope: 'spaces' | 'systems' | 'ducts';
+  scope: 'spaces' | 'systems';
+  /** Ducts in a clash, marked with a red "!" in the tree. */
+  clashRuns?: ReadonlySet<string>;
 }) {
   const storageKey = `hvac-tree-project:${project.id}`;
   const [expanded, setExpanded] = useState<Set<string>>(() => readExpanded(storageKey));
@@ -2015,6 +2011,13 @@ function ProjectTree({
       writeExpanded(storageKey, next);
       return next;
     });
+  const [show, setShow] = useState<OutlineShow>('all');
+  // Selecting something the filter hides (a duct while showing equipment) shows everything again.
+  if ((show === 'equipment' && selection.kind === 'duct') || (show === 'ducts' && selection.kind === 'equipment')) setShow('all');
+  const outline = useMemo(
+    () => (scope === 'spaces' ? [] : systemOutline(project, { show, clashRuns })),
+    [project, scope, show, clashRuns],
+  );
   const opened = useRef(false);
   useEffect(() => {
     if (!opened.current) {
@@ -2050,31 +2053,18 @@ function ProjectTree({
           if (side.anchor.startsWith('e:')) open(`edge:${side.roomId}:${side.anchor.slice(2)}`);
         });
       }
-      if (selection.kind === 'system') open(`system:${selection.id}`);
-      if (selection.kind === 'duct') {
-        const run = (project.ducts ?? []).find(item => item.id === selection.id);
-        if (run) {
-          open('systems');
-          open(`system:${run.systemId}`);
-        }
-      }
+      // Systems: open every group above the selected system, equipment or duct (system, air type, room, ductwork).
+      for (const key of outlinePath(outline, selection)) open(key);
       if (selection.kind === 'equipment') {
+        // Equipment in no system is also listed under its space in the Spaces tree.
         const item = project.equipment.find(entry => entry.id === selection.id);
-        if (item?.systemId) {
-          open('systems');
-          open(`system:${item.systemId}`);
-        } else if (item?.roomId) {
-          open('unassigned');
-          open(`room:${item.roomId}`);
-        } else {
-          open('unassigned');
-        }
+        if (item && !item.systemId && item.roomId) open(`room:${item.roomId}`);
       }
       if (!changed) return current;
       writeExpanded(storageKey, next);
       return next;
     });
-  }, [selection, project.rooms, project.equipment, project.ducts, storageKey]);
+  }, [selection, project.rooms, project.equipment, project.ducts, storageKey, outline]);
   const selected = (kind: Selection['kind'], id?: string) => selection.kind === kind && ('id' in selection ? selection.id === id : true);
   const unit = lengthUnit(project.units);
   const targets = interfaceTargets(project.rooms);
@@ -2085,7 +2075,6 @@ function ProjectTree({
         const startOf = (target: (typeof targets)[number]) => target.sides.find(side => side.roomId === roomId && side.anchor === anchor)?.startM ?? 0;
         return startOf(a) - startOf(b);
       });
-  const unassigned = project.equipment.filter(item => !item.systemId);
   const roomNodes = project.rooms.map(room => {
         const roomKey = `room:${room.id}`;
         const roomClosed = closed(roomKey);
@@ -2234,7 +2223,8 @@ function ProjectTree({
                       content={
                         <>
                           {product ? <EquipmentIcon name={equipmentIconFor(product)} /> : null}
-                          <span className="tree-label">{product ? product.model : item.catalogId}</span>
+                          <span className="tree-label">{equipmentTag(item)}</span>
+                          <span className="tree-kind">{tagKind(product).kind}</span>
                           {item.quantity > 1 && <span className="tree-meta">× {item.quantity}</span>}
                         </>
                       }
@@ -2244,64 +2234,53 @@ function ProjectTree({
           </TreeNode>
         );
       });
-  const systemNodes = project.systems.map(system => {
-        const systemKey = `system:${system.id}`;
-        const systemClosed = closed(systemKey);
-        const members = scope === 'ducts' ? [] : project.equipment.filter(item => item.systemId === system.id);
-        const ducts = (project.ducts ?? []).filter(run => run.systemId === system.id);
-        if (scope === 'ducts' && ducts.length === 0) return null;
-        const childCount = members.length + ducts.length;
-        return (
-          <TreeNode
-            key={system.id}
-            active={selected('system', system.id)}
-            collapsed={childCount > 0 ? systemClosed : undefined}
-            toggleLabel={childCount > 0 ? `${systemClosed ? 'Expand' : 'Collapse'} ${system.name}` : undefined}
-            onToggle={childCount > 0 ? () => toggle(systemKey) : undefined}
-            onSelect={() => onSelect({ kind: 'system', id: system.id })}
-            onMenu={event => onContextMenu({ kind: 'system', id: system.id }, event.clientX, event.clientY)}
-            content={<><strong><span>{system.name}</span></strong>{childCount > 0 && <span className="tree-meta">{childCount}</span>}</>}
-          >
-            {members.map(item => {
-              const product = getProduct(item.catalogId);
-              return (
-                <TreeNode key={item.id} active={selected('equipment', item.id)} onSelect={() => onSelect({ kind: 'equipment', id: item.id })} onMenu={event => onContextMenu({ kind: 'equipment', id: item.id }, event.clientX, event.clientY)} content={<>{product ? <EquipmentIcon name={equipmentIconFor(product)} /> : null}<span className="tree-label">{product ? product.model : item.catalogId}</span>{item.quantity > 1 && <span className="tree-meta">× {item.quantity}</span>}</>} />
-              );
-            })}
-            {ducts.map(run => (
-              <TreeNode
-                key={run.id}
-                active={selected('duct', run.id)}
-                onSelect={() => onSelect({ kind: 'duct', id: run.id })}
-                onMenu={event => onContextMenu({ kind: 'duct', id: run.id }, event.clientX, event.clientY)}
-                content={<><span className="tree-label">{DUCT_SERVICES.find(item => item.id === run.service)?.label ?? 'Duct'}</span><span className="tree-meta">{ductSizeLabel(run, project.units)}</span></>}
-              />
-            ))}
-          </TreeNode>
-        );
-      });
+  const renderOutline = (node: OutlineNode, depth = 0): ReactNode => {
+    const branch = (node.children?.length ?? 0) > 0;
+    const isClosed = closed(node.key);
+    const target = node.selection;
+    const label = <span className="tree-label">{node.label}</span>;
+    return (
+      <TreeNode
+        key={node.key}
+        active={target ? selected(target.kind, 'id' in target ? target.id : undefined) : false}
+        collapsed={branch ? isClosed : undefined}
+        toggleLabel={branch ? `${isClosed ? 'Expand' : 'Collapse'} ${node.label}` : undefined}
+        onToggle={branch ? () => toggle(node.key) : undefined}
+        onSelect={() => (target ? onSelect(target) : toggle(node.key))}
+        onMenu={target ? event => onContextMenu(target, event.clientX, event.clientY) : undefined}
+        content={
+          <>
+            {node.productId ? <EquipmentIcon name={equipmentIconFor(getProduct(node.productId)!)} /> : null}
+            {node.service ? <i className="tree-air" style={{ background: ink(SERVICE_COLOR[node.service]) }} aria-hidden="true" /> : null}
+            {depth === 0 ? <strong>{label}</strong> : label}
+            {node.kind ? <span className="tree-kind">{node.kind}</span> : null}
+            {node.warn ? <span className="tree-warn" title="Clash: see Check" aria-label="Clash">!</span> : null}
+            {node.meta ? <span className="tree-meta">{node.meta}</span> : null}
+          </>
+        }
+      >
+        {node.children?.map(child => renderOutline(child, depth + 1))}
+      </TreeNode>
+    );
+  };
+  const systemNodes = outline.map(node => renderOutline(node));
   if (scope === 'spaces') return <ul className="tn-tree">{roomNodes}</ul>;
-  if (scope === 'ducts') return <ul className="tn-tree">{systemNodes}</ul>;
+  const shows: { id: OutlineShow; label: string }[] = [
+    { id: 'all', label: 'All' },
+    { id: 'equipment', label: 'Equipment' },
+    { id: 'ducts', label: 'Ducts' },
+  ];
   return (
-    <ul className="tn-tree">
-      {systemNodes}
-      {unassigned.length > 0 && (
-        <TreeNode
-          collapsed={closed('unassigned')}
-          toggleLabel="No system"
-          onToggle={() => toggle('unassigned')}
-          onSelect={() => toggle('unassigned')}
-          content={<><span className="tree-label">No system</span><span className="tree-meta">{unassigned.length}</span></>}
-        >
-          {unassigned.map(item => {
-            const product = getProduct(item.catalogId);
-            return (
-              <TreeNode key={item.id} active={selected('equipment', item.id)} onSelect={() => onSelect({ kind: 'equipment', id: item.id })} onMenu={event => onContextMenu({ kind: 'equipment', id: item.id }, event.clientX, event.clientY)} content={<>{product ? <EquipmentIcon name={equipmentIconFor(product)} /> : null}<span className="tree-label">{product ? product.model : item.catalogId}</span>{item.quantity > 1 && <span className="tree-meta">× {item.quantity}</span>}</>} />
-            );
-          })}
-        </TreeNode>
-      )}
-    </ul>
+    <>
+      <div className="chip-row tree-show" role="group" aria-label="Show in the Systems tree">
+        {shows.map(item => (
+          <button key={item.id} type="button" className={show === item.id ? 'active' : ''} aria-pressed={show === item.id} onClick={() => setShow(item.id)}>
+            {item.label}
+          </button>
+        ))}
+      </div>
+      {systemNodes.length > 0 ? <ul className="tn-tree">{systemNodes}</ul> : <p className="panel-empty">{show === 'ducts' ? 'No ducts yet. Drag a duct from Catalogue onto the plan.' : 'Nothing to show.'}</p>}
+    </>
   );
 }
 function interfacePartyName(sides: { roomId: string; name: string }[], roomId: string): string {

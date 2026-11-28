@@ -954,6 +954,7 @@ function normalizeEquipment(value: Project['equipment']): Project['equipment'] {
     const designFlowM3s = finiteOrNull(item.designFlowM3s);
     return [{
       ...item,
+      tag: typeof item.tag === 'string' && item.tag.trim() ? item.tag.trim() : undefined,
       schematic,
       sections,
       designFlowM3s: designFlowM3s != null && designFlowM3s > 0 ? designFlowM3s : null,

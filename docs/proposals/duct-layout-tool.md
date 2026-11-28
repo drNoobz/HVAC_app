@@ -34,7 +34,7 @@ tool that works the same way in the Plan and 3D views.
 | **Bentley OpenBuildings** | A Bypass tool routes a duct around an obstruction. | It builds the offset for you. | One action to hop a crossing. |
 | **Revit add-ins** (EveryBIM "MEP Avoid", Greater BIM bends, MEP updown) | Pick a duct and an obstruction. | Moves that part up or down by a set offset and angle, keeping the rest. | Hop over or under with one pick. |
 | **Augmenta** (electrical today) | — | Automatic clash-free routing against the whole model, which a professional then checks. | Automatic routing is a helper whose result you review, not the main way to draw. |
-| **Cities: Skylines** (a game, for the gestures) | Drag a road. Page Up and Page Down raise and lower it while you draw. Guide lines and angle snapping; straight, curved and free modes; the slope shows as you go. | Bridges and ramps appear by themselves. | **Height on a key while drawing**, guides that show what will happen, and structure that appears by itself. |
+| **Cities: Skylines** (a game, for the gestures) | Drag a road. Page Up and Page Down raise and lower it while you draw. Guide lines and angle snapping; straight, curved and free modes; the slope shows as you go. | Bridges and ramps appear by themselves. | Change height while drawing, guides that show what will happen, and structure that appears by itself. (Not its keys: see principle 4.) |
 
 Two patterns stand out:
 
@@ -48,18 +48,23 @@ We want the second feel with the first's results.
 
 ## 3. Principles
 
-1. **One tool, two views.** The same duct tool, the same keys and the same snapping in Plan and in 3D. 3D only adds
+1. **One tool, two views.** The same duct tool, the same controls and the same snapping in Plan and in 3D. 3D only adds
    height you can see.
 2. **Draw the path, never the fittings.** Elbows, tees, risers, drops and hops are drawn for you, as they are today.
 3. **Start and end on things.** Ports, terminals, junctions and other ducts are magnets that light up as you get
    close. What you snap to sets the system, the air type and the size. You never pick a system from a menu.
-4. **Height is a step, not a number.** A few named levels per room: *high*, under the ceiling or deck (today's
-   default); *low*, one duct depth plus 50 mm lower, for crossings; and *custom*. Page Up and Page Down (or `[` and
-   `]`) step through them while drawing. A chip by the cursor shows the level, e.g. "High · 9′-2″".
+4. **Height is a step, not a number, and you change it where you see it.** A few named levels per room: *high*,
+   under the ceiling or deck (today's default); *low*, one duct depth plus 50 mm lower, for crossings; and *custom*.
+   No keyboard shortcuts (the user's choice, 2026-11-28). Two places to change it:
+   - **A small height panel on the canvas**, next to what it concerns: beside the leg being drawn, beside a selected
+     segment, or beside a clash. It shows the level ("High · 9′-2″") with ▲ and ▼ arrows that step through the
+     levels, and it moves out of the way of the duct.
+   - **The inspector's Elevation field**, as today, for an exact number.
 5. **Show it before it happens.** The preview shows the duct at its true width with its size, airflow and air speed,
    the corners it will get, and a red mark where it would clash.
 6. **Crossings fix themselves.** When the preview crosses another duct at the same height, the new duct hops under
-   it: a short drop, run under, rise back. Press `H` to hop over instead, or Page Down to run the whole duct low.
+   it: a short drop, run under, rise back. The height panel at the crossing offers **Over** instead, or ▼ to run the
+   whole duct low.
 7. **Edit by dragging.** Drag a segment sideways and its neighbours stretch; connections hold. Drag a corner. In 3D,
    drag a segment's height handle. No delete-and-redraw.
 8. **Helpers propose; the user decides.** "Connect" and the layout patterns draw a proposal the user can cycle
@@ -75,7 +80,8 @@ We want the second feel with the first's results.
    elbow. `Space` flips which leg goes first. Hold `Shift` for one straight leg at any angle, snapped to 45°.
 3. **Click** to fix a corner, or click a magnet to finish. A port, terminal or junction ends the run there. A duct of
    the same air makes a tee, as today. Ending on a terminal links it, and in 3D it hangs from that end.
-4. **Page Up and Page Down** change the level of the *next* leg. The riser or drop is added at the corner.
+4. **The height panel** beside the leg being drawn changes the level of that leg: click ▲ or ▼. The riser or drop is
+   added at the corner.
 5. `Esc` ends the run as it is. `Backspace` removes the last corner.
 
 **In 3D** the pointer moves on a horizontal plane at the current level. A faint grid patch under the pointer shows
@@ -104,7 +110,7 @@ highlight ring.
 |---|---|---|
 | Move a segment sideways | Drag it; its neighbours stretch, and the ends stay on their ports | Same, on its level's plane |
 | Move a corner | Drag the corner dot | Same |
-| Change height | `Page Up` / `Page Down` with the segment selected | Drag the arrow handle on the segment, which snaps to levels |
+| Change height | The height panel's ▲ ▼ beside the selected segment, or the inspector's Elevation | Same panel, plus dragging the arrow handle on the segment, which snaps to levels |
 | Hop a crossing | Right-click the crossing, then **Hop under** or **Hop over** | Same |
 | Add a corner | Double-click the segment | Same |
 | Resize | Inspector, or `+` / `−` | Same |
@@ -134,8 +140,8 @@ elbows, nodes are tees, and height changes are pairs of elbows.
 |---|---|---|
 | **0. Clash list** (built 2026-11-28) | `findClashes` (`src/domain/clashes.ts`) on the 3D scene; Check lists duct–duct and duct-through-equipment clashes | Done |
 | **1. Clash marks and quick fix** (built 2026-11-28) | Red rings with "!" at clashes in Plan and 3D (Systems and Check), click to select; **Hop under** on a duct clash (`hopUnder`); in Check a selected duct ghosts the surfaces in 3D | Done |
-| **2. Better drawing in Plan** | L-shaped preview with `Space` to flip; lit magnets; live size, airflow and speed; level chip with Page Up/Down; automatic hop when crossing at the same height; `Backspace` | Medium |
-| **3. Edit by dragging in Plan** | Drag segments and corners with connections kept; double-click to add a corner; height keys on a selection | Medium |
+| **2. Better drawing in Plan** | L-shaped preview with `Space` to flip; lit magnets; live size, airflow and speed; height panel with ▲ ▼ beside the leg; automatic hop when crossing at the same height; `Backspace` | Medium |
+| **3. Edit by dragging in Plan** | Drag segments and corners with connections kept; double-click to add a corner; height panel beside a selected segment | Medium |
 | **4. The same tool in 3D** | Drawing plane at the current level, magnets in 3D, height handles, drag segments | Large |
 | **5. Connect** | Branches from a main to selected terminals, sized from airflow | Medium |
 | **6. Suggest a layout** | Spine, loop and H proposals for a unit and its terminals, cycled with `Tab`, then edited | Large |
@@ -148,7 +154,8 @@ pictures. Phase 2 also rewrites the tutorial's duct step.
 1. **Crossing rule.** When two ducts cross, which one hops? The proposal is that the smaller one hops under the
    larger one. Some offices instead keep supply high and send return under.
 2. **Levels.** Is high / low / custom enough, or do you want named levels per project (e.g. "below beams")?
-3. **Keys.** Are Page Up/Page Down (with `[` and `]` for laptops) right for height?
+3. **Height control** (answered 2026-11-28): no keyboard shortcuts. Use the inspector, or a small panel with arrows
+   on the canvas next to the place it concerns.
 4. **Order.** Phase 2 (better drawing in Plan) first, or Phase 4 (drawing in 3D) first?
 
 ## Sources

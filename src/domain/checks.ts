@@ -3,7 +3,7 @@ import { designFlow, placedPorts, unitFlows, unitSections } from './airUnits';
 import { isLiquidLoop, isPiped } from './controls';
 import { siteMissing, siteOf } from './climate';
 import { getDuctProduct, streamFor } from './ductCatalog';
-import { DUCT_SERVICE_LABEL, ductAreaM2, ductFlows, ductViewOf, isOpenEnd, openPorts } from './ducts';
+import { DUCT_SERVICE_LABEL, ductAreaM2, ductFlows, ductSizeLabel, ductViewOf, isOpenEnd, openPorts } from './ducts';
 import { formatFlow } from './units';
 import { planningIssues } from './issues';
 import { getLoadProduct } from './loadCatalog';
@@ -12,6 +12,7 @@ import type { DuctService, Project, Selection } from './types';
 import { isOccupiedUse } from './spaceUses';
 import { clashHopper, projectClashes, type DuctClash } from './clashes';
 import { roomAtPoint } from './projectOps';
+import { equipmentTag } from './tags';
 
 export type BuildStep = 'spaces' | 'loads' | 'systems' | 'check';
 
@@ -134,15 +135,29 @@ export function buildChecks(
       });
     }
   }
+  // Items and ducts with no system, or one that was deleted, are listed under "Not in a system" in the tree.
+  const systemIds = new Set(project.systems.map(system => system.id));
   for (const item of project.equipment) {
     const product = getProduct(item.catalogId);
-    if (!product || item.systemId || placedPorts(item).length === 0) continue;
+    if (!product || (item.systemId && systemIds.has(item.systemId)) || placedPorts(item).length === 0) continue;
     issues.push({
       id: `eq-system-${item.id}`,
       step: 'systems',
       severity: 'planning',
-      message: `${product.model} is not in a system.`,
+      message: `${equipmentTag(item)} (${product.model}) is not in a system.`,
       selection: { kind: 'equipment', id: item.id },
+      fix: { kind: 'select' },
+      fixLabel: 'Assign',
+    });
+  }
+  for (const run of project.ducts ?? []) {
+    if (systemIds.has(run.systemId)) continue;
+    issues.push({
+      id: `duct-system-${run.id}`,
+      step: 'systems',
+      severity: 'planning',
+      message: `${DUCT_SERVICE_LABEL[run.service]} duct (${ductSizeLabel(run, project.units)}) is not in a system.`,
+      selection: { kind: 'duct', id: run.id },
       fix: { kind: 'select' },
       fixLabel: 'Assign',
     });
@@ -204,13 +219,6 @@ function controlIssues(project: Project): CheckIssue[] {
   return issues;
 }
 
-function ductSize(shape: string, widthM: number, heightM: number | null | undefined, units: Project['units']): string {
-  // Duct sizes the way the catalogue names them: whole inches, or millimetres.
-  const one = (m: number) => (units === 'IP' ? `${Math.round(m / 0.0254)}` : `${Math.round(m * 1000)}`);
-  const unit = units === 'IP' ? 'in' : 'mm';
-  return shape === 'rect' ? `${one(widthM)} × ${one(heightM ?? widthM)} ${unit}` : `ø ${one(widthM)} ${unit}`;
-}
-
 /**
  * Clashes in the 3D model: two ducts that overlap, or a duct through equipment it does not serve. Ducts are drawn
  * top-aligned under the ceiling, so two runs that cross in plan usually meet at the same height. A duct clash offers
@@ -224,7 +232,7 @@ function clashIssues(project: Project, clashes: readonly DuctClash[]): CheckIssu
     const run = runs.get(id)!;
     const system = project.systems.find(item => item.id === run.systemId);
     const label = system ? streamFor(system.kind, run.service)?.label ?? DUCT_SERVICE_LABEL[run.service] : DUCT_SERVICE_LABEL[run.service];
-    return `${label} duct ${ductSize(run.shape, run.widthM, run.heightM, project.units)}`;
+    return `${label} duct ${ductSizeLabel(run, project.units)}`;
   };
   return clashes.map(clash => {
     const [x, y, z] = clash.at;
