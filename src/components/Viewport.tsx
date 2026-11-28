@@ -1,40 +1,47 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+/**
+ * The 3D view, on React Three Fiber. It draws the list `buildScene()` makes from the project (the same helpers as the
+ * Plan view), with the Visibility and graphics settings: categories hidden or see-through, ghosted surfaces, and the
+ * phase fade. It renders on demand: nothing is drawn while the view is still.
+ */
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Grid, OrbitControls } from '@react-three/drei';
+import { memo, useEffect, useMemo, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { CATALOG_MIME, equipmentSizeM, getProduct } from '@/domain/catalog';
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
+import { CATALOG_MIME } from '@/domain/catalog';
 import { parseCatalogDrag } from '@/domain/catalogDrag';
-import type { EditorTool, PlacedEquipment, Project, Room, Selection, WallFace, WallRun } from '@/domain/types';
-import { outlineCentroid, runGeom, solidSpans, WALL_THICK_M } from '@/domain/wallDraw';
-import { doorArc, doorHinge, doorSwingSide } from '@/domain/doorSwing';
-import { currentTheme, useTheme, type Theme } from '@/domain/theme';
-import { INTERFACE_COLOR, MARK_COLOR, colorNumber, edgePortions, facePortions, interfaceConstructionColor, portionFill, portionInterfaceKey, roomFill, snapDrawnRect, snapPointToWalls } from '@/domain/walls';
+import type { BuildStep } from '@/domain/checks';
+import { SERVICE_COLOR } from '@/domain/ductCatalog';
+import { buildScene, pieceSelected, type SceneCategory, type SceneLabel, type ScenePiece, type Vec3 } from '@/domain/scene3d';
+import { sceneColor } from '@/domain/sceneColor';
+import { ink, PLAN_COLOR, useTheme, wash, type Theme } from '@/domain/theme';
+import type { DuctService, EditorTool, Project, Selection } from '@/domain/types';
+import { categoryOpacity, type LayerSwitches, type View3DSettings } from '@/domain/view3d';
+import { LABEL_ACTIVE } from '@/domain/viewRules';
+import { MARK_COLOR, northDegrees, snapDrawnRect, snapPointToWalls } from '@/domain/walls';
+import { AIR_KEY_LABEL, AIR_KEY_ORDER, AirKey, NorthGlyph, type AirKeyEntry } from './PlanView';
 
 const SNAP_M = 0.05;
 const MIN_DRAW_M = 0.4;
 const DEFAULT_HEIGHT_M = 3.05;
-const SHELL_M = 0.15;
-const SLAB_M = 0.05;
 const CLICK_PX = 10;
 const OPENING_PICK_PX = 14;
 const OPENING_BIAS_M = 0.45;
-const SELECT_GLOW = 0xf6ad55;
-const SELECT_EDGE = 0xd9843f;
-const HIGHLIGHT_OPACITY = 0.28;
-const EDGE_COLOR = 0x5c6d78;
+/** A click goes through anything fainter than this to what is behind it. */
+const PICK_SOLID = 0.6;
 
 export interface ViewportProps {
-  rooms: Room[];
-  equipment: PlacedEquipment[];
-  wallRuns?: WallRun[];
-  interfaceWalls?: Project['interfaceWalls'];
+  project: Project;
+  step: BuildStep;
+  layers: LayerSwitches & { labels: boolean };
+  view3d: View3DSettings;
   cameraPose?: 'orbit' | 'top';
   onCameraSettled?: (pose: 'orbit' | 'top') => void;
   selection: Selection;
   tool: EditorTool;
   fitToken: number;
-  hideRoof: boolean;
   onSelect: (selection: Selection) => void;
   onDrawRoom: (rect: { xM: number; yM: number; lengthM: number; widthM: number }) => void;
   onPlace: (point: { xM: number; yM: number }, catalogId: string) => void;
@@ -42,620 +49,452 @@ export interface ViewportProps {
   onContextMenu: (selection: Selection, x: number, y: number) => void;
 }
 
+/**
+ * Sky, light, grid and edges for each theme. Data colours (rooms, walls, air, equipment, loads) are not here: they come
+ * from the plan's colours through ink() / wash() and sceneColor(), so they match the plan in both themes.
+ */
+const SCENE_LOOK: Record<Theme, { background: number; sky: number; groundLight: number; light: number; sun: number; fill: number; gridMajor: number; gridMinor: number; edge: number; selectEdge: number }> = {
+  light: { background: 0xd7e1e8, sky: 0xf7fafc, groundLight: 0xc5d0d6, light: 1.0, sun: 1.15, fill: 0.3, gridMajor: 0x8aa0ae, gridMinor: 0xbfcbd3, edge: 0x5c6d78, selectEdge: 0xd9843f },
+  dark: { background: 0x0c1115, sky: 0xdde6ee, groundLight: 0x33404b, light: 0.95, sun: 1.05, fill: 0.25, gridMajor: 0x3b4a55, gridMinor: 0x222c34, edge: 0x8796a1, selectEdge: 0xd9843f },
+};
+
+const MOUSE_BUTTONS = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+const UP = new THREE.Vector3(0, 1, 0);
+const noRaycast = () => undefined;
+
+/** Unit shapes, shared by every piece and scaled into place. */
+let shapes: { box: THREE.BoxGeometry; boxEdges: THREE.EdgesGeometry; cylinder: THREE.CylinderGeometry; sphere: THREE.SphereGeometry; cone: THREE.ConeGeometry; chevron: THREE.ShapeGeometry } | null = null;
+function unitShapes() {
+  if (!shapes) {
+    const box = new THREE.BoxGeometry(1, 1, 1);
+    shapes = {
+      box,
+      boxEdges: new THREE.EdgesGeometry(box),
+      cylinder: new THREE.CylinderGeometry(1, 1, 1, 20),
+      sphere: new THREE.SphereGeometry(1, 18, 12),
+      cone: new THREE.ConeGeometry(1, 1, 18),
+      // The air key's Flow mark: a ">" one unit long and wide, pointing +x, lying flat.
+      chevron: new THREE.ShapeGeometry(
+        new THREE.Shape([new THREE.Vector2(0.5, 0), new THREE.Vector2(-0.15, 0.5), new THREE.Vector2(-0.5, 0.5), new THREE.Vector2(0.15, 0), new THREE.Vector2(-0.5, -0.5), new THREE.Vector2(-0.15, -0.5)]),
+      ),
+    };
+  }
+  return shapes;
+}
+
 function snap(value: number): number {
   return Math.round(value / SNAP_M) * SNAP_M;
-}
-
-function disposeNode(node: THREE.Object3D): void {
-  node.traverse(child => {
-    const mesh = child as THREE.Mesh;
-    mesh.geometry?.dispose();
-    const material = mesh.material;
-    const materials = Array.isArray(material) ? material : material ? [material] : [];
-    materials.forEach(item => {
-      const textured = item as THREE.MeshStandardMaterial;
-      textured.map?.dispose();
-      item.dispose();
-    });
-  });
-}
-
-/** Sky, light and grid for each theme. The model's own colours stay the same in both. */
-const SCENE_LOOK: Record<Theme, { background: number; sky: number; groundLight: number; light: number; gridMajor: number; gridMinor: number }> = {
-  light: { background: 0xd7e1e8, sky: 0xf7fafc, groundLight: 0xc5d0d6, light: 1.15, gridMajor: 0x8aa0ae, gridMinor: 0xc9d3db },
-  dark: { background: 0x0c1115, sky: 0xdde6ee, groundLight: 0x33404b, light: 1.05, gridMajor: 0x3b4a55, gridMinor: 0x1d262d },
-};
-
-function makeGrid(theme: Theme): THREE.GridHelper {
-  const look = SCENE_LOOK[theme];
-  const grid = new THREE.GridHelper(80, 80, look.gridMajor, look.gridMinor);
-  grid.rotation.x = Math.PI / 2;
-  return grid;
-}
-
-function makeLabel(text: string, accent: string): THREE.Sprite | null {
-  const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 128;
-  const context = canvas.getContext('2d');
-  if (!context) return null;
-  context.fillStyle = 'rgba(255,255,255,0.92)';
-  context.fillRect(8, 28, 496, 72);
-  context.strokeStyle = accent;
-  context.lineWidth = 6;
-  context.strokeRect(8, 28, 496, 72);
-  context.fillStyle = '#1c2430';
-  context.font = '600 44px Segoe UI, sans-serif';
-  context.textAlign = 'center';
-  context.textBaseline = 'middle';
-  const clipped = text.length > 24 ? `${text.slice(0, 23)}…` : text;
-  context.fillText(clipped, 256, 64);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
-  sprite.scale.set(3.4, 0.85, 1);
-  sprite.renderOrder = 10;
-  return sprite;
-}
-
-type Panel = { u: number; v: number; du: number; dv: number };
-
-function subtractPanel(panel: Panel, hole: Panel): Panel[] {
-  const x0 = panel.u;
-  const y0 = panel.v;
-  const x1 = panel.u + panel.du;
-  const y1 = panel.v + panel.dv;
-  const ix0 = Math.max(x0, hole.u);
-  const iy0 = Math.max(y0, hole.v);
-  const ix1 = Math.min(x1, hole.u + hole.du);
-  const iy1 = Math.min(y1, hole.v + hole.dv);
-  if (ix1 <= ix0 + 1e-4 || iy1 <= iy0 + 1e-4) return [panel];
-  const parts: Panel[] = [];
-  if (iy0 > y0 + 0.01) parts.push({ u: x0, v: y0, du: x1 - x0, dv: iy0 - y0 });
-  if (y1 > iy1 + 0.01) parts.push({ u: x0, v: iy1, du: x1 - x0, dv: y1 - iy1 });
-  if (ix0 > x0 + 0.01) parts.push({ u: x0, v: iy0, du: ix0 - x0, dv: iy1 - iy0 });
-  if (x1 > ix1 + 0.01) parts.push({ u: ix1, v: iy0, du: x1 - ix1, dv: iy1 - iy0 });
-  return parts;
-}
-
-function wallPanels(span: number, height: number, openings: Room['openings']): Panel[] {
-  let panels: Panel[] = [{ u: 0, v: 0, du: span, dv: height }];
-  openings.forEach(opening => {
-    const hole = { u: opening.offsetM, v: opening.sillM, du: opening.widthM, dv: opening.heightM };
-    panels = panels.flatMap(panel => subtractPanel(panel, hole));
-  });
-  return panels;
-}
-
-type PickData = {
-  kind?: string;
-  id?: string;
-  roomId?: string;
-  face?: string;
-  wallFace?: string;
-  edge?: number;
-  interfaceKey?: string;
-  highlight?: THREE.Mesh;
-  edgeRole?: number;
-  baseEdge?: number;
-  wallId?: string;
-};
-
-function shellMaterial(color: number, opacity = 1, bias = 1): THREE.MeshStandardMaterial {
-  const transparent = opacity < 1;
-  return new THREE.MeshStandardMaterial({
-    color,
-    roughness: 0.88,
-    metalness: 0.02,
-    side: THREE.DoubleSide,
-    transparent,
-    opacity,
-    depthWrite: !transparent,
-    polygonOffset: true,
-    polygonOffsetFactor: bias,
-    polygonOffsetUnits: bias * 2,
-  });
-}
-
-function depthBias(id: string): number {
-  let hash = 0;
-  for (let index = 0; index < id.length; index += 1) hash = (hash + id.charCodeAt(index) * (index + 1)) % 8;
-  return 1 + hash;
-}
-
-function matchesSelection(data: PickData, selection: Selection): boolean {
-  if (selection.kind === 'interface') return data.interfaceKey === selection.key;
-  if (data.kind === 'surface' && data.roomId && data.face) {
-    if (selection.kind === 'room' && selection.id === data.roomId) return true;
-    if (selection.kind !== 'surface' || selection.roomId !== data.roomId || selection.face !== data.face) return false;
-    if (data.face === 'walls' && (selection.edge != null || data.edge != null)) return selection.edge === data.edge;
-    if (data.face !== 'walls' || !selection.wallFace || !data.wallFace) return true;
-    return data.wallFace === selection.wallFace;
-  }
-  if (data.kind === 'opening' && data.roomId && data.id) {
-    if (selection.kind === 'room' && selection.id === data.roomId) return true;
-    return selection.kind === 'opening' && selection.roomId === data.roomId && selection.id === data.id;
-  }
-  if (data.kind === 'equipment' && data.id) return selection.kind === 'equipment' && selection.id === data.id;
-  if (data.kind === 'wallRun' && data.id) return selection.kind === 'wallRun' && selection.id === data.id;
-  if (data.kind === 'wallOpening' && data.id) return selection.kind === 'wallOpening' && selection.id === data.id;
-  return false;
-}
-
-function paintSelection(group: THREE.Object3D, selection: Selection): void {
-  group.traverse(object => {
-    const data = object.userData as PickData;
-    if (data.highlight) data.highlight.visible = matchesSelection(data, selection);
-    if (data.edgeRole && (object as THREE.Line).isLine) {
-      const material = (object as THREE.Line).material as THREE.LineBasicMaterial;
-      material.color.setHex(matchesSelection(data, selection) ? SELECT_EDGE : (data.baseEdge ?? EDGE_COLOR));
-    }
-  });
-}
-
-function attachHighlight(mesh: THREE.Mesh, size: [number, number, number]): void {
-  const pad = 0.012;
-  const highlight = new THREE.Mesh(
-    new THREE.BoxGeometry(size[0] + pad, size[1] + pad, size[2] + pad),
-    new THREE.MeshBasicMaterial({
-      color: SELECT_GLOW,
-      transparent: true,
-      opacity: HIGHLIGHT_OPACITY,
-      depthWrite: false,
-      side: THREE.FrontSide,
-    })
-  );
-  highlight.visible = false;
-  highlight.raycast = () => undefined;
-  highlight.renderOrder = 3;
-  mesh.add(highlight);
-  mesh.userData.highlight = highlight;
-}
-
-function addOutline(parent: THREE.Object3D, corners: THREE.Vector3[], userData: PickData): void {
-  const line = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints([...corners, corners[0]]),
-    new THREE.LineBasicMaterial({ color: userData.baseEdge ?? EDGE_COLOR, depthWrite: false })
-  );
-  line.userData = userData;
-  line.raycast = () => undefined;
-  line.renderOrder = 4;
-  parent.add(line);
-}
-
-function wallOutline(room: Room, face: WallFace): THREE.Vector3[] {
-  const nudge = 0.008;
-  const z0 = room.zM;
-  const z1 = room.zM + room.heightM;
-  const y0 = room.yM;
-  const y1 = room.yM + room.widthM;
-  const x0 = room.xM;
-  const x1 = room.xM + room.lengthM;
-  if (face === 'px') {
-    const x = x1 + nudge;
-    return [new THREE.Vector3(x, y0, z0), new THREE.Vector3(x, y1, z0), new THREE.Vector3(x, y1, z1), new THREE.Vector3(x, y0, z1)];
-  }
-  if (face === 'nx') {
-    const x = x0 - nudge;
-    return [new THREE.Vector3(x, y0, z0), new THREE.Vector3(x, y1, z0), new THREE.Vector3(x, y1, z1), new THREE.Vector3(x, y0, z1)];
-  }
-  if (face === 'py') {
-    const y = y1 + nudge;
-    return [new THREE.Vector3(x0, y, z0), new THREE.Vector3(x1, y, z0), new THREE.Vector3(x1, y, z1), new THREE.Vector3(x0, y, z1)];
-  }
-  const y = y0 - nudge;
-  return [new THREE.Vector3(x0, y, z0), new THREE.Vector3(x1, y, z0), new THREE.Vector3(x1, y, z1), new THREE.Vector3(x0, y, z1)];
-}
-
-function openingOutline(room: Room, opening: Room['openings'][number]): THREE.Vector3[] {
-  const nudge = 0.014;
-  const z0 = room.zM + opening.sillM;
-  const z1 = z0 + opening.heightM;
-  if (opening.face === 'px' || opening.face === 'nx') {
-    const x = (opening.face === 'px' ? room.xM + room.lengthM + nudge : room.xM - nudge);
-    const y0 = room.yM + opening.offsetM;
-    const y1 = y0 + opening.widthM;
-    return [new THREE.Vector3(x, y0, z0), new THREE.Vector3(x, y1, z0), new THREE.Vector3(x, y1, z1), new THREE.Vector3(x, y0, z1)];
-  }
-  const y = opening.face === 'py' ? room.yM + room.widthM + nudge : room.yM - nudge;
-  const x0 = room.xM + opening.offsetM;
-  const x1 = x0 + opening.widthM;
-  return [new THREE.Vector3(x0, y, z0), new THREE.Vector3(x1, y, z0), new THREE.Vector3(x1, y, z1), new THREE.Vector3(x0, y, z1)];
-}
-
-function addBox(
-  parent: THREE.Object3D,
-  size: [number, number, number],
-  position: [number, number, number],
-  material: THREE.Material,
-  userData: PickData,
-  withEdges: boolean,
-  yaw = 0,
-): void {
-  if (size.some(value => value <= 0.001)) return;
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), material);
-  mesh.position.set(position[0], position[1], position[2]);
-  mesh.rotation.z = yaw;
-  mesh.userData = { ...userData };
-  if ((material as THREE.Material).transparent) mesh.renderOrder = 2;
-  attachHighlight(mesh, size);
-  if (withEdges) {
-    const edges = new THREE.LineSegments(
-      new THREE.EdgesGeometry(mesh.geometry),
-      new THREE.LineBasicMaterial({ color: EDGE_COLOR, depthWrite: false })
-    );
-    edges.raycast = () => undefined;
-    edges.renderOrder = 4;
-    edges.userData = { ...userData, edgeRole: 1, baseEdge: EDGE_COLOR };
-    mesh.add(edges);
-  }
-  parent.add(mesh);
-}
-
-function addDrawnWalls(group: THREE.Group, runs: readonly WallRun[]): void {
-  const height = DEFAULT_HEIGHT_M;
-  for (const run of runs) {
-    const geom = runGeom(run);
-    if (geom.length < 0.05) continue;
-    const yaw = Math.atan2(geom.dy, geom.dx);
-    for (const [start, end] of solidSpans(geom.length, run.openings)) {
-      const len = end - start;
-      if (len < 0.02) continue;
-      const mid = (start + end) / 2;
-      addBox(
-        group,
-        [len, WALL_THICK_M, height],
-        [geom.x0 + geom.dx * mid, geom.y0 + geom.dy * mid, height / 2],
-        shellMaterial(0x60707a, 1, 2),
-        { kind: 'wallRun', id: run.id },
-        true,
-        yaw,
-      );
-    }
-    for (const opening of run.openings) {
-      const mid = opening.offsetM + opening.widthM / 2;
-      const door = opening.kind === 'door';
-      const slabH = door ? 2.13 : 1.2;
-      const slabZ = door ? slabH / 2 : 0.9 + slabH / 2;
-      addBox(
-        group,
-        [opening.widthM, 0.04, slabH],
-        [geom.x0 + geom.dx * mid, geom.y0 + geom.dy * mid, slabZ],
-        shellMaterial(colorNumber(door ? MARK_COLOR.door : MARK_COLOR.window), 1, 3),
-        { kind: 'wallOpening', id: opening.id, wallId: run.id },
-        true,
-        yaw,
-      );
-    }
-  }
-}
-
-function addPolygonRoom(group: THREE.Group, room: Room, rooms: readonly Room[], interfaceWalls: Project['interfaceWalls'], hideRoof: boolean): void {
-  const loop = room.outline;
-  if (!loop || loop.length < 3 || room.heightM <= 0) return;
-  const floorColor = colorNumber(roomFill(room.use));
-  const bias = depthBias(room.id);
-  const wrap = new THREE.Group();
-  wrap.userData = { kind: 'room', id: room.id };
-  const shape = new THREE.Shape();
-  shape.moveTo(loop[0].x, loop[0].y);
-  for (let i = 1; i < loop.length; i += 1) shape.lineTo(loop[i].x, loop[i].y);
-  shape.closePath();
-  const slab = new THREE.ExtrudeGeometry(shape, { depth: SLAB_M, bevelEnabled: false });
-  const addSlab = (z: number, face: 'floor' | 'ceiling') => {
-    const mesh = new THREE.Mesh(slab.clone(), shellMaterial(floorColor, 1, bias));
-    mesh.position.z = z;
-    mesh.userData = { kind: 'surface', roomId: room.id, face };
-    const highlight = new THREE.Mesh(
-      slab.clone(),
-      new THREE.MeshBasicMaterial({ color: SELECT_GLOW, transparent: true, opacity: HIGHLIGHT_OPACITY, depthWrite: false, side: THREE.FrontSide }),
-    );
-    highlight.position.z = 0.01;
-    highlight.visible = false;
-    highlight.raycast = () => undefined;
-    mesh.add(highlight);
-    mesh.userData.highlight = highlight;
-    wrap.add(mesh);
-  };
-  addSlab(room.zM + 0.012, 'floor');
-  if (!hideRoof) addSlab(room.zM + room.heightM - SLAB_M, 'ceiling');
-  slab.dispose();
-  for (let i = 0; i < loop.length; i += 1) {
-    const a = loop[i];
-    const b = loop[(i + 1) % loop.length];
-    const geom = runGeom({ x0: a.x, y0: a.y, x1: b.x, y1: b.y });
-    if (geom.length < 0.05) continue;
-    const constructionId = room.edgeWalls?.[i]?.constructionId;
-    const spans = edgePortions(room, i, rooms);
-    (spans.length > 0 ? spans : [{ startM: 0, endM: geom.length, kind: 'outside' as const, names: [], roomIds: [], anchors: [] }]).forEach(portion => {
-      const length = portion.endM - portion.startM;
-      if (length < 0.05) return;
-      const mid = (portion.startM + portion.endM) / 2;
-      const interfaceKey = portionInterfaceKey(room, portion, { edge: i }, spans);
-      const own = interfaceKey ? interfaceConstructionColor(interfaceWalls?.[interfaceKey]) : null;
-      const color = own ?? (portion.kind === 'interface' ? INTERFACE_COLOR : portionFill(constructionId, 'outside'));
-      addBox(
-        wrap,
-        [length, SHELL_M, room.heightM],
-        [a.x + geom.dx * mid, a.y + geom.dy * mid, room.zM + room.heightM / 2],
-        shellMaterial(colorNumber(color), 1, bias),
-        {
-          kind: 'surface',
-          roomId: room.id,
-          face: 'walls',
-          edge: i,
-          ...(interfaceKey ? { interfaceKey } : {}),
-        },
-        false,
-        Math.atan2(geom.dy, geom.dx),
-      );
-    });
-  }
-  const center = outlineCentroid(loop);
-  const label = makeLabel(room.name, '#5c6d78');
-  if (label) {
-    label.raycast = () => undefined;
-    label.position.set(center.x, center.y, room.zM + room.heightM + 0.45);
-    wrap.add(label);
-  }
-  group.add(wrap);
-}
-
-function isLine(object: THREE.Object3D): boolean {
-  return (object as THREE.Line).isLine === true;
-}
-
-function selectionFromObject(object: THREE.Object3D): Selection | null {
-  let current: THREE.Object3D | null = object;
-  while (current) {
-    const data = current.userData as { kind?: string; id?: string; roomId?: string; face?: string; wallFace?: string; wallId?: string; edge?: number; interfaceKey?: string };
-    if (data.interfaceKey) return { kind: 'interface', key: data.interfaceKey };
-    if (data.kind === 'wallOpening' && data.wallId && data.id) return { kind: 'wallOpening', wallId: data.wallId, id: data.id };
-    if (data.kind === 'wallRun' && data.id) return { kind: 'wallRun', id: data.id };
-    if (data.kind === 'opening' && data.roomId && data.id) return { kind: 'opening', roomId: data.roomId, id: data.id };
-    if (data.kind === 'surface' && data.roomId && (data.face === 'floor' || data.face === 'ceiling' || data.face === 'walls')) {
-      const wallFace = data.wallFace;
-      return {
-        kind: 'surface',
-        roomId: data.roomId,
-        face: data.face,
-        ...(data.face === 'walls' && (wallFace === 'px' || wallFace === 'nx' || wallFace === 'py' || wallFace === 'ny') ? { wallFace } : {}),
-        ...(data.face === 'walls' && typeof data.edge === 'number' ? { edge: data.edge } : {}),
-      };
-    }
-    if (data.kind === 'equipment' && data.id) return { kind: 'equipment', id: data.id };
-    if (data.kind === 'room' && data.id) return { kind: 'room', id: data.id };
-    current = current.parent;
-  }
-  return null;
-}
-
-function openingFrame(room: Room, opening: Room['openings'][number]): { position: THREE.Vector3; size: THREE.Vector3 } {
-  const thickness = 0.08;
-  const z = room.zM + opening.sillM + opening.heightM / 2;
-  if (opening.face === 'px' || opening.face === 'nx') {
-    const x = opening.face === 'px' ? room.xM + room.lengthM : room.xM;
-    const y = room.yM + opening.offsetM + opening.widthM / 2;
-    return { position: new THREE.Vector3(x, y, z), size: new THREE.Vector3(thickness, opening.widthM, opening.heightM) };
-  }
-  const y = opening.face === 'py' ? room.yM + room.widthM : room.yM;
-  const x = room.xM + opening.offsetM + opening.widthM / 2;
-  return { position: new THREE.Vector3(x, y, z), size: new THREE.Vector3(opening.widthM, thickness, opening.heightM) };
 }
 
 function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
 }
 
-function viewPoses(rooms: readonly Room[]): {
-  top: { position: THREE.Vector3; target: THREE.Vector3 };
-  orbit: { position: THREE.Vector3; target: THREE.Vector3 };
-} {
-  const box = new THREE.Box3();
-  rooms.forEach(room => {
-    box.expandByPoint(new THREE.Vector3(room.xM, room.yM, room.zM));
-    box.expandByPoint(new THREE.Vector3(room.xM + room.lengthM, room.yM + room.widthM, room.zM + room.heightM));
-  });
-  const center = rooms.length && !box.isEmpty() ? box.getCenter(new THREE.Vector3()) : new THREE.Vector3(2, 2, 1);
-  const size = rooms.length && !box.isEmpty() ? box.getSize(new THREE.Vector3()) : new THREE.Vector3(8, 8, 3);
+type Pose = { position: THREE.Vector3; target: THREE.Vector3 };
+
+function viewPoses(bounds: { min: Vec3; max: Vec3 }): { top: Pose; orbit: Pose } {
+  const min = new THREE.Vector3(...bounds.min);
+  const max = new THREE.Vector3(...bounds.max);
+  const center = min.clone().add(max).multiplyScalar(0.5);
+  const size = max.clone().sub(min);
   const span = Math.max(size.x, size.y, size.z, 6);
   return {
-    top: {
-      position: new THREE.Vector3(center.x, center.y - span * 0.18, center.z + span * 1.45),
-      target: center.clone(),
-    },
-    orbit: {
-      position: new THREE.Vector3(center.x + span * 0.85, center.y - span * 1.15, center.z + span * 0.85),
-      target: center.clone(),
-    },
+    top: { position: new THREE.Vector3(center.x, center.y - span * 0.18, center.z + span * 1.45), target: center.clone() },
+    orbit: { position: new THREE.Vector3(center.x + span * 0.85, center.y - span * 1.15, center.z + span * 0.85), target: center.clone() },
   };
 }
 
-export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWalls, selection, tool, fitToken, hideRoof, cameraPose = 'orbit', onCameraSettled, onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu }: ViewportProps) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const toolRef = useRef(tool);
-  const handlersRef = useRef({ onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu });
-  const sceneRef = useRef<THREE.Scene | null>(null);
-  const lookRef = useRef<{ hemi: THREE.HemisphereLight; grid: THREE.GridHelper } | null>(null);
-  const theme = useTheme();
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-  const controlsRef = useRef<OrbitControls | null>(null);
-  const groundRef = useRef<THREE.Mesh | null>(null);
-  const previewRef = useRef<THREE.Mesh | null>(null);
-  const contentRef = useRef<THREE.Group | null>(null);
-  const paintRef = useRef<(next: Selection) => void>(() => undefined);
-  const selectionRef = useRef(selection);
-  const roomsRef = useRef(rooms);
-  const poseListenerRef = useRef(onCameraSettled);
-  const enteredRef = useRef(false);
-  const blendRef = useRef<{
-    fromPos: THREE.Vector3;
-    fromTarget: THREE.Vector3;
-    toPos: THREE.Vector3;
-    toTarget: THREE.Vector3;
-    start: number;
-    duration: number;
-    pose: 'orbit' | 'top';
-  } | null>(null);
-  selectionRef.current = selection;
-  toolRef.current = tool;
-  roomsRef.current = rooms;
-  poseListenerRef.current = onCameraSettled;
-  handlersRef.current = { onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu };
+/** Position, rotation and scale of a unit shape for a piece. */
+function placement(piece: ScenePiece): { position: Vec3; quaternion: THREE.Quaternion; scale: Vec3 } {
+  const turn = (yaw: number) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), yaw);
+  if (piece.shape === 'box') return { position: piece.center, quaternion: turn(piece.yaw), scale: piece.size };
+  if (piece.shape === 'chevron') return { position: piece.at, quaternion: turn(piece.yaw), scale: [piece.length, piece.width, 1] };
+  if (piece.shape === 'ball') return { position: piece.at, quaternion: new THREE.Quaternion(), scale: [piece.radius, piece.radius, piece.radius] };
+  if (piece.shape === 'puck') {
+    return { position: piece.at, quaternion: new THREE.Quaternion().setFromUnitVectors(UP, new THREE.Vector3(0, 0, 1)), scale: [piece.radius, piece.height, piece.radius] };
+  }
+  if (piece.shape === 'cone') {
+    const dir = new THREE.Vector3(...piece.toward).normalize();
+    const center = new THREE.Vector3(...piece.at).addScaledVector(dir, -piece.length / 2);
+    return { position: [center.x, center.y, center.z], quaternion: new THREE.Quaternion().setFromUnitVectors(UP, dir), scale: [piece.radius, piece.length, piece.radius] };
+  }
+  if (piece.shape === 'tube' || piece.shape === 'beam') {
+    const from = new THREE.Vector3(...piece.from);
+    const to = new THREE.Vector3(...piece.to);
+    const length = from.distanceTo(to);
+    const mid = from.clone().add(to).multiplyScalar(0.5);
+    const position: Vec3 = [mid.x, mid.y, mid.z];
+    const dir = to.clone().sub(from).normalize();
+    if (piece.shape === 'tube') return { position, quaternion: new THREE.Quaternion().setFromUnitVectors(UP, dir), scale: [piece.radius, length, piece.radius] };
+    // A rectangular duct: width across, height up; a riser stands its length up the z axis.
+    if (Math.abs(dir.z) > 0.7) return { position, quaternion: new THREE.Quaternion(), scale: [piece.width, piece.height, length] };
+    return { position, quaternion: turn(Math.atan2(dir.y, dir.x)), scale: [length, piece.width, piece.height] };
+  }
+  return { position: [0, 0, 0], quaternion: new THREE.Quaternion(), scale: [1, 1, 1] };
+}
+
+function pieceColor(piece: ScenePiece): number {
+  return sceneColor(piece.fill ? wash(piece.color) : ink(piece.color));
+}
+
+const Piece = memo(function Piece({ piece, opacity, selected, theme, shadows }: { piece: ScenePiece; opacity: number; selected: boolean; theme: Theme; shadows: boolean }) {
+  const unit = unitShapes();
+  const slab = useMemo(() => {
+    if (piece.shape !== 'slab') return null;
+    const shape = new THREE.Shape(piece.outline.map(point => new THREE.Vector2(point.x, point.y)));
+    const geometry = new THREE.ExtrudeGeometry(shape, { depth: piece.depth, bevelEnabled: false });
+    return { geometry, edges: new THREE.EdgesGeometry(geometry, 30) };
+  }, [piece]);
+  useEffect(
+    () => () => {
+      slab?.geometry.dispose();
+      slab?.edges.dispose();
+    },
+    [slab],
+  );
+  const color = useMemo(() => pieceColor(piece), [piece, theme]);
+  const select = useMemo(() => sceneColor(PLAN_COLOR.select), [theme]);
+  const shown = Math.min(piece.maxOpacity ?? 1, selected ? Math.max(opacity, 0.5) : opacity);
+  const transparent = shown < 0.999;
+  const material = piece.unlit ? (
+    <meshBasicMaterial key={transparent ? 'see-through' : 'solid'} color={color} transparent={transparent} opacity={shown} depthWrite={!transparent} side={THREE.DoubleSide} polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1} />
+  ) : (
+    <meshStandardMaterial
+      key={transparent ? 'see-through' : 'solid'}
+      color={color}
+      emissive={selected ? select : 0x000000}
+      emissiveIntensity={selected ? 0.55 : 0}
+      roughness={piece.category === 'ducts' ? 0.5 : piece.category === 'equipment' || piece.category === 'terminals' ? 0.6 : 0.9}
+      metalness={piece.category === 'ducts' ? 0.25 : 0.04}
+      transparent={transparent}
+      opacity={shown}
+      depthWrite={!transparent}
+      side={piece.shape === 'slab' || piece.category === 'walls' ? THREE.DoubleSide : THREE.FrontSide}
+      polygonOffset
+      polygonOffsetFactor={1}
+      polygonOffsetUnits={1}
+    />
+  );
+  const edgeColor = selected ? SCENE_LOOK[theme].selectEdge : SCENE_LOOK[theme].edge;
+  // See-through surfaces keep only a faint outline, so ghosted walls don't turn into a mesh of lines.
+  const edgeOpacity = transparent ? Math.min(0.5, shown * 0.6) : 1;
+  // Only solid things cast shadows; marks and floors never do.
+  const casts = shadows && !transparent && !piece.unlit && piece.category !== 'floors';
+  const receives = shadows && !piece.unlit;
+  const edgeMaterial = <lineBasicMaterial key={edgeOpacity < 1 ? 'faint' : 'solid'} color={edgeColor} transparent={edgeOpacity < 1} opacity={edgeOpacity} depthWrite={false} />;
+  const userData = { piece, opacity: shown };
+
+  if (slab && piece.shape === 'slab') {
+    return (
+      <group position={[0, 0, piece.z]}>
+        <mesh geometry={slab.geometry} userData={userData} renderOrder={transparent ? 2 : 0} castShadow={casts} receiveShadow={receives}>
+          {material}
+        </mesh>
+        <lineSegments geometry={slab.edges} raycast={noRaycast} renderOrder={4}>
+          {edgeMaterial}
+        </lineSegments>
+      </group>
+    );
+  }
+  const { position, quaternion, scale } = placement(piece);
+  const geometry =
+    piece.shape === 'box' || piece.shape === 'beam' ? unit.box : piece.shape === 'ball' ? unit.sphere : piece.shape === 'cone' ? unit.cone : piece.shape === 'chevron' ? unit.chevron : unit.cylinder;
+  return (
+    <mesh geometry={geometry} position={position} quaternion={quaternion} scale={scale} userData={userData} renderOrder={transparent ? 2 : piece.unlit ? 1 : 0} castShadow={casts} receiveShadow={receives}>
+      {material}
+      {piece.edges && (
+        <lineSegments geometry={unit.boxEdges} raycast={noRaycast} renderOrder={4}>
+          {edgeMaterial}
+        </lineSegments>
+      )}
+    </mesh>
+  );
+});
+
+type Blend = { fromPos: THREE.Vector3; fromTarget: THREE.Vector3; toPos: THREE.Vector3; toTarget: THREE.Vector3; start: number; duration: number; pose: 'orbit' | 'top' };
+
+function CameraRig({ pose, fitToken, bounds, onSettled }: { pose: 'orbit' | 'top'; fitToken: number; bounds: { min: Vec3; max: Vec3 }; onSettled?: (pose: 'orbit' | 'top') => void }) {
+  const camera = useThree(state => state.camera);
+  const controls = useThree(state => state.controls) as OrbitControlsImpl | null;
+  const invalidate = useThree(state => state.invalidate);
+  const blend = useRef<Blend | null>(null);
+  const entered = useRef(false);
+  const boundsRef = useRef(bounds);
+  const settledRef = useRef(onSettled);
+  boundsRef.current = bounds;
+  settledRef.current = onSettled;
 
   useEffect(() => {
-    const scene = sceneRef.current;
-    const parts = lookRef.current;
-    if (!scene || !parts) return;
-    const look = SCENE_LOOK[theme];
-    scene.background = new THREE.Color(look.background);
-    parts.hemi.color.setHex(look.sky);
-    parts.hemi.groundColor.setHex(look.groundLight);
-    parts.hemi.intensity = look.light;
-    const grid = makeGrid(theme);
-    scene.remove(parts.grid);
-    parts.grid.geometry.dispose();
-    (parts.grid.material as THREE.Material).dispose();
-    scene.add(grid);
-    lookRef.current = { hemi: parts.hemi, grid };
-  }, [theme]);
+    if (!controls) return;
+    const poses = viewPoses(boundsRef.current);
+    const dest = pose === 'top' ? poses.top : poses.orbit;
+    // The first orbit comes down from the plan's overhead view.
+    const fromPlan = pose === 'orbit' && !entered.current;
+    entered.current = true;
+    const fromPos = (fromPlan ? poses.top.position : camera.position).clone();
+    const fromTarget = (fromPlan ? poses.top.target : controls.target).clone();
+    camera.position.copy(fromPos);
+    controls.target.copy(fromTarget);
+    blend.current = { fromPos, fromTarget, toPos: dest.position.clone(), toTarget: dest.target.clone(), start: performance.now(), duration: 720, pose };
+    invalidate();
+  }, [pose, fitToken, controls, camera, invalidate]);
+
+  useEffect(() => {
+    if (!controls) return;
+    const stop = () => {
+      blend.current = null;
+    };
+    controls.addEventListener('start', stop);
+    return () => controls.removeEventListener('start', stop);
+  }, [controls]);
+
+  useFrame(() => {
+    const current = blend.current;
+    if (!current || !controls) return;
+    const t = Math.min(1, (performance.now() - current.start) / current.duration);
+    const eased = easeInOut(t);
+    camera.position.lerpVectors(current.fromPos, current.toPos, eased);
+    controls.target.lerpVectors(current.fromTarget, current.toTarget, eased);
+    camera.lookAt(controls.target);
+    if (t >= 1) {
+      blend.current = null;
+      controls.update();
+      settledRef.current?.(current.pose);
+    }
+    invalidate();
+  });
+  return null;
+}
+
+type Api = { camera: THREE.Camera; controls: OrbitControlsImpl | null; invalidate: () => void; size: { width: number; height: number } };
+
+/** Hands the camera and controls to the DOM handlers outside the canvas. */
+function Bridge({ apiRef }: { apiRef: MutableRefObject<Api | null> }) {
+  const camera = useThree(state => state.camera);
+  const controls = useThree(state => state.controls) as OrbitControlsImpl | null;
+  const invalidate = useThree(state => state.invalidate);
+  const size = useThree(state => state.size);
+  apiRef.current = { camera, controls, invalidate, size };
+  return null;
+}
+
+/**
+ * Labels are HTML on top of the canvas, so they stay crisp and use the app's type. Each frame they follow their
+ * point; on overlap the lower priority hides, as on the plan.
+ */
+function LabelProjector({ labels, elements }: { labels: (SceneLabel & { rank: number })[]; elements: MutableRefObject<Map<string, HTMLDivElement>> }) {
+  const camera = useThree(state => state.camera);
+  const size = useThree(state => state.size);
+  const invalidate = useThree(state => state.invalidate);
+  useEffect(() => invalidate(), [labels, invalidate]);
+  useFrame(() => {
+    const point = new THREE.Vector3();
+    const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    const items = labels
+      .map(label => ({ label, el: elements.current.get(label.key) }))
+      .filter((item): item is { label: SceneLabel & { rank: number }; el: HTMLDivElement } => !!item.el)
+      .map(item => ({ ...item, w: item.el.offsetWidth, h: item.el.offsetHeight }))
+      .sort((a, b) => b.label.rank - a.label.rank);
+    for (const item of items) {
+      point.set(...item.label.at).project(camera);
+      const x = ((point.x + 1) / 2) * size.width;
+      const y = ((1 - point.y) / 2) * size.height;
+      const box = { x0: x - item.w / 2 - 2, y0: y - item.h - 2, x1: x + item.w / 2 + 2, y1: y + 2 };
+      const off = point.z > 1 || x < -item.w || x > size.width + item.w || y < 0 || y > size.height + item.h;
+      const covered = placed.some(other => box.x0 < other.x1 && box.x1 > other.x0 && box.y0 < other.y1 && box.y1 > other.y0);
+      const hide = off || (covered && item.label.rank < LABEL_ACTIVE);
+      item.el.style.visibility = hide ? 'hidden' : 'visible';
+      if (hide) continue;
+      placed.push(box);
+      item.el.style.transform = `translate(${Math.round(x - item.w / 2)}px, ${Math.round(y - item.h)}px)`;
+    }
+  });
+  return null;
+}
+
+/**
+ * The north arrow in the canvas corner, as on the plan. Each frame it turns to where north points on screen from the
+ * point the camera orbits.
+ */
+function NorthProjector({ northDeg, glyph }: { northDeg: number; glyph: MutableRefObject<SVGGElement | null> }) {
+  const camera = useThree(state => state.camera);
+  const controls = useThree(state => state.controls) as OrbitControlsImpl | null;
+  const size = useThree(state => state.size);
+  const invalidate = useThree(state => state.invalidate);
+  useEffect(() => invalidate(), [northDeg, invalidate]);
+  useFrame(() => {
+    const el = glyph.current;
+    if (!el) return;
+    const rad = (northDegrees(northDeg) * Math.PI) / 180;
+    const origin = (controls?.target ?? new THREE.Vector3()).clone();
+    const tip = origin.clone().add(new THREE.Vector3(Math.sin(rad), Math.cos(rad), 0));
+    const a = origin.project(camera);
+    const b = tip.project(camera);
+    const dx = (b.x - a.x) * size.width;
+    const dy = -(b.y - a.y) * size.height;
+    if (Math.hypot(dx, dy) < 1e-6) return;
+    el.setAttribute('transform', `rotate(${((Math.atan2(dx, -dy) * 180) / Math.PI).toFixed(1)} 40 40)`);
+  });
+  return null;
+}
+
+function labelActive(label: SceneLabel, selection: Selection): boolean {
+  if (!label.pick) return false;
+  if (label.pick.kind === 'room') return selection.kind === 'room' && selection.id === label.pick.id;
+  return pieceSelected({ pick: label.pick }, selection);
+}
+
+/** Sky light, a sun from the south-east that can cast shadows over the whole project, and a soft fill opposite it. */
+function Lights({ theme, bounds, shadows }: { theme: Theme; bounds: { min: Vec3; max: Vec3 }; shadows: boolean }) {
+  const look = SCENE_LOOK[theme];
+  const sun = useRef<THREE.DirectionalLight>(null);
+  const invalidate = useThree(state => state.invalidate);
+  const center = new THREE.Vector3(...bounds.min).add(new THREE.Vector3(...bounds.max)).multiplyScalar(0.5);
+  const span = Math.max(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], 8);
+  const from = new THREE.Vector3(18, -24, 28).normalize().multiplyScalar(span * 1.6).add(center);
+  useEffect(() => {
+    const light = sun.current;
+    if (!light) return;
+    light.target.position.copy(center);
+    light.target.updateMatrixWorld();
+    const camera = light.shadow.camera;
+    const reach = span * 0.85;
+    camera.left = -reach;
+    camera.right = reach;
+    camera.top = reach;
+    camera.bottom = -reach;
+    camera.near = 0.5;
+    camera.far = span * 4;
+    camera.updateProjectionMatrix();
+    light.shadow.needsUpdate = true;
+    invalidate();
+  });
+  return (
+    <>
+      <color attach="background" args={[look.background]} />
+      <hemisphereLight color={look.sky} groundColor={look.groundLight} intensity={look.light} />
+      <directionalLight
+        ref={sun}
+        position={[from.x, from.y, from.z]}
+        intensity={look.sun}
+        castShadow={shadows}
+        shadow-mapSize={[2048, 2048]}
+        shadow-bias={-0.0004}
+        shadow-normalBias={0.03}
+        shadow-radius={3}
+      />
+      <directionalLight position={[center.x - span, center.y + span, center.z + span * 0.6]} intensity={look.fill} />
+    </>
+  );
+}
+
+export default function Viewport({ project, step, layers, view3d, selection, tool, fitToken, cameraPose = 'orbit', onCameraSettled, onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu }: ViewportProps) {
+  const theme = useTheme();
+  const hostRef = useRef<HTMLDivElement>(null);
+  const piecesRef = useRef<THREE.Group>(null);
+  const previewRef = useRef<THREE.Mesh>(null);
+  const apiRef = useRef<Api | null>(null);
+  const labelEls = useRef(new Map<string, HTMLDivElement>());
+  const northRef = useRef<SVGGElement | null>(null);
+  const handlersRef = useRef({ onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu });
+  handlersRef.current = { onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu };
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
+  const roomsRef = useRef(project.rooms);
+  roomsRef.current = project.rooms;
+
+  const scene = useMemo(() => buildScene(project), [project]);
+  const opacityOf = useMemo(() => {
+    const cache = new Map<SceneCategory, number>();
+    return (category: SceneCategory) => {
+      if (!cache.has(category)) cache.set(category, categoryOpacity(view3d, category, step, layers));
+      return cache.get(category)!;
+    };
+  }, [view3d, step, layers]);
+
+  const labels = useMemo(
+    () =>
+      scene.labels.flatMap(label => {
+        const opacity = opacityOf(label.category);
+        if (opacity <= 0) return [];
+        const active = labelActive(label, selection);
+        if (label.detailOnly && !layers.labels && !active) return [];
+        return [{ ...label, rank: active ? LABEL_ACTIVE : label.priority, opacity }];
+      }),
+    [scene, opacityOf, selection, layers.labels],
+  );
+
+  const airKey = useMemo<AirKeyEntry[]>(() => {
+    if (opacityOf('ducts') <= 0) return [];
+    const groups = new Set<DuctService>(scene.services.map(service => (service === 'relief' ? 'exhaust' : service)));
+    return [...groups]
+      .sort((a, b) => AIR_KEY_ORDER.indexOf(a) - AIR_KEY_ORDER.indexOf(b))
+      .map(service => ({ label: AIR_KEY_LABEL[service], color: SERVICE_COLOR[service], service, double: false }));
+  }, [scene, opacityOf]);
+
+  useEffect(() => {
+    if (tool.kind !== 'draw' && previewRef.current) previewRef.current.visible = false;
+    apiRef.current?.invalidate();
+  }, [tool]);
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const scene = new THREE.Scene();
-    const look = SCENE_LOOK[currentTheme()];
-    scene.background = new THREE.Color(look.background);
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
-    camera.up.set(0, 0, 1);
-    const overhead = viewPoses(roomsRef.current).top;
-    camera.position.copy(overhead.position);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    host.appendChild(renderer.domElement);
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.copy(overhead.target);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.zoomSpeed = 0.45;
-    controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
-    controls.update();
-
-    const hemi = new THREE.HemisphereLight(look.sky, look.groundLight, look.light);
-    scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xffffff, 0.9);
-    sun.position.set(18, -24, 28);
-    scene.add(sun);
-    const grid = makeGrid(currentTheme());
-    scene.add(grid);
-    lookRef.current = { hemi, grid };
-    scene.add(new THREE.AxesHelper(2));
-
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(200, 200),
-      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
-    );
-    scene.add(ground);
-    const preview = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshStandardMaterial({ color: colorNumber(MARK_COLOR.equipment), transparent: true, opacity: 0.35, roughness: 0.8 })
-    );
-    preview.visible = false;
-    scene.add(preview);
-
-    sceneRef.current = scene;
-    cameraRef.current = camera;
-    controlsRef.current = controls;
-    groundRef.current = ground;
-    previewRef.current = preview;
-
     const raycaster = new THREE.Raycaster();
-    raycaster.params.Line.threshold = 0.001;
-    const pointer = new THREE.Vector2();
+    const ground = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
     let drawing = false;
-    let start: THREE.Vector3 | null = null;
+    let start: THREE.Vector2 | null = null;
     let downX = 0;
     let downY = 0;
+    let rightX = 0;
+    let rightY = 0;
+    let sawRight = false;
 
-    const resize = () => {
-      const width = host.clientWidth;
-      const height = host.clientHeight;
-      if (width < 1 || height < 1) return;
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-      renderer.setSize(width, height, false);
-    };
-    const observer = new ResizeObserver(resize);
-    observer.observe(host);
-    resize();
-
-    const setPointer = (clientX: number, clientY: number): boolean => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      if (rect.width < 1 || rect.height < 1) return false;
-      pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    const aim = (clientX: number, clientY: number): boolean => {
+      const api = apiRef.current;
+      const rect = host.getBoundingClientRect();
+      if (!api || rect.width < 1 || rect.height < 1) return false;
+      raycaster.setFromCamera(new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1), api.camera);
       return true;
     };
-
-    const pointOnGround = (event: PointerEvent): THREE.Vector3 | null => {
-      if (!setPointer(event.clientX, event.clientY)) return null;
-      raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObject(ground)[0];
-      return hit ? hit.point : null;
+    const groundAt = (clientX: number, clientY: number): THREE.Vector3 | null => {
+      if (!aim(clientX, clientY)) return null;
+      return raycaster.ray.intersectPlane(ground, new THREE.Vector3());
     };
-
-    const closestHit = (): { selection: Selection; distance: number } | null => {
-      const group = contentRef.current;
+    /** The first solid piece under the ray; faint ones (other phases, see-through categories) let the click through. */
+    const firstHit = (): { selection: Selection; distance: number } | null => {
+      const group = piecesRef.current;
       if (!group) return null;
-      const hits = raycaster.intersectObjects(group.children, true);
-      for (const hit of hits) {
-        if (isLine(hit.object)) continue;
-        const selection = selectionFromObject(hit.object);
-        if (selection) return { selection, distance: hit.distance };
-      }
-      return null;
+      const hits = raycaster.intersectObjects(group.children, true).filter(hit => hit.object.userData.piece);
+      const solid = hits.find(hit => (hit.object.userData.opacity as number) >= PICK_SOLID) ?? hits[0];
+      return solid ? { selection: (solid.object.userData.piece as ScenePiece).pick, distance: solid.distance } : null;
     };
-
-    const pickSelection = (event: { clientX: number; clientY: number }): Selection => {
-      if (!setPointer(event.clientX, event.clientY)) return { kind: 'project' };
-      raycaster.setFromCamera(pointer, camera);
-      const center = closestHit();
+    const pickAt = (clientX: number, clientY: number): Selection => {
+      if (!aim(clientX, clientY)) return { kind: 'project' };
+      const center = firstHit();
+      // Doors and windows are thin: a click near one picks it rather than the wall around it.
       let opening = center?.selection.kind === 'opening' ? center : null;
-      const samples = [
-        [OPENING_PICK_PX, 0],
-        [-OPENING_PICK_PX, 0],
-        [0, OPENING_PICK_PX],
-        [0, -OPENING_PICK_PX],
-        [OPENING_PICK_PX, OPENING_PICK_PX],
-        [OPENING_PICK_PX, -OPENING_PICK_PX],
-        [-OPENING_PICK_PX, OPENING_PICK_PX],
-        [-OPENING_PICK_PX, -OPENING_PICK_PX],
-      ];
       const limit = (center?.distance ?? Number.POSITIVE_INFINITY) + OPENING_BIAS_M;
-      for (const [dx, dy] of samples) {
-        if (!setPointer(event.clientX + dx, event.clientY + dy)) continue;
-        raycaster.setFromCamera(pointer, camera);
-        const found = closestHit();
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+        if (!aim(clientX + dx * OPENING_PICK_PX, clientY + dy * OPENING_PICK_PX)) continue;
+        const found = firstHit();
         if (found?.selection.kind !== 'opening') continue;
         if (found.distance <= limit && (!opening || found.distance < opening.distance)) opening = found;
       }
       return opening?.selection ?? center?.selection ?? { kind: 'project' };
     };
-
-    const updatePreview = (end: THREE.Vector3) => {
-      if (!start) return;
+    const showPreview = (end: THREE.Vector3) => {
+      const preview = previewRef.current;
+      if (!start || !preview) return;
       const rect = snapDrawnRect(start.x, start.y, snap(end.x), snap(end.y), roomsRef.current);
       const length = Math.max(rect.lengthM, SNAP_M);
       const width = Math.max(rect.widthM, SNAP_M);
       preview.visible = true;
       preview.scale.set(length, width, DEFAULT_HEIGHT_M);
       preview.position.set(rect.xM + length / 2, rect.yM + width / 2, DEFAULT_HEIGHT_M / 2);
+      apiRef.current?.invalidate();
     };
 
-    let rightX = 0;
-    let rightY = 0;
-    let sawRight = false;
     const onPointerDown = (event: PointerEvent) => {
       if (event.button === 2) {
         sawRight = true;
@@ -666,414 +505,158 @@ export default function Viewport({ rooms, equipment, wallRuns = [], interfaceWal
       if (event.button !== 0) return;
       downX = event.clientX;
       downY = event.clientY;
-      const point = pointOnGround(event);
-      if (toolRef.current.kind === 'draw' && point) {
-        const origin = snapPointToWalls(snap(point.x), snap(point.y), roomsRef.current);
-        drawing = true;
-        start = new THREE.Vector3(origin.x, origin.y, point.z);
-        controls.enabled = false;
-        renderer.domElement.setPointerCapture(event.pointerId);
-        updatePreview(start);
-      }
+      if (toolRef.current.kind !== 'draw') return;
+      const point = groundAt(event.clientX, event.clientY);
+      if (!point) return;
+      const origin = snapPointToWalls(snap(point.x), snap(point.y), roomsRef.current);
+      drawing = true;
+      start = new THREE.Vector2(origin.x, origin.y);
+      // Drawing, not orbiting: stop the controls from seeing this press.
+      event.stopPropagation();
+      if (apiRef.current?.controls) apiRef.current.controls.enabled = false;
+      host.setPointerCapture(event.pointerId);
+      showPreview(new THREE.Vector3(origin.x, origin.y, 0));
     };
     const onPointerMove = (event: PointerEvent) => {
       if (!drawing) return;
-      const point = pointOnGround(event);
-      if (point) updatePreview(point);
+      const point = groundAt(event.clientX, event.clientY);
+      if (point) showPreview(point);
     };
     const onPointerUp = (event: PointerEvent) => {
       if (event.button !== 0) return;
-      const moved = Math.hypot(event.clientX - downX, event.clientY - downY);
-      const point = pointOnGround(event);
-      if (drawing && start && point) {
-        const rect = snapDrawnRect(start.x, start.y, snap(point.x), snap(point.y), roomsRef.current);
-        if (rect.lengthM >= MIN_DRAW_M && rect.widthM >= MIN_DRAW_M) handlersRef.current.onDrawRoom(rect);
+      if (drawing) {
+        const point = groundAt(event.clientX, event.clientY);
+        if (start && point) {
+          const rect = snapDrawnRect(start.x, start.y, snap(point.x), snap(point.y), roomsRef.current);
+          if (rect.lengthM >= MIN_DRAW_M && rect.widthM >= MIN_DRAW_M) handlersRef.current.onDrawRoom(rect);
+        }
         drawing = false;
         start = null;
-        preview.visible = false;
-        controls.enabled = true;
+        if (previewRef.current) previewRef.current.visible = false;
+        if (apiRef.current?.controls) apiRef.current.controls.enabled = true;
+        apiRef.current?.invalidate();
         return;
       }
-      if (moved < CLICK_PX && toolRef.current.kind !== 'draw') {
-        const picked = pickSelection(event);
-        if (contentRef.current) paintSelection(contentRef.current, picked);
-        renderer.render(scene, camera);
-        handlersRef.current.onSelect(picked);
+      if (Math.hypot(event.clientX - downX, event.clientY - downY) < CLICK_PX && toolRef.current.kind !== 'draw') {
+        handlersRef.current.onSelect(pickAt(event.clientX, event.clientY));
       }
     };
-
-    const onContextMenuEvent = (event: MouseEvent) => {
+    const onContextMenu = (event: MouseEvent) => {
       event.preventDefault();
       const dragged = sawRight && Math.hypot(event.clientX - rightX, event.clientY - rightY) > CLICK_PX;
       sawRight = false;
       if (dragged) return;
-      const picked = pickSelection(event);
+      const picked = pickAt(event.clientX, event.clientY);
       if (picked.kind === 'project') return;
       handlersRef.current.onContextMenu(picked, event.clientX, event.clientY);
     };
-
-    const markCatalogDrop = (on: boolean) => {
-      const host = renderer.domElement.parentElement;
-      if (host) host.dataset.drop = on ? 'catalog' : '';
-    };
-    const onCatalogDragOver = (event: DragEvent) => {
+    const onDragOver = (event: DragEvent) => {
       if (![...(event.dataTransfer?.types ?? [])].includes(CATALOG_MIME)) return;
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
-      markCatalogDrop(true);
+      host.dataset.drop = 'catalog';
     };
-    const onCatalogDragLeave = () => markCatalogDrop(false);
-    const onCatalogDrop = (event: DragEvent) => {
-      markCatalogDrop(false);
+    const onDragLeave = () => {
+      host.dataset.drop = '';
+    };
+    const onDrop = (event: DragEvent) => {
+      host.dataset.drop = '';
       const drag = parseCatalogDrag(event.dataTransfer?.getData(CATALOG_MIME) ?? '');
       if (!drag || (drag.kind !== 'equipment' && drag.kind !== 'load')) return;
       event.preventDefault();
-      if (!setPointer(event.clientX, event.clientY)) return;
-      raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObject(ground)[0];
+      const hit = groundAt(event.clientX, event.clientY);
       if (!hit) return;
-      const point = { xM: snap(hit.point.x), yM: snap(hit.point.y) };
+      const point = { xM: snap(hit.x), yM: snap(hit.y) };
       if (drag.kind === 'load') handlersRef.current.onPlaceLoad?.(point, drag.id);
       else handlersRef.current.onPlace(point, drag.id);
     };
-    renderer.domElement.addEventListener('dragover', onCatalogDragOver);
-    renderer.domElement.addEventListener('dragleave', onCatalogDragLeave);
-    renderer.domElement.addEventListener('drop', onCatalogDrop);
-    renderer.domElement.addEventListener('pointerdown', onPointerDown, true);
-    renderer.domElement.addEventListener('pointermove', onPointerMove);
-    renderer.domElement.addEventListener('pointerup', onPointerUp);
-    renderer.domElement.addEventListener('contextmenu', onContextMenuEvent);
-
-    const onControlStart = () => {
-      blendRef.current = null;
-    };
-    controls.addEventListener('start', onControlStart);
-
-    let frame = 0;
-    const loop = () => {
-      frame = requestAnimationFrame(loop);
-      const blend = blendRef.current;
-      if (blend) {
-        const t = Math.min(1, (performance.now() - blend.start) / blend.duration);
-        const eased = easeInOut(t);
-        camera.position.lerpVectors(blend.fromPos, blend.toPos, eased);
-        controls.target.lerpVectors(blend.fromTarget, blend.toTarget, eased);
-        if (t >= 1) {
-          blendRef.current = null;
-          poseListenerRef.current?.(blend.pose);
-        }
-      }
-      controls.update();
-      renderer.render(scene, camera);
-    };
-    loop();
-
+    host.addEventListener('pointerdown', onPointerDown, true);
+    host.addEventListener('pointermove', onPointerMove);
+    host.addEventListener('pointerup', onPointerUp);
+    host.addEventListener('contextmenu', onContextMenu);
+    host.addEventListener('dragover', onDragOver);
+    host.addEventListener('dragleave', onDragLeave);
+    host.addEventListener('drop', onDrop);
     return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-      renderer.domElement.removeEventListener('dragover', onCatalogDragOver);
-      renderer.domElement.removeEventListener('dragleave', onCatalogDragLeave);
-      renderer.domElement.removeEventListener('drop', onCatalogDrop);
-      renderer.domElement.removeEventListener('pointerdown', onPointerDown, true);
-      renderer.domElement.removeEventListener('pointermove', onPointerMove);
-      renderer.domElement.removeEventListener('pointerup', onPointerUp);
-      renderer.domElement.removeEventListener('contextmenu', onContextMenuEvent);
-      controls.removeEventListener('start', onControlStart);
-      controls.dispose();
-      preview.geometry.dispose();
-      (preview.material as THREE.Material).dispose();
-      ground.geometry.dispose();
-      (ground.material as THREE.Material).dispose();
-      renderer.dispose();
-      renderer.domElement.remove();
-      sceneRef.current = null;
-      lookRef.current = null;
-      cameraRef.current = null;
-      controlsRef.current = null;
-      contentRef.current = null;
+      host.removeEventListener('pointerdown', onPointerDown, true);
+      host.removeEventListener('pointermove', onPointerMove);
+      host.removeEventListener('pointerup', onPointerUp);
+      host.removeEventListener('contextmenu', onContextMenu);
+      host.removeEventListener('dragover', onDragOver);
+      host.removeEventListener('dragleave', onDragLeave);
+      host.removeEventListener('drop', onDrop);
     };
   }, []);
 
-  useEffect(() => {
-    const camera = cameraRef.current;
-    const controls = controlsRef.current;
-    if (!camera || !controls) return;
-    const poses = viewPoses(roomsRef.current);
-    const dest = cameraPose === 'top' ? poses.top : poses.orbit;
-    const fromPlan = cameraPose === 'orbit' && !enteredRef.current;
-    enteredRef.current = true;
-    const fromPos = (fromPlan ? poses.top.position : camera.position).clone();
-    const fromTarget = (fromPlan ? poses.top.target : controls.target).clone();
-    camera.position.copy(fromPos);
-    controls.target.copy(fromTarget);
-    blendRef.current = {
-      fromPos,
-      fromTarget,
-      toPos: dest.position.clone(),
-      toTarget: dest.target.clone(),
-      start: performance.now(),
-      duration: 720,
-      pose: cameraPose,
-    };
-  }, [cameraPose, fitToken]);
+  const look = SCENE_LOOK[theme];
+  const initial = useMemo(() => viewPoses(scene.bounds).top, []);
+  const previewColor = useMemo(() => sceneColor(ink(MARK_COLOR.equipment)), [theme]);
 
-  useEffect(() => {
-    if (tool.kind !== 'draw' && previewRef.current) previewRef.current.visible = false;
-    if (hostRef.current) hostRef.current.dataset.tool = tool.kind;
-  }, [tool]);
-
-  useEffect(() => {
-    paintRef.current(selection);
-  }, [selection]);
-
-  useEffect(() => {
-    const scene = sceneRef.current;
-    if (!scene) return;
-    const group = new THREE.Group();
-    scene.add(group);
-    contentRef.current = group;
-
-    rooms.forEach(room => {
-      if (room.outline && room.outline.length >= 3) {
-        addPolygonRoom(group, room, rooms, interfaceWalls, hideRoof);
-        return;
-      }
-      if (room.lengthM <= 0 || room.widthM <= 0 || room.heightM <= 0) return;
-      const floorColor = colorNumber(roomFill(room.use));
-      const bias = depthBias(room.id);
-      const wrap = new THREE.Group();
-      wrap.userData = { kind: 'room', id: room.id };
-      const gap = 0.015;
-      const insetX = Math.min(SHELL_M + gap, room.lengthM * 0.45);
-      const insetY = Math.min(SHELL_M + gap, room.widthM * 0.45);
-      const floorData: PickData = { kind: 'surface', roomId: room.id, face: 'floor' };
-      const x0 = room.xM + insetX;
-      const x1 = room.xM + room.lengthM - insetX;
-      const y0 = room.yM + insetY;
-      const y1 = room.yM + room.widthM - insetY;
-      addBox(
-        wrap,
-        [Math.max(room.lengthM - insetX * 2, 0.05), Math.max(room.widthM - insetY * 2, 0.05), SLAB_M],
-        [room.xM + room.lengthM / 2, room.yM + room.widthM / 2, room.zM + 0.012 + SLAB_M / 2],
-        shellMaterial(floorColor, 1, bias),
-        floorData,
-        false
-      );
-      addOutline(wrap, [
-        new THREE.Vector3(x0, y0, room.zM + 0.012 + SLAB_M + 0.006),
-        new THREE.Vector3(x1, y0, room.zM + 0.012 + SLAB_M + 0.006),
-        new THREE.Vector3(x1, y1, room.zM + 0.012 + SLAB_M + 0.006),
-        new THREE.Vector3(x0, y1, room.zM + 0.012 + SLAB_M + 0.006),
-      ], { ...floorData, edgeRole: 1, baseEdge: EDGE_COLOR });
-      if (!hideRoof) {
-        const ceilingData: PickData = { kind: 'surface', roomId: room.id, face: 'ceiling' };
-        addBox(
-          wrap,
-          [Math.max(room.lengthM - insetX * 2, 0.05), Math.max(room.widthM - insetY * 2, 0.05), SLAB_M],
-          [room.xM + room.lengthM / 2, room.yM + room.widthM / 2, room.zM + room.heightM - SLAB_M / 2],
-          shellMaterial(floorColor, 1, bias),
-          ceilingData,
-          false
-        );
-        const ceilingZ = room.zM + room.heightM + 0.006;
-        addOutline(wrap, [
-          new THREE.Vector3(x0, y0, ceilingZ),
-          new THREE.Vector3(x1, y0, ceilingZ),
-          new THREE.Vector3(x1, y1, ceilingZ),
-          new THREE.Vector3(x0, y1, ceilingZ),
-        ], { ...ceilingData, edgeRole: 1, baseEdge: EDGE_COLOR });
-      }
-      (['px', 'nx', 'py', 'ny'] as const).forEach(face => {
-        const alongX = face === 'py' || face === 'ny';
-        const span = alongX ? room.lengthM : room.widthM;
-        const trim = alongX ? Math.min(SHELL_M + 0.004, Math.max(0, span / 2 - 0.02)) : 0;
-        const constructionId = room.surfaces.walls[face].constructionId;
-        const portions = facePortions(room, face, rooms);
-        const panels = wallPanels(
-          span,
-          room.heightM,
-          room.openings.filter(opening => opening.face === face)
-        );
-        panels.forEach(panel => {
-          let u = panel.u;
-          let du = panel.du;
-          if (trim > 0) {
-            const u0 = Math.max(panel.u, trim);
-            const u1 = Math.min(panel.u + panel.du, span - trim);
-            if (u1 - u0 <= 0.01) return;
-            u = u0;
-            du = u1 - u0;
-          }
-          const slices = portions.flatMap(portion => {
-            const a = Math.max(u, portion.startM);
-            const b = Math.min(u + du, portion.endM);
-            if (b - a <= 0.01) return [];
-            return [{ u: a, du: b - a, kind: portion.kind, portion }];
-          });
-          (slices.length > 0 ? slices : [{ u, du, kind: 'outside' as const, portion: undefined }]).forEach(slice => {
-            const x = alongX
-              ? room.xM + slice.u + slice.du / 2
-              : face === 'px'
-                ? room.xM + room.lengthM - SHELL_M / 2
-                : room.xM + SHELL_M / 2;
-            const y = alongX
-              ? face === 'py'
-                ? room.yM + room.widthM - SHELL_M / 2
-                : room.yM + SHELL_M / 2
-              : room.yM + slice.u + slice.du / 2;
-            const interfaceKey = slice.portion ? portionInterfaceKey(room, slice.portion, { wallFace: face }, portions) ?? undefined : undefined;
-            const own = interfaceKey ? interfaceConstructionColor(interfaceWalls?.[interfaceKey]) : null;
-            const color = own ?? (slice.kind === 'interface' ? INTERFACE_COLOR : portionFill(constructionId, 'outside'));
-            addBox(
-              wrap,
-              alongX ? [slice.du, SHELL_M, panel.dv] : [SHELL_M, slice.du, panel.dv],
-              [x, y, room.zM + panel.v + panel.dv / 2],
-              shellMaterial(colorNumber(color), 1, bias),
-              {
-                kind: 'surface',
-                roomId: room.id,
-                face: 'walls',
-                wallFace: face,
-                ...(interfaceKey ? { interfaceKey } : {}),
-              },
-              false
-            );
-          });
-        });
-        addOutline(wrap, wallOutline(room, face), {
-          kind: 'surface',
-          roomId: room.id,
-          face: 'walls',
-          wallFace: face,
-          edgeRole: 1,
-          baseEdge: EDGE_COLOR,
-        });
-      });
-      room.openings.forEach(opening => {
-        const frame = openingFrame(room, opening);
-        const position = frame.position.clone();
-        if (opening.kind === 'door') {
-          const arc = doorArc(opening.face, doorHinge(opening), doorSwingSide(opening));
-          position.x += arc.nx * (SHELL_M / 2);
-          position.y += arc.ny * (SHELL_M / 2);
-        } else {
-          if (opening.face === 'px') position.x -= SHELL_M / 2;
-          if (opening.face === 'nx') position.x += SHELL_M / 2;
-          if (opening.face === 'py') position.y -= SHELL_M / 2;
-          if (opening.face === 'ny') position.y += SHELL_M / 2;
-        }
-        const across = opening.face === 'px' || opening.face === 'nx';
-        const width = Math.max(opening.widthM, 0.05);
-        const height = Math.max(opening.heightM, 0.05);
-        const openingData: PickData = { kind: 'opening', roomId: room.id, id: opening.id };
-        const openingGroup = new THREE.Group();
-        openingGroup.position.copy(position);
-        openingGroup.userData = openingData;
-        const pick = new THREE.Mesh(
-          new THREE.BoxGeometry(across ? SHELL_M + 0.12 : width, across ? width : SHELL_M + 0.12, height),
-          new THREE.MeshBasicMaterial({
-            transparent: true,
-            opacity: 0,
-            depthWrite: false,
-            depthTest: false,
-            colorWrite: false,
-            side: THREE.DoubleSide,
-          })
-        );
-        pick.userData = openingData;
-        const leafScale = opening.kind === 'door' ? 0.94 : 0.9;
-        const leafDepth = opening.kind === 'door' ? SHELL_M * 0.5 : SHELL_M * 0.22;
-        const leafSize: [number, number, number] = [
-          across ? leafDepth : width * leafScale,
-          across ? width * leafScale : leafDepth,
-          height * (opening.kind === 'door' ? 0.97 : leafScale),
-        ];
-        const leaf = new THREE.Mesh(
-          new THREE.BoxGeometry(leafSize[0], leafSize[1], leafSize[2]),
-          shellMaterial(colorNumber(opening.kind === 'window' ? MARK_COLOR.window : opening.kind === 'door' ? MARK_COLOR.door : MARK_COLOR.opening), opening.kind === 'door' ? 1 : 0.42, bias)
-        );
-        leaf.userData = { ...openingData };
-        if (leaf.material instanceof THREE.Material && leaf.material.transparent) leaf.renderOrder = 2;
-        attachHighlight(leaf, leafSize);
-        openingGroup.add(pick, leaf);
-        addOutline(wrap, openingOutline(room, opening), { ...openingData, edgeRole: 1, baseEdge: EDGE_COLOR });
-        wrap.add(openingGroup);
-      });
-      const label = makeLabel(room.name, '#5c6d78');
-      if (label) {
-        label.raycast = () => undefined;
-        label.position.set(room.xM + room.lengthM / 2, room.yM + room.widthM / 2, room.zM + room.heightM + 0.45);
-        wrap.add(label);
-      }
-      group.add(wrap);
-    });
-
-    equipment.forEach(item => {
-      const product = getProduct(item.catalogId);
-      const size = equipmentSizeM(product);
-      const missingSize = !size.stated;
-      const equipmentData: PickData = { kind: 'equipment', id: item.id };
-      const wrap = new THREE.Group();
-      wrap.userData = equipmentData;
-      const dims: [number, number, number] = [size.lengthM, size.widthM, size.heightM];
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(dims[0], dims[1], dims[2]),
-        new THREE.MeshStandardMaterial({
-          color: colorNumber(missingSize ? '#c4a574' : MARK_COLOR.equipment),
-          roughness: 0.55,
-          metalness: 0.08,
-          polygonOffset: true,
-          polygonOffsetFactor: 1,
-          polygonOffsetUnits: 1,
-        })
-      );
-      const room = rooms.find(entry => entry.id === item.roomId);
-      let centerZ = item.zM + size.heightM / 2;
-      if (product?.mount === 'ceiling') {
-        const underside = (room ? room.zM + room.heightM : item.zM + size.heightM) - SLAB_M - 0.02;
-        const top = item.zM + size.heightM;
-        if (top > underside) centerZ -= top - underside;
-      } else if (product?.mount === 'roof') {
-        const roof = (room ? room.zM + room.heightM : item.zM) + 0.03;
-        if (item.zM < roof) centerZ += roof - item.zM;
-      }
-      mesh.position.set(item.xM, item.yM, centerZ);
-      mesh.rotation.z = (item.yawDeg * Math.PI) / 180;
-      mesh.userData = { ...equipmentData };
-      attachHighlight(mesh, dims);
-      const edges = new THREE.LineSegments(
-        new THREE.EdgesGeometry(mesh.geometry),
-        new THREE.LineBasicMaterial({ color: colorNumber(MARK_COLOR.equipment), depthWrite: false })
-      );
-      edges.raycast = () => undefined;
-      edges.renderOrder = 4;
-      edges.userData = { ...equipmentData, edgeRole: 1, baseEdge: colorNumber(MARK_COLOR.equipment) };
-      mesh.add(edges);
-      wrap.add(mesh);
-      if (item.quantity > 1) {
-        const label = makeLabel(`×${item.quantity}`, MARK_COLOR.equipment);
-        if (label) {
-          label.scale.set(1.2, 0.32, 1);
-          label.position.set(item.xM, item.yM, centerZ + size.heightM / 2 + 0.35);
-          wrap.add(label);
-        }
-      }
-      group.add(wrap);
-    });
-
-    addDrawnWalls(group, wallRuns);
-
-    const paint = (next: Selection) => paintSelection(group, next);
-    paintRef.current = paint;
-    paint(selectionRef.current);
-
-    return () => {
-      scene.remove(group);
-      disposeNode(group);
-      if (contentRef.current === group) contentRef.current = null;
-      paintRef.current = () => undefined;
-    };
-  }, [rooms, equipment, wallRuns, interfaceWalls, fitToken, hideRoof]);
-
-  return <div ref={hostRef} className="viewport-canvas" />;
+  return (
+    <>
+      <div ref={hostRef} className="viewport-canvas" data-tool={tool.kind}>
+        <Canvas
+          frameloop="demand"
+          flat
+          shadows={{ type: THREE.PCFSoftShadowMap }}
+          dpr={[1, 2]}
+          gl={{ antialias: true, logarithmicDepthBuffer: true }}
+          camera={{ fov: 45, near: 0.1, far: 500, up: [0, 0, 1], position: [initial.position.x, initial.position.y, initial.position.z] }}
+        >
+          <Lights theme={theme} bounds={scene.bounds} shadows={view3d.shadows} />
+          <OrbitControls makeDefault enableDamping dampingFactor={0.08} zoomSpeed={1} zoomToCursor mouseButtons={MOUSE_BUTTONS} />
+          <CameraRig pose={cameraPose} fitToken={fitToken} bounds={scene.bounds} onSettled={onCameraSettled} />
+          <Bridge apiRef={apiRef} />
+          <Grid
+            args={[200, 200]}
+            rotation={[Math.PI / 2, 0, 0]}
+            position={[0, 0, -0.002]}
+            cellSize={1}
+            sectionSize={5}
+            cellColor={look.gridMinor}
+            sectionColor={look.gridMajor}
+            cellThickness={0.6}
+            sectionThickness={1}
+            fadeDistance={90}
+            fadeStrength={1.4}
+            infiniteGrid
+            side={THREE.DoubleSide}
+          />
+          <group ref={piecesRef}>
+            {scene.pieces.map(piece => {
+              const opacity = opacityOf(piece.category);
+              if (opacity <= 0) return null;
+              return <Piece key={piece.key} piece={piece} opacity={opacity} selected={selection.kind !== 'project' && pieceSelected(piece, selection)} theme={theme} shadows={view3d.shadows} />;
+            })}
+          </group>
+          <mesh ref={previewRef} visible={false} raycast={noRaycast}>
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial color={previewColor} transparent opacity={0.35} roughness={0.8} depthWrite={false} />
+          </mesh>
+          <LabelProjector labels={labels} elements={labelEls} />
+          <NorthProjector northDeg={project.northDeg ?? 0} glyph={northRef} />
+        </Canvas>
+        <div className="viewport-labels" aria-hidden="true">
+          {labels.map(label => (
+            <div
+              key={label.key}
+              ref={el => {
+                if (el) labelEls.current.set(label.key, el);
+                else labelEls.current.delete(label.key);
+              }}
+              className={['viewport-label', label.rank >= LABEL_ACTIVE ? 'is-active' : '', label.color ? 'is-tag' : ''].filter(Boolean).join(' ')}
+              style={{ opacity: Math.max(0.45, label.opacity), ...(label.color ? { color: ink(label.color), borderColor: ink(label.color) } : {}) }}
+            >
+              {label.text}
+              {label.detail && <small>{label.detail}</small>}
+            </div>
+          ))}
+        </div>
+        <div className="viewport-north" role="img" aria-label="North">
+          <NorthGlyph degrees={0} groupRef={northRef} />
+        </div>
+      </div>
+      <AirKey entries={airKey} mixed={false} />
+    </>
+  );
 }

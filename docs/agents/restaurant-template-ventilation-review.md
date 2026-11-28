@@ -163,7 +163,10 @@ but each room should have supply over all of it and a return of its own nearby. 
 - The RTU sits over the middle of the dining room (drop at 6, 4 m), turned 90° so its return end faces south and
   its supply end north.
 - Dining: 6 × 500 CFM on a 3 × 2 grid (columns 4 m apart, rows 4.8 m apart, 1.6–2 m from the walls). Supply runs
-  along the north side and down the west and east thirds, clear of the returns.
+  along the north side; one feed drops down x = 3 m, between the west diffusers and the west return, and runs east
+  along y = 1 m under the south diffusers to the bar and storage. No duct passes over a diffuser and no supply
+  crosses a return (rerouted 2026-11-28: the old west and east drops ran over the south diffusers, and the east
+  drop crossed the bar return).
 - Dining returns: 2 × 1,050 CFM on the centre line, each among four diffusers, about 3 m (10 ft) from them.
 - Bar: its own 450 CFM return. It takes 550 supply plus 80 from storage, so about 180 CFM spills to the dining
   room and the bar stays slightly positive.

@@ -43,6 +43,7 @@ Run with `npm run dev` (port 3100).
 | Check phase issues | `src/domain/checks.ts` |
 | Floors, walls, ceilings (components, families, suggestions) | `src/domain/construction-assemblies.json`, `src/domain/envelopeDefaults.ts` |
 | Space uses (grouped Use list, occupied / wet / cold flags, plan fills) | `src/domain/spaceUses.ts` |
+| 3D view (React Three Fiber), its scene list and Visibility and graphics | `src/components/Viewport.tsx`, `src/domain/scene3d.ts`, `src/domain/view3d.ts` |
 
 ## Guides
 
@@ -62,6 +63,9 @@ Run with `npm run dev` (port 3100).
   built and grouped by energy-code class, floor finishes, suggestions by position and construction, and how to add a component.
 - [docs/agents/tutorials.md](docs/agents/tutorials.md): Settings → How to use, tutorial content, and the script that
   captures the annotated pictures. Re-run it when the UI a tutorial shows changes.
+- [docs/proposals/3d-view-makeover.md](docs/proposals/3d-view-makeover.md): the plan to make the 3D view match the
+  Plan view (ducts, air colours, labels, layers) and then modernise it (look, cutaways, navigation, 3D checks).
+  Phases 0 and 1 are built; "Phase 1 as built" says how.
 - [docs/proposals/user-built-spaces-loads-systems.md](docs/proposals/user-built-spaces-loads-systems.md): the plan
   for users building spaces, loads, units and systems by drag and drop (smart drops, space types, unit builder).
 

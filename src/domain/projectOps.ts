@@ -655,7 +655,7 @@ export function addDuct(
       shape: input.shape,
       widthM: input.widthM,
       heightM: input.shape === 'round' ? null : input.heightM && input.heightM > 0.05 ? input.heightM : input.widthM * 0.67,
-      zM: ductElevation(next, ends.start, ends.end),
+      zM: ductElevation(next, ends.start, ends.end, points, input.shape === 'round' ? input.widthM : input.heightM && input.heightM > 0.05 ? input.heightM : input.widthM * 0.67),
       points: points.map(point => ({ x: Number(point.x.toFixed(3)), y: Number(point.y.toFixed(3)) })),
       ...ends,
       penetrations: [],

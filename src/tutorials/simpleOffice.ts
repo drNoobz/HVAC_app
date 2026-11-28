@@ -299,7 +299,29 @@ export const SIMPLE_OFFICE: Tutorial = {
       title: 'See it in 3D',
       image: '17-3d.webp',
       alt: 'The 3D view',
-      callouts: ['Click **3D** at the top of the canvas to see the building and the equipment. Click **Plan** to go back.'],
+      callouts: ['Click **3D** at the top of the canvas to see the building, the equipment and the ducts in their air colours. Click **Plan** to go back.'],
+      after: [
+        {
+          kind: 'list',
+          items: [
+            'Drag to orbit, right-drag to pan, scroll to zoom toward the pointer. **Fit** frames the whole project again.',
+            'Click anything to select it, as on the plan. Layers outside the current phase recede, and a click goes through them to what is behind.',
+            'Green arrows show outside air coming in, brown arrows air going out, as on the plan.',
+            'Pale chevrons painted on each duct point the way the air flows, like the Flow mark in the air key. Diffusers and grilles hang from the end of their duct.',
+          ],
+        },
+      ],
+    },
+    {
+      id: '3d-graphics',
+      title: 'See through walls in 3D',
+      image: '17b-3d-graphics.webp',
+      alt: 'The Layers menu in the 3D view, with Visibility and graphics',
+      callouts: [
+        'In 3D, open **Layers**.',
+        '**Fade by phase** makes what belongs to other phases recede, as on the plan. **Ghost surfaces** makes walls, floors, ceilings, doors and windows see-through, so the equipment and ducts inside show. **Shadows** turns the sun shadows on or off.',
+        'Each category has its own tick box to hide it and a **Transparency** slider. **Reset visibility and graphics** puts them all back.',
+      ],
     },
     {
       id: 'share',

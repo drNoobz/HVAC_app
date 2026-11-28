@@ -10,6 +10,8 @@
     "tutorial:screenshots": "node scripts/tutorial-screenshots.mjs"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.2",
     "next": "^15.5.4",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",

@@ -3,7 +3,7 @@ import { designFlow, placedPorts, portFlow } from './airUnits';
 import { streamFor } from './ductCatalog';
 import type { DuctEnd, DuctNode, DuctPenetration, DuctRun, DuctService, DuctView, PlacedEquipment, Project, Room, StreamDesign, SystemKind, WallFace, WallRun } from './types';
 import { formatFlow, formatLength, formatNumber } from './units';
-import { roomLoop, type DrawPoint } from './wallDraw';
+import { pointInOutline, roomLoop, type DrawPoint } from './wallDraw';
 
 export function ductViewOf(run: Pick<DuctRun, 'view'> | undefined | null): DuctView {
   return run?.view === 'schematic' ? 'schematic' : 'plan';
@@ -406,15 +406,48 @@ export function linkedPort(project: Project, end: DuctEnd, view: DuctView = 'pla
   return { equipmentId: item.id, portId: port.id, service: port.service, accepts: port.accepts, direction: port.direction, ...world };
 }
 
-export function ductElevation(project: Project, start: DuctEnd, end: DuctEnd): number {
+/** Clear space between the top of a duct and the ceiling above it, meters. A planning value. */
+const DUCT_CEILING_GAP_M = 0.05;
+
+/** The lowest ceiling over a plan point, among the rooms that contain it. Null outside every room. */
+function ceilingOver(rooms: readonly Room[], x: number, y: number): number | null {
+  let lowest: number | null = null;
+  for (const room of rooms) {
+    if (room.heightM <= 0 || !pointInOutline(roomLoop(room), x, y)) continue;
+    const top = room.zM + room.heightM;
+    if (lowest == null || top < lowest) lowest = top;
+  }
+  return lowest;
+}
+
+/**
+ * Default elevation of a new duct's centreline. A duct hangs in the ceiling zone: its top just under the lowest
+ * ceiling it passes below, so one network sits at one level and meets its ceiling terminals. A duct outside every
+ * room keeps the height of the port it starts or ends at.
+ */
+export function ductElevation(project: Project, start: DuctEnd, end: DuctEnd, points: readonly DrawPoint[] = [], depthM = 0): number {
+  const samples = points.flatMap((point, index) => (index === 0 ? [point] : [{ x: (points[index - 1].x + point.x) / 2, y: (points[index - 1].y + point.y) / 2 }, point]));
+  const ceilings = samples.map(point => ceilingOver(project.rooms, point.x, point.y)).filter((value): value is number => value != null);
+  if (ceilings.length > 0) return Number((Math.min(...ceilings) - depthM / 2 - DUCT_CEILING_GAP_M).toFixed(3));
   const linked = linkedPort(project, start) ?? linkedPort(project, end);
   return Number((linked?.z ?? 2.7).toFixed(3));
 }
 
+/**
+ * Vertical run between a duct and the equipment at one end, meters (positive: the equipment is higher). Rooftop
+ * equipment takes its ducts from below, through the roof, so the riser goes to its underside. Anything else connects
+ * where the duct meets its casing, so a duct level with a ceiling diffuser or a hood has no riser.
+ */
 export function endRise(project: Project, run: DuctRun, which: 'start' | 'end'): number {
   const linked = linkedPort(project, which === 'start' ? run.start : run.end, ductViewOf(run));
   if (!linked) return 0;
-  return linked.z - run.zM;
+  const item = project.equipment.find(entry => entry.id === linked.equipmentId);
+  const product = item ? getProduct(item.catalogId) : undefined;
+  if (!item || !product) return linked.z - run.zM;
+  const bottom = item.zM;
+  const top = item.zM + equipmentSizeM(product).heightM;
+  const target = product.mount === 'roof' ? bottom : Math.min(top, Math.max(bottom, run.zM));
+  return target - run.zM;
 }
 
 function segmentHit(

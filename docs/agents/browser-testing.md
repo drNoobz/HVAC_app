@@ -45,3 +45,19 @@ profile, not lost data. Say so to the user rather than guessing.
 - **Equipment:** `[data-hit="equipment"]` elements carry an `aria-label` with the product name.
 - **Stale console errors:** hot reloads can leave old errors in the console ("pxPerM is not defined" and the like).
   Reload before trusting the console.
+
+## The 3D view on high-resolution screens
+
+Check the 3D view at a device pixel ratio of 2 (the browser pane on a Mac is), not only in the 1× tutorial
+pictures. Until 2026-11-28 the canvas was drawn at twice the pane's size there: it covered the right-hand panel and
+put the model off-centre, and no 1× picture showed it. A quick check: the canvas's CSS size
+(`getBoundingClientRect()`) must equal `.viewport-canvas`'s size, and its `width` must be that times
+`devicePixelRatio` (capped at 2). The 3D view also draws only when something changes: to see if it is idle, count
+`drawElements` calls over a few seconds; it should be 0.
+
+Two more things about the 3D view:
+- After editing `Viewport.tsx`, **reload the page**. Fast Refresh does not always re-run its effects, so the old
+  handlers can stay live and make a fix look broken.
+- When the browser pane is hidden, the page runs in the background and camera moves may lag. Read positions with
+  `getBoundingClientRect()` on `.viewport-label` elements rather than trusting a screenshot taken mid-move. Labels
+  are a good probe: each one sits at its item's projected point.

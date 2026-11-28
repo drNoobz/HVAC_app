@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type Ref } from 'react';
 import { CATALOG_MIME, equipmentSizeM, getProduct, isSchematicOnly } from '@/domain/catalog';
 import { activeCatalogDrag, parseCatalogDrag, type CatalogDrag } from '@/domain/catalogDrag';
 import { SERVICE_COLOR } from '@/domain/ductCatalog';
@@ -14,6 +14,8 @@ import type { ControlPoint, DuctRun, DuctService, DuctShape, EditorTool, LoadIte
 import { getLoadProduct, LOAD_CATEGORY_COLOR } from '@/domain/loadCatalog';
 import { LoadSymbol } from './LoadIcon';
 import type { BuildStep } from '@/domain/checks';
+import { isTransferGrille, outdoorOpening, OUTSIDE_IN_COLOR, OUTSIDE_OUT_COLOR, terminalAirColor } from '@/domain/airColors';
+import { LABEL_ACTIVE, LABEL_PRIORITY, stepFade } from '@/domain/viewRules';
 import { loadLabel, loadPlanSize } from '@/domain/loads';
 import { constrainEquipmentPosition, roomAtPoint } from '@/domain/projectOps';
 import { locateOpening, NO_WALL_RUNS, outlineCentroid, outlineRoomOk, pointInOutline, polygonArea, roomLoop, runGeom, runOpeningEnds, snapDrawPoint, wallAngleDeg, wallQuad, wallQuads, type DrawPoint, type OpeningSpot, type WallSnap } from '@/domain/wallDraw';
@@ -50,14 +52,6 @@ export interface PlanLayers {
 
 export const DEFAULT_LAYERS: PlanLayers = { spaces: true, loads: true, equipment: true, ducts: true, piping: true, controls: true, internals: false, ductWidth: false, clearances: true, labels: false };
 
-/** Layers outside the active step stay visible and clickable but recede. */
-function stepFade(step: BuildStep): { spaces: number; loads: number; equipment: number; ducts: number } {
-  if (step === 'spaces') return { spaces: 1, loads: 0.16, equipment: 0.16, ducts: 0.12 };
-  if (step === 'loads') return { spaces: 0.4, loads: 1, equipment: 0.16, ducts: 0.12 };
-  if (step === 'systems') return { spaces: 0.4, loads: 0.16, equipment: 1, ducts: 1 };
-  return { spaces: 1, loads: 1, equipment: 1, ducts: 1 };
-}
-
 /** Inactive step labels draw smaller as well as fainter. */
 function labelScale(opacity: number): number {
   return opacity >= 0.9 ? 1 : 0.68;
@@ -72,19 +66,6 @@ function hitPhase(hit: string): BuildStep | null {
 }
 
 /** Plan label importance: where two collide, the lower one is hidden until there is room (zoom in or select it). */
-const LABEL_PRIORITY = {
-  /** Where air crosses the envelope: wins over duct and equipment labels, gives way to room names. */
-  outside: 85,
-  room: 90,
-  duct: 70,
-  equipment: 60,
-  pipe: 55,
-  roomDetail: 40,
-  systemName: 30,
-  load: 20,
-} as const;
-/** Labels of the selected item, room under the pointer, etc. Never hidden. */
-const LABEL_ACTIVE = 1000;
 
 function declutterLabels(svg: SVGSVGElement) {
   const labels = [...svg.querySelectorAll<SVGGraphicsElement>('[data-label]')]
@@ -441,6 +422,24 @@ function arcPoints(x: number, y: number, radius: number, from: number, to: numbe
   return points.join(' ');
 }
 
+/** The plan's north arrow: N points `degrees` clockwise from the top. The 3D view turns it with the camera. */
+export function NorthGlyph({ degrees, groupRef }: { degrees: number; groupRef?: Ref<SVGGElement> }) {
+  return (
+    <svg viewBox="0 0 80 80" aria-hidden="true" shapeRendering="geometricPrecision">
+      <g ref={groupRef} transform={`rotate(${degrees} 40 40)`}>
+        <circle cx="40" cy="40" r="31" fill="none" stroke={PLAN_COLOR.compass} strokeWidth="1.25" />
+        <text x="40" y="24" textAnchor="middle" fontSize="13" fontWeight="650" fill={PLAN_COLOR.compass} fontFamily='"IBM Plex Sans", "Segoe UI", sans-serif'>N</text>
+        <polygon points="40,28 45.5,40 40,37" fill={PLAN_COLOR.compass} />
+        <polygon points="40,28 34.5,40 40,37" fill={PLAN_COLOR.compass2} />
+        <polygon points="40,52 45.5,40 40,43" fill={PLAN_COLOR.paper} stroke={PLAN_COLOR.compass} strokeWidth="1.15" strokeLinejoin="round" />
+        <polygon points="40,52 34.5,40 40,43" fill={PLAN_COLOR.paper} stroke={PLAN_COLOR.compass} strokeWidth="1.15" strokeLinejoin="round" />
+        <path d="M12 40 H20 M60 40 H68" fill="none" stroke={PLAN_COLOR.compass} strokeWidth="1.25" />
+        <circle cx="40" cy="40" r="1.6" fill={PLAN_COLOR.compass} />
+      </g>
+    </svg>
+  );
+}
+
 function NorthMark({ degrees, onCommit }: { degrees: number; onCommit: (deg: number) => void }) {
   const [live, setLive] = useState<number | null>(null);
   const drag = useRef<{ x: number; y: number; pointer: number; north: number; moved: boolean; last: number } | null>(null);
@@ -479,18 +478,7 @@ function NorthMark({ degrees, onCommit }: { degrees: number; onCommit: (deg: num
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       }}
     >
-      <svg viewBox="0 0 80 80" aria-hidden="true" shapeRendering="geometricPrecision">
-        <g transform={`rotate(${shown} 40 40)`}>
-          <circle cx="40" cy="40" r="31" fill="none" stroke={PLAN_COLOR.compass} strokeWidth="1.25" />
-          <text x="40" y="24" textAnchor="middle" fontSize="13" fontWeight="650" fill={PLAN_COLOR.compass} fontFamily='"IBM Plex Sans", "Segoe UI", sans-serif'>N</text>
-          <polygon points="40,28 45.5,40 40,37" fill={PLAN_COLOR.compass} />
-          <polygon points="40,28 34.5,40 40,37" fill={PLAN_COLOR.compass2} />
-          <polygon points="40,52 45.5,40 40,43" fill={PLAN_COLOR.paper} stroke={PLAN_COLOR.compass} strokeWidth="1.15" strokeLinejoin="round" />
-          <polygon points="40,52 34.5,40 40,43" fill={PLAN_COLOR.paper} stroke={PLAN_COLOR.compass} strokeWidth="1.15" strokeLinejoin="round" />
-          <path d="M12 40 H20 M60 40 H68" fill="none" stroke={PLAN_COLOR.compass} strokeWidth="1.25" />
-          <circle cx="40" cy="40" r="1.6" fill={PLAN_COLOR.compass} />
-        </g>
-      </svg>
+      <NorthGlyph degrees={shown} />
     </button>
   );
 }
@@ -1929,7 +1917,7 @@ export function PlanView({
 }
 
 /** How to read air on the plan: line style says the stream, arrowheads say which way it moves. */
-interface AirKeyEntry {
+export interface AirKeyEntry {
   label: string;
   color: string;
   service: DuctService;
@@ -1937,8 +1925,8 @@ interface AirKeyEntry {
   double: boolean;
 }
 
-const AIR_KEY_LABEL: Record<DuctService, string> = { supply: 'Supply', return: 'Return', exhaust: 'Exhaust / relief', outdoor: 'Outdoor air', relief: 'Exhaust / relief', mixed: 'Mixed air' };
-const AIR_KEY_ORDER: DuctService[] = ['supply', 'return', 'outdoor', 'exhaust', 'mixed'];
+export const AIR_KEY_LABEL: Record<DuctService, string> = { supply: 'Supply', return: 'Return', exhaust: 'Exhaust / relief', outdoor: 'Outdoor air', relief: 'Exhaust / relief', mixed: 'Mixed air' };
+export const AIR_KEY_ORDER: DuctService[] = ['supply', 'return', 'outdoor', 'exhaust', 'mixed'];
 
 const AIR_KEY_COLLAPSED = 'hvac-air-key-collapsed';
 
@@ -1946,7 +1934,7 @@ const AIR_KEY_COLLAPSED = 'hvac-air-key-collapsed';
  * Key for the ducts in view: each stream in its plan colour, single- or double-line as drawn right now.
  * A compact strip in the canvas corner; it folds down to colour dots.
  */
-function AirKey({ entries, mixed }: { entries: readonly AirKeyEntry[]; mixed: boolean }) {
+export function AirKey({ entries, mixed }: { entries: readonly AirKeyEntry[]; mixed: boolean }) {
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
     setCollapsed(window.localStorage.getItem(AIR_KEY_COLLAPSED) === '1');
@@ -2347,24 +2335,6 @@ function equipmentLabel(catalogId: string): { name: string; roof: boolean } {
     return { name: 'AHU', roof: false };
   }
   return { name: 'Unit', roof };
-}
-
-/** A grille that passes room air through a door or wall, with no duct. Air crosses it along its local +y. */
-function isTransferGrille(catalogId: string): boolean {
-  return catalogId.startsWith('grille-transfer');
-}
-
-/** Equipment that is itself the opening to outdoors (louvers, roof hoods, roof fans): which way air crosses. */
-function outdoorOpening(catalogId: string): 'oa' | 'ea' | null {
-  const product = getProduct(catalogId);
-  if (!product) return null;
-  if (product.category === 'air-terminal') {
-    if (product.id.startsWith('louver')) return product.id.endsWith('oa') ? 'oa' : 'ea';
-    if (product.mount === 'roof') return product.id.includes('intake') ? 'oa' : 'ea';
-    return null;
-  }
-  if ((product.category === 'exhaust-fan' || product.category === 'bathroom-exhaust') && product.mount === 'roof') return 'ea';
-  return null;
 }
 
 function DuctLayer({
@@ -3580,9 +3550,6 @@ const NO_POINTS: ControlPoint[] = [];
 const NO_LOOPS: PlantLoop[] = [];
 
 /** Colour of an air stream inside a unit: the colour its duct carries outside, so the path reads through the casing. */
-/** Outside-air tags: the same two colours everywhere on the plan, in the air key too. */
-const OUTSIDE_IN_COLOR = '#2f7d32';
-const OUTSIDE_OUT_COLOR = '#7a4a2b';
 const UNIT_STREAM_FALLBACK: Record<UnitStream, string> = { outdoor: '#2f7d32', return: '#c47b12', mixed: '#6f6a8a', supply: '#1d4e89', exhaust: '#7a4a2b' };
 const STREAM_SERVICE: Record<UnitStream, DuctService | null> = { outdoor: 'outdoor', return: 'return', mixed: null, supply: 'supply', exhaust: 'relief' };
 
@@ -3590,20 +3557,6 @@ const STREAM_SERVICE: Record<UnitStream, DuctService | null> = { outdoor: 'outdo
 function unitStreamColor(stream: UnitStream): string {
   const service = STREAM_SERVICE[stream];
   return service ? SERVICE_COLOR[service] : UNIT_STREAM_FALLBACK[stream];
-}
-
-/**
- * Equipment is drawn in one neutral colour. Only diffusers, grilles, louvers and hoods take a colour: the colour
- * of the air they handle, so they read with their ducts.
- */
-function terminalAirColor(catalogId: string): string | undefined {
-  const product = getProduct(catalogId);
-  if (product?.category !== 'air-terminal' || isTransferGrille(product.id)) return undefined;
-  const id = product.id;
-  if (id.startsWith('diff')) return SERVICE_COLOR.supply;
-  if (id.startsWith('grille-ret')) return SERVICE_COLOR.return;
-  if (id.endsWith('-oa') || id.includes('intake')) return SERVICE_COLOR.outdoor;
-  return SERVICE_COLOR.exhaust;
 }
 
 function rotateLocal(item: Pick<PlacedEquipment, 'xM' | 'yM' | 'yawDeg'>, x: number, y: number): { x: number; y: number } {

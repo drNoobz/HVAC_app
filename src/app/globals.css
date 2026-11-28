@@ -66,6 +66,8 @@
   --plan-select-strong: #d9843f;
   --plan-select-fill: rgba(246, 173, 85, 0.28);
   --plan-halo: #ffffff;
+  /* 3D flow chevrons: a pale mark painted on the duct, in both themes. */
+  --flow-mark: #ffffff;
   --plan-card: rgba(255, 255, 255, 0.94);
   --plan-compass: #1c1f22;
   --plan-compass-2: #5e686c;
@@ -156,6 +158,7 @@
   --plan-select-strong: #f4a24a;
   --plan-select-fill: rgba(246, 173, 85, 0.2);
   --plan-halo: #12171b;
+  --flow-mark: #eef3f6;
   --plan-card: rgba(27, 34, 40, 0.94);
   --plan-compass: #d3dbe1;
   --plan-compass-2: #7f8c97;
@@ -700,6 +703,7 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
 .dim-form input { width: 88px; }
 .viewport { position: relative; flex: 1; min-height: 0; }
 .viewport-canvas { position: absolute; inset: 0; }
+.viewport-canvas canvas { display: block; }
 .viewport-loading, .hud {
   position: absolute;
   left: 12px;
@@ -710,6 +714,27 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
   font-size: 12px;
   color: var(--muted);
 }
+.viewport-labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.viewport-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  visibility: hidden;
+  padding: 1px 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: nowrap;
+  color: var(--ink);
+  background: var(--float-bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  will-change: transform;
+}
+.viewport-label small { margin-left: 5px; font-size: 10px; color: var(--muted); }
+.viewport-label.is-active { border-color: var(--plan-select); font-weight: 600; }
+.viewport-label.is-tag { font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; }
+.viewport-north { position: absolute; left: 10px; bottom: 56px; width: 64px; height: 64px; pointer-events: none; }
+.viewport-north svg { display: block; width: 64px; height: 64px; }
 .viewport-canvas[data-tool="draw"] { cursor: crosshair; }
 .viewport-canvas[data-drop="catalog"] { box-shadow: inset 0 0 0 2px var(--teal); cursor: copy; }
 
@@ -1253,6 +1278,15 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
 }
 .layers-menu label { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
 .layers-menu label:hover { background: var(--subtle); }
+.layers-menu.is-3d { width: 300px; max-height: calc(100% - 64px); overflow-y: auto; }
+.vg-grid { display: grid; grid-template-columns: minmax(0, 1fr) 118px; align-items: center; column-gap: 6px; }
+.vg-grid label { padding: 3px 6px; }
+.vg-head { padding: 2px 6px; font-size: 10.5px; color: var(--muted); }
+.vg-slider { display: flex; align-items: center; gap: 4px; }
+.vg-slider input { width: 78px; margin: 0; accent-color: var(--teal); }
+.vg-slider output { width: 32px; text-align: right; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.vg-slider input:disabled + output { opacity: 0.5; }
+.vg-reset { justify-self: start; margin: 6px 6px 0; padding: 3px 8px; font-size: 12px; }
 .layers-title { margin: 6px 6px 2px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .layers-title:first-child { margin-top: 0; }
 
@@ -1427,7 +1461,7 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
   border-radius: 6px;
 }
 .air-key span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.plan-wrap .air-key svg.air-key-swatch { width: 20px; height: 8px; flex: none; background: none; display: block; }
+.plan-wrap .air-key svg.air-key-swatch, .viewport .air-key svg.air-key-swatch { width: 20px; height: 8px; flex: none; background: none; display: block; }
 .air-key-fold { position: absolute; top: 1px; right: 3px; border: 0; background: none; padding: 0 3px; font-size: 13px; line-height: 1; color: var(--muted); cursor: pointer; }
 .air-key-fold:hover { color: var(--ink); }
 .air-key.is-collapsed { gap: 3px; padding: 4px 8px; cursor: pointer; font: inherit; font-size: 10.5px; }

@@ -190,7 +190,11 @@ You can also right-click any duct and choose **Draw branch**, then click the duc
 
 - **Schedule** (top centre) lists the equipment, construction and a bill of materials.
 - **Export** (top right): **Schedule CSV**, **Project summary JSON**, or **Print schedule**.
-- **3D** (top of the canvas) shows the building and equipment in three dimensions.
+- **3D** (top of the canvas) shows the building, the equipment and the ducts in their air colours. Drag to orbit,
+  right-drag to pan, scroll to zoom. Click to select; layers outside the current phase recede and let clicks through.
+  Pale chevrons on each duct point the way the air flows; diffusers and grilles hang from the end of their duct.
+- In 3D, **Layers → Visibility and graphics**: **Fade by phase**, **Ghost surfaces** (see-through walls, floors,
+  ceilings, doors and windows), **Shadows** (sun shadows on or off), and per category a tick box to hide it and a **Transparency** slider.
 
 ---
 

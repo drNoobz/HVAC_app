@@ -12,9 +12,13 @@ layout (`src/domain/themeBoot.ts`) applies it before the first paint, so a dark 
 | UI (panels, text, buttons, borders, states) | Tokens in `:root` and `:root[data-theme="dark"]` in `src/app/globals.css` | Hand-picked dark values |
 | Plan neutrals (paper, ink, grid, selection, halos, dimension teal) | `--plan-*` tokens; `PLAN_COLOR` in `src/domain/theme.ts` | Hand-picked dark values |
 | Data colours (air types, wall constructions, loads, loops, unit streams) | Hex in `ductCatalog.ts`, `walls.ts`, `loadCatalog.ts`, `PlanView.tsx` | `ink()` / `wash()` |
-| 3D view (sky, light, grid) | `SCENE_LOOK` in `Viewport.tsx` | Swapped on the theme event; the model's own colours stay |
+| 3D view (sky, light, sun and fill, grid, edges, selection edge) | `SCENE_LOOK` in `Viewport.tsx` | Swapped on the theme event |
+| 3D model colours (rooms, walls, openings, equipment, ducts, loads) | The plan's data colours on each piece of `buildScene()` (`src/domain/scene3d.ts`), resolved by `sceneColor()` in `src/domain/sceneColor.ts` | `sceneColor(wash(color))` for fills (floors, roofs, loads), `sceneColor(ink(color))` for the rest; flow chevrons mix `ink()` of the air colour with `--flow-mark` (60 %), a pale token in both themes, because the halo is dark in dark; selection uses `--plan-select` |
+| 3D labels and north arrow | HTML over the canvas: `.viewport-label` and the plan's `NorthGlyph` | Tokens (`--float-bg`, `--ink`, `--plan-compass`); OUTSIDE AIR tags use `ink()` of their colour |
 
-Data colours stay hex because the 3D view (three.js) needs real colours. On the plan and in HTML swatches, wrap them:
+Data colours stay hex so that both views can use them. three.js needs numbers, so the 3D view resolves the same CSS
+(`ink(color)`, `wash(color)`, `var(--token)`) through `sceneColor()`, which asks the browser for the colour in the
+current theme. Never hard-code a 3D colour in `Viewport.tsx` outside `SCENE_LOOK`. On the plan and in HTML swatches, wrap them:
 
 - `ink(color)`: lines, text, markers, small swatches and translucent tints. Light: unchanged. Dark: OKLCH lightness
   becomes `0.48 + 0.55 L`, chroma × 0.9. Every colour reads on the dark paper, and a darker colour stays darker than a

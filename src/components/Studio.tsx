@@ -58,7 +58,7 @@ import { buildBom, buildConstructionBom, buildConstructionSchedule, buildSchedul
 import { DUCT_CATALOG, DUCT_STREAMS, ductPairAllowed, getDuctProduct, servicesFor, streamFor, systemsForProduct } from '@/domain/ductCatalog';
 import { ductSizeLabel, DUCT_SERVICES, DUCT_SERVICE_LABEL, openPorts, type DuctDraftPoint } from '@/domain/ducts';
 import { SURFACE_FACES, SYSTEM_KINDS, WALL_FACES, type DuctService, type EditorTool, type Project, type Selection, type StoredTemplate, type WallFace } from '@/domain/types';
-import { NO_WALL_RUNS, polygonArea } from '@/domain/wallDraw';
+import { polygonArea } from '@/domain/wallDraw';
 import { INTERFACE_COLOR, WALL_TYPES, edgePortions, findInterface, interfaceForOpening, interfaceTargets, portionSummary, roomFill, wallColor, wallName, wallPlaceLabel, wallRoleLabel } from '@/domain/walls';
 import { DEFAULT_LAYERS, PlanView, type DropHint, type PlanLayers } from './PlanView';
 import { formatArea, formatLength, formatNumber, formatPower, lengthToM, lengthUnit, mToLength } from '@/domain/units';
@@ -72,6 +72,8 @@ import { LibraryPanel } from './LibraryPanel';
 import { SchedulePanel } from './SchedulePanel';
 import { SettingsButton } from './Settings';
 import { ink, wash } from '@/domain/theme';
+import { SCENE_CATEGORIES } from '@/domain/scene3d';
+import { defaultView3D, loadView3D, saveView3D, type View3DSettings } from '@/domain/view3d';
 
 const Viewport = dynamic(() => import('./Viewport'), {
   ssr: false,
@@ -204,7 +206,7 @@ export function Studio({
   const [checkFilter, setCheckFilter] = useState<Exclude<BuildStep, 'check'> | 'all'>('all');
   const [checkIndex, setCheckIndex] = useState(0);
   const [showDimensions, setShowDimensions] = useState(false);
-  const [hideRoof, setHideRoof] = useState(false);
+  const [view3d, setView3d] = useState<View3DSettings>(defaultView3D);
   const [exportOpen, setExportOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
@@ -212,6 +214,11 @@ export function Studio({
   const [wallTypeId, setWallTypeId] = useState<string | null>(null);
   const [scene, setScene] = useState<'plan' | '3d'>('plan');
   const [cameraPose, setCameraPose] = useState<'orbit' | 'top'>('top');
+  useEffect(() => setView3d(loadView3D()), []);
+  const changeView3d = (next: View3DSettings) => {
+    setView3d(next);
+    saveView3D(next);
+  };
   const [menu, setMenu] = useState<{ x: number; y: number; title?: string; items: MenuEntry[] } | null>(null);
   const [nameFocus, setNameFocus] = useState(0);
   const past = useRef<Project[]>([]);
@@ -1480,14 +1487,13 @@ export function Studio({
                 ) : (
                   <div className="viewport">
                     <Viewport
-                      rooms={project.rooms}
-                      equipment={project.equipment}
-                      wallRuns={project.wallRuns ?? NO_WALL_RUNS}
-                      interfaceWalls={project.interfaceWalls}
+                      project={project}
+                      step={step}
+                      layers={layers}
+                      view3d={view3d}
                       selection={selection}
                       tool={tool}
                       fitToken={fitToken}
-                      hideRoof={hideRoof}
                       cameraPose={cameraPose}
                       onCameraSettled={pose => {
                         if (pose === 'top') setScene('plan');
@@ -1562,7 +1568,7 @@ export function Studio({
                     Fit
                   </button>
                 </div>
-                {layersOpen && <LayersMenu layers={layers} scene={scene} hideRoof={hideRoof} onChange={setLayers} onHideRoof={setHideRoof} onClose={() => setLayersOpen(false)} />}
+                {layersOpen && <LayersMenu layers={layers} scene={scene} view3d={view3d} onChange={setLayers} onView3d={changeView3d} onClose={() => setLayersOpen(false)} />}
               <div className="options-strip" aria-label={`${stepLabel} options`}>
                 <div className="strip-scroll">
                 {step === 'spaces' && (
@@ -2453,16 +2459,16 @@ function DuctLegend({ currentId }: { currentId?: string }) {
 function LayersMenu({
   layers,
   scene,
-  hideRoof,
+  view3d,
   onChange,
-  onHideRoof,
+  onView3d,
   onClose,
 }: {
   layers: PlanLayers;
   scene: 'plan' | '3d';
-  hideRoof: boolean;
+  view3d: View3DSettings;
   onChange: (layers: PlanLayers) => void;
-  onHideRoof: (hide: boolean) => void;
+  onView3d: (settings: View3DSettings) => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -2491,26 +2497,67 @@ function LayersMenu({
     </label>
   );
   return (
-    <div ref={ref} className="layers-menu" role="dialog" aria-label="Layers">
-      <p className="layers-title">Show on plan</p>
+    <div ref={ref} className={['layers-menu', scene === '3d' ? 'is-3d' : ''].filter(Boolean).join(' ')} role="dialog" aria-label="Layers">
+      <p className="layers-title">{scene === '3d' ? 'Show' : 'Show on plan'}</p>
       {row('spaces', 'Spaces and walls')}
       {row('loads', 'Loads')}
       {row('equipment', 'Equipment')}
       {row('ducts', 'Ducts')}
-      {row('piping', 'Piping')}
-      {row('controls', 'Room sensors')}
-      {row('internals', 'Unit internals')}
+      {/* Piping, sensors, unit internals, duct widths and clearances are drawn on the plan only. */}
+      {scene === 'plan' && row('piping', 'Piping')}
+      {scene === 'plan' && row('controls', 'Room sensors')}
+      {scene === 'plan' && row('internals', 'Unit internals')}
       <p className="layers-title">Detail</p>
-      {row('ductWidth', 'Duct widths')}
-      {row('clearances', 'Clearances')}
+      {scene === 'plan' && row('ductWidth', 'Duct widths')}
+      {scene === 'plan' && row('clearances', 'Clearances')}
       {row('labels', 'Details on all items')}
       {scene === '3d' && (
         <>
-          <p className="layers-title">3D</p>
-          <label>
-            <input type="checkbox" checked={hideRoof} onChange={event => onHideRoof(event.target.checked)} />
-            Hide roof
+          <p className="layers-title">Visibility and graphics</p>
+          <label title="Layers outside the active phase recede, as on the plan">
+            <input type="checkbox" checked={view3d.fadeByPhase} onChange={event => onView3d({ ...view3d, fadeByPhase: event.target.checked })} />
+            Fade by phase
           </label>
+          <label title="See through walls, floors, ceilings, doors and windows to the equipment inside">
+            <input type="checkbox" checked={view3d.ghostSurfaces} onChange={event => onView3d({ ...view3d, ghostSurfaces: event.target.checked })} />
+            Ghost surfaces
+          </label>
+          <label title="Sun shadows, for depth">
+            <input type="checkbox" checked={view3d.shadows} onChange={event => onView3d({ ...view3d, shadows: event.target.checked })} />
+            Shadows
+          </label>
+          <div className="vg-grid" role="group" aria-label="Category visibility and transparency">
+            <span className="vg-head">Category</span>
+            <span className="vg-head">Transparency</span>
+            {SCENE_CATEGORIES.map(entry => {
+              const graphics = view3d.categories[entry.id];
+              const set = (patch: Partial<typeof graphics>) => onView3d({ ...view3d, categories: { ...view3d.categories, [entry.id]: { ...graphics, ...patch } } });
+              return (
+                <Fragment key={entry.id}>
+                  <label>
+                    <input type="checkbox" checked={graphics.visible} onChange={event => set({ visible: event.target.checked })} />
+                    {entry.label}
+                  </label>
+                  <span className="vg-slider">
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={10}
+                      value={graphics.transparency}
+                      disabled={!graphics.visible}
+                      aria-label={`${entry.label} transparency`}
+                      onChange={event => set({ transparency: Number(event.target.value) })}
+                    />
+                    <output>{graphics.transparency}%</output>
+                  </span>
+                </Fragment>
+              );
+            })}
+          </div>
+          <button type="button" className="vg-reset" onClick={() => onView3d(defaultView3D())}>
+            Reset visibility and graphics
+          </button>
         </>
       )}
     </div>

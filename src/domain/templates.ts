@@ -304,33 +304,37 @@ const DINING_BAR_RTU: SystemPackage = {
   ],
   nodes: [
     { key: 's0', service: 'supply', x: 0, y: 1.6 },
-    { key: 'sw', service: 'supply', x: -4, y: 1.6 },
-    { key: 'sws', service: 'supply', x: -4, y: -3 },
-    { key: 'sc', service: 'supply', x: 2, y: 1.6 },
-    { key: 'se', service: 'supply', x: 4, y: 1.6 },
+    { key: 'sw', service: 'supply', x: -3, y: 1.6 },
+    { key: 'sws', service: 'supply', x: -3, y: -3 },
+    { key: 'sm', service: 'supply', x: 0, y: -3 },
     { key: 'ses', service: 'supply', x: 4, y: -3 },
+    { key: 'sc', service: 'supply', x: 2, y: 1.6 },
     { key: 's4', service: 'supply', x: 7.3, y: -3 },
     { key: 's5', service: 'supply', x: 9.3, y: -3 },
     { key: 'r0', service: 'return', x: 0, y: -1.55 },
     { key: 'rx', service: 'return', x: 2, y: -1.55 },
   ],
   ducts: [
-    // Supply leaves the north end and splits: west 1,500 (three dining diffusers), one diffuser straight ahead,
-    // east 1,750 (corridor, two dining diffusers, bar, storage). Branches run along the north side of the room
-    // and down its west and east thirds, clear of the return main on the centre line.
+    // Supply leaves the north end and splits: one diffuser straight ahead, east 620 (corridor and the north-east
+    // dining diffuser), west 2,630 (the north-west diffuser and everything south). The south feed runs down
+    // x = 3 m, between the west diffuser column and the west return grille, then east along y = 1 m under the south
+    // diffusers to the bar and storage. So no duct passes over a diffuser and no supply crosses the return main.
+    // Sizes hold about 1,050–1,450 fpm.
     roundDuct('supply', 22, memberPort('rtu', 'supply'), junction('s0')),
     roundDuct('supply', 10, junction('s0'), memberPort('d2a', 'neck')),
-    roundDuct('supply', 16, junction('s0'), junction('sw')),
-    roundDuct('supply', 10, junction('sw'), memberPort('d1a', 'neck')),
-    roundDuct('supply', 14, junction('sw'), junction('sws')),
-    roundDuct('supply', 10, junction('sws'), memberPort('d1b', 'neck')),
-    roundDuct('supply', 10, junction('sws'), memberPort('d2b', 'neck'), [{ x: 0, y: -3 }]),
-    // East: 1,750 → 1,630 → 1,130 → 630 → 355 CFM.
-    roundDuct('supply', 16, junction('s0'), junction('sc')),
+    // East: 620 → corridor 120 and the north-east diffuser 500.
+    roundDuct('supply', 10, junction('s0'), junction('sc')),
     roundDuct('supply', 6, junction('sc'), memberPort('dc', 'neck')),
-    roundDuct('supply', 16, junction('sc'), junction('se')),
-    roundDuct('supply', 10, junction('se'), memberPort('d3a', 'neck')),
-    roundDuct('supply', 14, junction('se'), junction('ses')),
+    roundDuct('supply', 10, junction('sc'), memberPort('d3a', 'neck'), [{ x: 4, y: 1.6 }]),
+    // West: 2,630 → north-west diffuser 500, then 2,130 down the south feed.
+    roundDuct('supply', 20, junction('s0'), junction('sw')),
+    roundDuct('supply', 10, junction('sw'), memberPort('d1a', 'neck'), [{ x: -4, y: 1.6 }]),
+    roundDuct('supply', 18, junction('sw'), junction('sws')),
+    // South row, west to east: 2,130 → 1,630 → 1,130 → 630 (bar and storage) → 355 → 80 CFM.
+    roundDuct('supply', 10, junction('sws'), memberPort('d1b', 'neck'), [{ x: -4, y: -3 }]),
+    roundDuct('supply', 16, junction('sws'), junction('sm')),
+    roundDuct('supply', 10, junction('sm'), memberPort('d2b', 'neck')),
+    roundDuct('supply', 14, junction('sm'), junction('ses')),
     roundDuct('supply', 10, junction('ses'), memberPort('d3b', 'neck')),
     roundDuct('supply', 10, junction('ses'), junction('s4')),
     roundDuct('supply', 8, junction('s4'), memberPort('d4a', 'neck')),
@@ -399,12 +403,18 @@ const RESTROOMS: SystemPackage = {
     notes: `${system.notes} Make-up air comes from the corridor through a transfer grille in each door (about 0.7 ft² free area for 150 CFM at about 210 fpm). A plain undercut passes only about 30–50 CFM quietly.`,
   })),
   members: [
-    // Roof hoods beside the fans rather than toward the doors, so the doors stay clear for the transfer grilles.
+    // Roof hoods in the far corners from the doors, so the doors stay clear for the transfer grilles, and about
+    // 1.2 m from the fans, so the duct between them shows rather than hiding under the hood.
     ...RESTROOM_EXHAUST.members.map(member =>
-      member.key === 'hoodA' ? { ...member, planOffset: { xM: -0.7, yM: 0 } } : member.key === 'hoodB' ? { ...member, planOffset: { xM: 2.9, yM: 0 } } : member,
+      member.key === 'hoodA' ? { ...member, planOffset: { xM: -0.6, yM: -1.05 } } : member.key === 'hoodB' ? { ...member, planOffset: { xM: 2.8, yM: -1.05 } } : member,
     ),
     { key: 'tgA', catalogId: 'grille-transfer-door', planOffset: { xM: -0.1, yM: 1.4 }, yawDeg: 180, designCfm: 150, notes: 'Transfer grille in the Restroom A door: corridor air in to the exhaust fan.' },
     { key: 'tgB', catalogId: 'grille-transfer-door', planOffset: { xM: 2.1, yM: 1.4 }, yawDeg: 180, designCfm: 150, notes: 'Transfer grille in the Restroom B door: corridor air in to the exhaust fan.' },
+  ],
+  // Each fan's duct runs out sideways, then turns to its hood.
+  ducts: [
+    roundDuct('exhaust', 6, memberPort('fanA', 'exhaust'), memberPort('hoodA', 'throat'), [{ x: -0.6, y: 0 }]),
+    roundDuct('exhaust', 6, memberPort('fanB', 'exhaust'), memberPort('hoodB', 'throat'), [{ x: 2.8, y: 0 }]),
   ],
 };
 

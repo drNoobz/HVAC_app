@@ -46,6 +46,8 @@ export const MARK_COLOR = {
   window: '#7eb0c4',
   opening: '#8aa0ae',
   equipment: '#1f4e5f',
+  /** Equipment whose catalogue item states no size, drawn at a placeholder size. */
+  unsized: '#c4a574',
 } as const;
 
 export function colorNumber(hex: string): number {

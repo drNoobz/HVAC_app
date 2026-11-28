@@ -143,3 +143,39 @@ Rules live in `src/domain/smartDrop.ts`; Studio's `placeEquipment`, `beginDuctAt
   room-relative dimensions are hidden.
 - **Everything happens on the main canvas.** Inspectors stay slim. Keep the phases (Spaces, Loads, Systems,
   Check) as they are.
+
+## The 3D view
+
+The 3D view follows these conventions too. It draws the list `buildScene(project)` makes in
+`src/domain/scene3d.ts`, from the same helpers as the plan. When you add something to the plan, add it there too.
+
+- **Colours:** the same data colours (`SERVICE_COLOR`, wall constructions, `MARK_COLOR`, `LOAD_CATEGORY_COLOR`,
+  `OUTSIDE_IN_COLOR` / `OUTSIDE_OUT_COLOR`), resolved for the theme by `sceneColor(ink())` or `sceneColor(wash())`.
+- **Ducts and risers:** a run sits at its `zM`. `ductElevation` puts a new run under the lowest ceiling it crosses,
+  less half its depth and 50 mm. `endRise` gives the riser to the equipment at each end: to a rooftop unit's
+  underside, or clamped to a unit's height in the space. The plan marks a riser over 50 mm with a circle at that end.
+  Where a run meets a node at another height (a tee from a lower main), it rises or drops to the node with an elbow,
+  so branches always meet their main.
+- **Ceiling terminals hang from their duct.** A diffuser or grille linked to a duct end is drawn under that end on a
+  short neck (`hangingTerminals` in `scene3d.ts`), not at its stored ceiling height, so the two always meet. The neck
+  is part of the duct run: a click on it selects the run.
+- **Rooftop items:** a duct ending at a rooftop unit, fan or hood carries on under the casing and rises into its
+  underside (`roofEntry`), to where the item is drawn (`drawnBottom`, shared with the equipment). The collar under
+  the unit is sized to the duct. Keep a template's rooftop connections on the unit's edge as before: the 3D view
+  pulls them in.
+- **Avoid clashes in templates:** a duct must not pass over a diffuser or grille it does not feed, and supply and
+  return should not cross at the same height. Branch off beside a terminal, never run past it and double back. There
+  is no clash check yet; look in 3D after changing a template's routing.
+- **Flow marks:** flat chevrons painted on the top of the duct, about one every 3 m, like the air key's Flow mark.
+  They are unlit, so they read the same from any angle. No arrows or cones stand outside a duct.
+- **Look:** a sun with soft shadows and a cool fill light. Shadows is a setting (Layers → Visibility and graphics);
+  only solid pieces cast them.
+- **Phase fade:** `stepFade` (in `src/domain/viewRules.ts`) for both views. In 3D, ceilings fade twice as far, so
+  ducts read in Systems.
+- **Visibility and graphics** (`src/domain/view3d.ts`): the categories, ghost surfaces and transparency, stored as
+  `hvac-3d-view`. A category also follows its Layers row (Spaces and walls, Loads, Equipment, Ducts).
+- **Picking:** a click goes through pieces under 60 % opaque to the first solid one. Doors and windows win within
+  14 px. Selecting switches to the item's phase, as on the plan.
+- **Labels:** HTML, decluttered with `LABEL_PRIORITY`. Room names and OUTSIDE AIR always show; duct, equipment and
+  load labels show on the selection or with Details on all items.
+- **North:** the plan's `NorthGlyph` in the bottom-left corner, turned to where north points on screen.

@@ -28,6 +28,8 @@ function pageHelpers() {
       return found;
     },
     side: () => document.querySelector('.side'),
+    /** A row of the open Layers menu, by its text. */
+    layersRow: text => [...document.querySelectorAll('.layers-menu label')].find(label => label.textContent.trim() === text),
     inspector: () => document.querySelector('.inspector'),
     labelOf(field) {
       return t.labelText(field).trim();
@@ -489,8 +491,23 @@ async function main() {
     });
     await shot('17-3d', t => t.mark([[t.btn('Plan'), t.btn('3D')]]));
 
+    // 17b. Visibility and graphics: ghost surfaces on, with the Layers menu open
+    await run(async t => {
+      t.btn('Layers ▾').click();
+      await t.sleep(300);
+      t.layersRow('Ghost surfaces').querySelector('input').click();
+      await t.sleep(1200);
+    });
+    await shot('17b-3d-graphics', t =>
+      t.mark([t.btn('Layers ▾'), { el: [t.layersRow('Fade by phase'), t.layersRow('Ghost surfaces'), t.layersRow('Shadows')], badge: 'l' }, { el: document.querySelector('.vg-grid'), pad: 2, badge: 'l' }])
+    );
+
     // 18. Schedule and export
     await run(async t => {
+      t.layersRow('Ghost surfaces').querySelector('input').click();
+      await t.sleep(200);
+      t.btn('Layers ▾').click();
+      await t.sleep(200);
       t.btn('Plan').click();
       await t.sleep(300);
       t.btn('Schedule').click();
