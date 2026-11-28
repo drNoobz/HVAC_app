@@ -74,6 +74,7 @@
   --plan-guide: #c43b6a;
   --plan-draft: rgba(14, 110, 102, 0.08);
   --plan-draft-strong: rgba(14, 110, 102, 0.16);
+  --plan-clash-fill: rgba(196, 59, 59, 0.16);
 
   /* ink() and wash() in src/domain/theme.ts: data colours (air, walls, loads) unchanged in light. Dark: lines and marks
      take lightness 0.48 + 0.55 L (order kept); pale fills are capped at lightness 0.31 as dark tints. */
@@ -165,6 +166,7 @@
   --plan-guide: #f07aa5;
   --plan-draft: rgba(79, 195, 181, 0.08);
   --plan-draft-strong: rgba(79, 195, 181, 0.18);
+  --plan-clash-fill: rgba(229, 100, 91, 0.22);
 
   --ink-l-base: 0.48;
   --ink-l-scale: 0.55;
@@ -715,6 +717,29 @@ h3 { font-size: 13px; margin: 16px 0 8px; letter-spacing: 0.02em; }
   color: var(--muted);
 }
 .viewport-labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.plan-clash { cursor: pointer; }
+/* A clash mark in 3D: a ring centred on the clash, drawn over everything so ceilings never hide it. */
+.viewport-clash {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  visibility: hidden;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--danger-strong);
+  border-radius: 50%;
+  background: var(--plan-clash-fill);
+  color: var(--danger-strong);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: auto;
+  cursor: pointer;
+  will-change: transform;
+}
 .viewport-label {
   position: absolute;
   left: 0;

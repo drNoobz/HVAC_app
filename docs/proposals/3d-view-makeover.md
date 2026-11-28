@@ -155,6 +155,12 @@ item at its end, a terminal and its neck). Report each clash once, at its midpoi
 views in the Check colour. The scene list from `buildScene` already has every shape in metres, so the check can run on
 it, or on the same helpers, without the renderer.
 
+**Built 2026-11-28 (list only):** `findClashes` in `src/domain/clashes.ts` runs on `buildScene`'s pieces as above
+(capsules, with rectangular ducts taken at half their larger side; equipment boxes; runs joined at a node or port
+ignored). `clashIssues` in `checks.ts` lists each clash as a Systems warning that names the room and both ducts, and
+selects the first duct. Marks in Plan and 3D, a Hop under fix, and see-through surfaces for a selected duct in Check
+followed the same day (Phase 1 of [duct-layout-tool.md](duct-layout-tool.md)).
+
 They feed the Check phase. Selecting an issue in 3D flies to it with a section box around it.
 
 **Tools:**

@@ -568,6 +568,100 @@ function splitRun(project: Project, run: DuctRun, at: { x: number; y: number; se
   return { ...next, ducts: ducts.map(item => (item.id === first.id || item.id === second.id ? sealDuct(item, next) : item)) };
 }
 
+/** Clear gap between a duct that hops under another and the duct above it, metres. */
+export const HOP_GAP_M = 0.05;
+
+function ductDepthM(run: DuctRun): number {
+  return run.shape === 'round' ? run.widthM : run.heightM ?? run.widthM * 0.67;
+}
+
+/** The point at a distance along a polyline, with the index of the segment it falls on. */
+function pointAlong(points: readonly { x: number; y: number }[], distance: number): { x: number; y: number; segment: number } {
+  let left = distance;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    const length = Math.hypot(b.x - a.x, b.y - a.y);
+    if (left <= length || i === points.length - 1) {
+      const t = length > 0 ? Math.min(1, Math.max(0, left / length)) : 0;
+      return { x: Number((a.x + (b.x - a.x) * t).toFixed(3)), y: Number((a.y + (b.y - a.y) * t).toFixed(3)), segment: i - 1 };
+    }
+    left -= length;
+  }
+  return { x: points[0].x, y: points[0].y, segment: 0 };
+}
+
+/** How far along a polyline its closest point to `at` is. */
+function distanceAlong(points: readonly { x: number; y: number }[], at: { x: number; y: number }): number {
+  let best = Infinity;
+  let bestAlong = 0;
+  let walked = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const length2 = dx * dx + dy * dy;
+    const t = length2 > 0 ? Math.min(1, Math.max(0, ((at.x - a.x) * dx + (at.y - a.y) * dy) / length2)) : 0;
+    const gap = Math.hypot(a.x + dx * t - at.x, a.y + dy * t - at.y);
+    if (gap < best) {
+      best = gap;
+      bestAlong = walked + t * Math.sqrt(length2);
+    }
+    walked += Math.sqrt(length2);
+  }
+  return bestAlong;
+}
+
+/**
+ * Hop a run under a duct it crosses: split it on both sides of the crossing and lower the piece between, so it
+ * passes under the other duct with a small gap. The 3D view draws the drops at the two new junctions. Returns the
+ * lowered piece, or null when the run cannot hop (not a plan run, or too short).
+ */
+export function hopUnder(project: Project, runId: string, otherId: string, at: { x: number; y: number }): { project: Project; runId: string } | null {
+  const run = (project.ducts ?? []).find(item => item.id === runId);
+  const other = (project.ducts ?? []).find(item => item.id === otherId);
+  if (!run || !other || run.view === 'schematic' || run.points.length < 2) return null;
+  const total = polylineLength(run.points);
+  const crossing = distanceAlong(run.points, at);
+  // Clear of the other duct in plan, plus room for the drop on each side.
+  const half = other.widthM / 2 + run.widthM + 0.15;
+  // Keep a piece at the old height only if it clears what sits at that end: a drop inside a diffuser's footprint
+  // would clash with it, so near equipment the low piece runs on to the end instead.
+  const clearance = (end: DuctEnd) => {
+    const item = end.equipmentId ? project.equipment.find(entry => entry.id === end.equipmentId) : undefined;
+    const product = item ? getProduct(item.catalogId) : undefined;
+    if (!product) return 0.1;
+    const size = equipmentSizeM(product);
+    return Math.max(size.lengthM, size.widthM) / 2 + run.widthM + 0.15;
+  };
+  const startEdge = clearance(run.start);
+  const endEdge = clearance(run.end);
+  let next = project;
+  let pieceId = run.id;
+  const split = (pieceRun: DuctRun, distance: number): { project: Project; head: string; tail: string } => {
+    const point = pointAlong(pieceRun.points, distance);
+    const node: DuctNode = { id: createId('node'), systemId: pieceRun.systemId, service: pieceRun.service, x: point.x, y: point.y };
+    const before = new Set((next.ducts ?? []).map(item => item.id));
+    const result = splitRun({ ...next, ductNodes: [...(next.ductNodes ?? []), node] }, pieceRun, point, node.id);
+    const tail = (result.ducts ?? []).find(item => !before.has(item.id))!;
+    return { project: result, head: pieceRun.id, tail: tail.id };
+  };
+  if (crossing + half < total - endEdge) {
+    const made = split(run, crossing + half);
+    next = made.project;
+    pieceId = made.head;
+  }
+  if (crossing - half > startEdge) {
+    const head = (next.ducts ?? []).find(item => item.id === pieceId)!;
+    const made = split(head, crossing - half);
+    next = made.project;
+    pieceId = made.tail;
+  }
+  const zM = Number((other.zM - ductDepthM(other) / 2 - HOP_GAP_M - ductDepthM(run) / 2).toFixed(3));
+  return { project: { ...next, ducts: (next.ducts ?? []).map(item => (item.id === pieceId ? { ...item, zM } : item)) }, runId: pieceId };
+}
+
 /** Resolve a drawn end: a port, an existing junction, a new tee on a run of the same stream, or an open end. */
 function attachEnd(
   project: Project,
@@ -697,7 +791,8 @@ export function removeDuct(project: Project, id: string): Project {
 }
 
 function sameDuct(a: DuctRun, b: DuctRun): boolean {
-  return a.catalogId === b.catalogId && a.shape === b.shape && Math.abs(a.widthM - b.widthM) < 0.002 && Math.abs((a.heightM ?? 0) - (b.heightM ?? 0)) < 0.002 && a.systemId === b.systemId && a.service === b.service;
+  // Runs at different heights stay apart: the drop between them is a hop or a level change the user made.
+  return Math.abs(a.zM - b.zM) < 0.01 && a.catalogId === b.catalogId && a.shape === b.shape && Math.abs(a.widthM - b.widthM) < 0.002 && Math.abs((a.heightM ?? 0) - (b.heightM ?? 0)) < 0.002 && a.systemId === b.systemId && a.service === b.service;
 }
 
 /** Drop junctions left with one run, and join two matching runs through a junction back into one. */

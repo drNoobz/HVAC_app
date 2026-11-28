@@ -55,6 +55,9 @@ export const PLAN_COLOR = {
   guide: 'var(--plan-guide)',
   draft: 'var(--plan-draft)',
   draftStrong: 'var(--plan-draft-strong)',
+  /** Clash marks: the Check warning colours. */
+  clash: 'var(--danger-strong)',
+  clashFill: 'var(--plan-clash-fill)',
 } as const;
 
 export function loadThemePreference(): ThemePreference {

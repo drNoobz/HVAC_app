@@ -164,8 +164,16 @@ The 3D view follows these conventions too. It draws the list `buildScene(project
   the unit is sized to the duct. Keep a template's rooftop connections on the unit's edge as before: the 3D view
   pulls them in.
 - **Avoid clashes in templates:** a duct must not pass over a diffuser or grille it does not feed, and supply and
-  return should not cross at the same height. Branch off beside a terminal, never run past it and double back. There
-  is no clash check yet; look in 3D after changing a template's routing.
+  return should not cross at the same height. Branch off beside a terminal, never run past it and double back. Check
+  lists clashes (`clashIssues` in `checks.ts`, geometry in `clashes.ts`); a template must show none. Look in 3D too.
+- **Clash marks:** Studio finds clashes once (`projectClashes`) and passes them to Check, the plan and 3D. In the
+  Systems and Check phases each clash gets a red ring with "!" (`PLAN_COLOR.clash`, `--plan-clash-fill`; in 3D the HTML
+  `.viewport-clash`, drawn over everything so ceilings never hide it). Clicking a mark selects the duct. In Check, a
+  selected duct ghosts the building surfaces in 3D, since Check draws them solid.
+- **Hop under** (`hopUnder` in `projectOps.ts`): the shallower duct of a clash (`clashHopper`) is split on both sides
+  of the crossing and the middle piece lowered to pass under the other with a 50 mm gap. Near equipment at a run end
+  the low piece runs on to the end, so the drop never lands inside a diffuser. `pruneNodes` never merges runs at
+  different heights, so a hop survives later edits.
 - **Flow marks:** flat chevrons painted on the top of the duct, about one every 3 m, like the air key's Flow mark.
   They are unlit, so they read the same from any angle. No arrows or cones stand outside a duct.
 - **Look:** a sun with soft shadows and a cool fill light. Shadows is a setting (Layers → Visibility and graphics);

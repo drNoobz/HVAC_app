@@ -5,6 +5,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type M
 import { catalogToken, setActiveCatalogDrag, type CatalogDrag } from '@/domain/catalogDrag';
 import { createSystemAt, dropRole, ductStart, joinTarget, packageAround, packagesFor, runUnder, systemDistance, systemKindsFor } from '@/domain/smartDrop';
 import { buildChecks, stepForSelection, type BuildStep, type CheckIssue } from '@/domain/checks';
+import { projectClashes } from '@/domain/clashes';
 import { siteMissing, siteOf } from '@/domain/climate';
 import { LOOP_FLUID_LABEL, newPlantLoop, SENSOR_LABEL } from '@/domain/controls';
 import { SECTION_LABEL, unitSections } from '@/domain/airUnits';
@@ -35,6 +36,7 @@ import {
   buildDrawnRoom,
   buildOutlineRoom,
   buildPlacement,
+  hopUnder,
   placeOpeningOnRoom,
   removeDuct,
   removeEquipment,
@@ -339,6 +341,8 @@ export function Studio({
     select(next);
   };
   const validation = useMemo(() => validateModel(projectToBuildingModel(project)), [project]);
+  /** Duct clashes in the 3D model: listed in Check and marked in the Plan and 3D views. */
+  const clashes = useMemo(() => projectClashes(project), [project]);
   const checks = useMemo(() => {
     const geometry = validation.issues.flatMap(issue =>
       issue.severity === 'error' || issue.severity === 'warning'
@@ -350,8 +354,8 @@ export function Studio({
           }]
         : [],
     );
-    return buildChecks(project, geometry);
-  }, [project, validation]);
+    return buildChecks(project, geometry, clashes);
+  }, [project, validation, clashes]);
   const visibleChecks = checks.filter(issue => checkFilter === 'all' || issue.step === checkFilter);
 
   useEffect(() => {
@@ -646,6 +650,13 @@ export function Studio({
     setTool({ kind });
   };
   const runFix = (issue: CheckIssue) => {
+    if (issue.fix.kind === 'hop') {
+      const hopped = hopUnder(project, issue.fix.runId, issue.fix.otherId, { x: issue.fix.x, y: issue.fix.y });
+      if (!hopped) return;
+      edit(hopped.project);
+      select({ kind: 'duct', id: hopped.runId });
+      return;
+    }
     if (issue.selection) select(issue.selection);
   };
   /** Put one catalogue item on the plan in a system, or in none. */
@@ -1242,7 +1253,7 @@ export function Studio({
                               <span className="check-sev">{issue.severity === 'planning' ? 'Planning' : issue.severity === 'error' ? 'Error' : 'Warning'}</span>
                               <span>{issue.message}</span>
                             </button>
-                            {issue.fix.kind === 'duct' && (
+                            {(issue.fix.kind === 'duct' || issue.fix.kind === 'hop') && (
                               <button type="button" className="panel-btn" onClick={() => runFix(issue)}>
                                 {issue.fixLabel}
                               </button>
@@ -1385,6 +1396,7 @@ export function Studio({
                     tool={tool}
                     fitToken={fitToken}
                     step={step}
+                    clashes={clashes}
                     layers={layers}
                     expandedUnits={expandedUnits}
                     onToggleInternals={toggleInternals}
@@ -1489,6 +1501,7 @@ export function Studio({
                     <Viewport
                       project={project}
                       step={step}
+                      clashes={clashes}
                       layers={layers}
                       view3d={view3d}
                       selection={selection}

@@ -10,12 +10,16 @@ import { getLoadProduct } from './loadCatalog';
 import { hoodOver } from './loads';
 import type { DuctService, Project, Selection } from './types';
 import { isOccupiedUse } from './spaceUses';
+import { clashHopper, projectClashes, type DuctClash } from './clashes';
+import { roomAtPoint } from './projectOps';
 
 export type BuildStep = 'spaces' | 'loads' | 'systems' | 'check';
 
 export type CheckFix =
   | { kind: 'select' }
-  | { kind: 'duct'; catalogId: string; systemId: string; service: DuctService };
+  | { kind: 'duct'; catalogId: string; systemId: string; service: DuctService }
+  /** Lower `runId` under `otherId` where they cross, at plan point x, y. */
+  | { kind: 'hop'; runId: string; otherId: string; x: number; y: number };
 
 export interface CheckIssue {
   id: string;
@@ -63,6 +67,8 @@ function equipmentName(project: Project, id: string): string {
 export function buildChecks(
   project: Project,
   geometry: { id: string; severity: 'error' | 'warning'; message: string; selection: Selection | null }[],
+  /** Clashes already found for this project (the views draw them too); found here when not given. */
+  clashes?: readonly DuctClash[],
 ): CheckIssue[] {
   const issues: CheckIssue[] = [];
   for (const row of geometry) {
@@ -156,6 +162,7 @@ export function buildChecks(
     });
   }
   issues.push(...airIssues(project));
+  issues.push(...clashIssues(project, clashes ?? projectClashes(project)));
   issues.push(...controlIssues(project));
   return issues;
 }
@@ -195,6 +202,56 @@ function controlIssues(project: Project): CheckIssue[] {
     issues.push({ id: `tag-${tag}`, step: 'systems', severity: 'warning', message: `Control tag ${tag} is used ${uses} times.`, selection: null, fix: { kind: 'select' }, fixLabel: 'Show' });
   }
   return issues;
+}
+
+function ductSize(shape: string, widthM: number, heightM: number | null | undefined, units: Project['units']): string {
+  // Duct sizes the way the catalogue names them: whole inches, or millimetres.
+  const one = (m: number) => (units === 'IP' ? `${Math.round(m / 0.0254)}` : `${Math.round(m * 1000)}`);
+  const unit = units === 'IP' ? 'in' : 'mm';
+  return shape === 'rect' ? `${one(widthM)} × ${one(heightM ?? widthM)} ${unit}` : `ø ${one(widthM)} ${unit}`;
+}
+
+/**
+ * Clashes in the 3D model: two ducts that overlap, or a duct through equipment it does not serve. Ducts are drawn
+ * top-aligned under the ceiling, so two runs that cross in plan usually meet at the same height. A duct clash offers
+ * Hop under, which lowers the smaller duct under the other at the crossing.
+ */
+function clashIssues(project: Project, clashes: readonly DuctClash[]): CheckIssue[] {
+  const ducts = project.ducts ?? [];
+  if (ducts.length === 0) return [];
+  const runs = new Map(ducts.map(run => [run.id, run]));
+  const ductName = (id: string) => {
+    const run = runs.get(id)!;
+    const system = project.systems.find(item => item.id === run.systemId);
+    const label = system ? streamFor(system.kind, run.service)?.label ?? DUCT_SERVICE_LABEL[run.service] : DUCT_SERVICE_LABEL[run.service];
+    return `${label} duct ${ductSize(run.shape, run.widthM, run.heightM, project.units)}`;
+  };
+  return clashes.map(clash => {
+    const [x, y, z] = clash.at;
+    const room = roomAtPoint(project.rooms.filter(item => z >= item.zM - 0.05 && z <= item.zM + item.heightM + 0.6), x, y);
+    const where = room ? `${room.name}: ` : '';
+    if (clash.kind === 'duct') {
+      const hop = clashHopper(project, clash);
+      return {
+        id: `clash-${clash.runId}-${clash.otherId}`,
+        step: 'systems' as const,
+        severity: 'warning' as const,
+        message: `${where}${ductName(hop.runId)} clashes with ${ductName(hop.otherId)}. Hop under lowers the first where they cross, or reroute one.`,
+        selection: { kind: 'duct' as const, id: hop.runId },
+        fix: { kind: 'hop' as const, runId: hop.runId, otherId: hop.otherId, x, y },
+        fixLabel: 'Hop under',
+      };
+    }
+    return {
+      id: `clash-${clash.runId}-${clash.otherId}`,
+      step: 'systems' as const,
+      severity: 'warning' as const,
+      message: `${where}${ductName(clash.runId)} passes through ${equipmentName(project, clash.otherId)}. Reroute the duct or move the equipment.`,
+      selection: { kind: 'duct' as const, id: clash.runId },
+      fix: { kind: 'select' as const },
+      fixLabel: 'Show',
+    };
+  });
 }
 
 const FPM = 0.00508;

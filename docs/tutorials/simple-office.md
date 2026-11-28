@@ -180,8 +180,11 @@ You can also right-click any duct and choose **Draw branch**, then click the duc
 ## Step 7: Check your work (phase 4, Check)
 
 1. Click **4 Check**. The left panel lists anything missing or inconsistent, for example a wall without
-   construction, missing climate data, or terminals that don't add up to the unit's airflow.
+   construction, missing climate data, terminals that don't add up to the unit's airflow, or two ducts that clash
+   where they cross at the same height.
 2. Click an issue to jump to it on the plan, fix it, and watch the count go down.
+   A clash is also marked with a red **!** on the plan and in 3D. Click the mark to select the duct, or click
+   **Hop under** on the issue to drop the smaller duct under the other where they cross.
 3. When everything is in order, the phase bar shows **Check OK**.
 
 ---

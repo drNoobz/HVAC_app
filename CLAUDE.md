@@ -40,7 +40,7 @@ Run with `npm run dev` (port 3100).
 | Equipment catalogue and ports | `src/domain/catalog.ts` |
 | Duct catalogue, air types, colours | `src/domain/ductCatalog.ts` |
 | Duct flow directions and sums | `src/domain/ducts.ts` |
-| Check phase issues | `src/domain/checks.ts` |
+| Check phase issues, duct clashes | `src/domain/checks.ts`, `src/domain/clashes.ts` |
 | Floors, walls, ceilings (components, families, suggestions) | `src/domain/construction-assemblies.json`, `src/domain/envelopeDefaults.ts` |
 | Space uses (grouped Use list, occupied / wet / cold flags, plan fills) | `src/domain/spaceUses.ts` |
 | 3D view (React Three Fiber), its scene list and Visibility and graphics | `src/components/Viewport.tsx`, `src/domain/scene3d.ts`, `src/domain/view3d.ts` |
@@ -66,6 +66,9 @@ Run with `npm run dev` (port 3100).
 - [docs/proposals/3d-view-makeover.md](docs/proposals/3d-view-makeover.md): the plan to make the 3D view match the
   Plan view (ducts, air colours, labels, layers) and then modernise it (look, cutaways, navigation, 3D checks).
   Phases 0 and 1 are built; "Phase 1 as built" says how.
+- [docs/proposals/duct-layout-tool.md](docs/proposals/duct-layout-tool.md): the plan for one duct tool that works
+  the same in Plan and 3D (snap to ports, height steps, automatic hops over crossings, drag to edit, a Connect
+  assistant), from how Revit, AutoCAD MEP, Wrightsoft, MagiCAD and others do it.
 - [docs/proposals/user-built-spaces-loads-systems.md](docs/proposals/user-built-spaces-loads-systems.md): the plan
   for users building spaces, loads, units and systems by drag and drop (smart drops, space types, unit builder).
 

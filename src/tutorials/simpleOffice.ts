@@ -291,7 +291,8 @@ export const SIMPLE_OFFICE: Tutorial = {
       alt: 'The Check phase',
       callouts: [
         'Click phase **4 Check**. When everything is in order, it says **OK**.',
-        'Otherwise the left panel lists what is missing or inconsistent, for example a wall without construction or missing climate data. Click an issue to jump to it on the plan, fix it, and watch the count go down.',
+        'Otherwise the left panel lists what is missing or inconsistent, for example a wall without construction, missing climate data, or two ducts that clash where they cross at the same height. Click an issue to jump to it on the plan, fix it, and watch the count go down.',
+        'A clash is also marked with a red **!** on the plan and in 3D; click it to select the duct. Its issue has a **Hop under** button that drops the smaller duct under the other where they cross.',
       ],
     },
     {

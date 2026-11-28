@@ -14,11 +14,12 @@ import { CATALOG_MIME } from '@/domain/catalog';
 import { parseCatalogDrag } from '@/domain/catalogDrag';
 import type { BuildStep } from '@/domain/checks';
 import { SERVICE_COLOR } from '@/domain/ductCatalog';
-import { buildScene, pieceSelected, type SceneCategory, type SceneLabel, type ScenePiece, type Vec3 } from '@/domain/scene3d';
+import { buildScene, pieceSelected, SURFACE_CATEGORIES, type SceneCategory, type SceneLabel, type ScenePiece, type Vec3 } from '@/domain/scene3d';
 import { sceneColor } from '@/domain/sceneColor';
 import { ink, PLAN_COLOR, useTheme, wash, type Theme } from '@/domain/theme';
 import type { DuctService, EditorTool, Project, Selection } from '@/domain/types';
-import { categoryOpacity, type LayerSwitches, type View3DSettings } from '@/domain/view3d';
+import { categoryOpacity, GHOST_OPACITY, type LayerSwitches, type View3DSettings } from '@/domain/view3d';
+import type { DuctClash } from '@/domain/clashes';
 import { LABEL_ACTIVE } from '@/domain/viewRules';
 import { MARK_COLOR, northDegrees, snapDrawnRect, snapPointToWalls } from '@/domain/walls';
 import { AIR_KEY_LABEL, AIR_KEY_ORDER, AirKey, NorthGlyph, type AirKeyEntry } from './PlanView';
@@ -35,6 +36,8 @@ const PICK_SOLID = 0.6;
 export interface ViewportProps {
   project: Project;
   step: BuildStep;
+  /** Duct clashes, marked in the Systems and Check phases. */
+  clashes?: readonly DuctClash[];
   layers: LayerSwitches & { labels: boolean };
   view3d: View3DSettings;
   cameraPose?: 'orbit' | 'top';
@@ -312,6 +315,30 @@ function LabelProjector({ labels, elements }: { labels: (SceneLabel & { rank: nu
   return null;
 }
 
+const clashKey = (clash: DuctClash) => `clash:${clash.runId}:${clash.otherId}`;
+
+/** Places marks centred on their points every frame, never decluttered; hidden behind the camera or off screen. */
+function MarkProjector({ marks, elements }: { marks: { key: string; at: Vec3 }[]; elements: MutableRefObject<Map<string, HTMLDivElement>> }) {
+  const camera = useThree(state => state.camera);
+  const size = useThree(state => state.size);
+  const invalidate = useThree(state => state.invalidate);
+  useEffect(() => invalidate(), [marks, invalidate]);
+  useFrame(() => {
+    const point = new THREE.Vector3();
+    for (const mark of marks) {
+      const el = elements.current.get(mark.key);
+      if (!el) continue;
+      point.set(...mark.at).project(camera);
+      const x = ((point.x + 1) / 2) * size.width;
+      const y = ((1 - point.y) / 2) * size.height;
+      const off = point.z > 1 || x < 0 || x > size.width || y < 0 || y > size.height;
+      el.style.visibility = off ? 'hidden' : 'visible';
+      if (!off) el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+    }
+  });
+  return null;
+}
+
 /**
  * The north arrow in the canvas corner, as on the plan. Each frame it turns to where north points on screen from the
  * point the camera orbits.
@@ -388,7 +415,7 @@ function Lights({ theme, bounds, shadows }: { theme: Theme; bounds: { min: Vec3;
   );
 }
 
-export default function Viewport({ project, step, layers, view3d, selection, tool, fitToken, cameraPose = 'orbit', onCameraSettled, onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu }: ViewportProps) {
+export default function Viewport({ project, step, clashes = [], layers, view3d, selection, tool, fitToken, cameraPose = 'orbit', onCameraSettled, onSelect, onDrawRoom, onPlace, onPlaceLoad, onContextMenu }: ViewportProps) {
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement>(null);
   const piecesRef = useRef<THREE.Group>(null);
@@ -404,13 +431,21 @@ export default function Viewport({ project, step, layers, view3d, selection, too
   roomsRef.current = project.rooms;
 
   const scene = useMemo(() => buildScene(project), [project]);
+  // In Check every layer is solid, so ceilings hide the ducts. With a duct selected (a clash, or a duct just hopped),
+  // the building surfaces turn see-through, as with Ghost surfaces, so the duct can be seen.
+  const ghostForClash = step === 'check' && selection.kind === 'duct';
   const opacityOf = useMemo(() => {
     const cache = new Map<SceneCategory, number>();
     return (category: SceneCategory) => {
-      if (!cache.has(category)) cache.set(category, categoryOpacity(view3d, category, step, layers));
+      if (!cache.has(category)) {
+        const opacity = categoryOpacity(view3d, category, step, layers);
+        cache.set(category, ghostForClash && SURFACE_CATEGORIES.includes(category) ? Math.min(opacity, GHOST_OPACITY) : opacity);
+      }
       return cache.get(category)!;
     };
-  }, [view3d, step, layers]);
+  }, [view3d, step, layers, ghostForClash]);
+  const clashMarks = (step === 'systems' || step === 'check') && opacityOf('ducts') > 0 ? clashes : [];
+  const clashEls = useRef(new Map<string, HTMLDivElement>());
 
   const labels = useMemo(
     () =>
@@ -495,7 +530,10 @@ export default function Viewport({ project, step, layers, view3d, selection, too
       apiRef.current?.invalidate();
     };
 
+    /** Clash marks take their own clicks. */
+    const onMark = (event: Event) => !!(event.target as Element | null)?.closest?.('.viewport-clash');
     const onPointerDown = (event: PointerEvent) => {
+      if (onMark(event)) return;
       if (event.button === 2) {
         sawRight = true;
         rightX = event.clientX;
@@ -523,7 +561,7 @@ export default function Viewport({ project, step, layers, view3d, selection, too
       if (point) showPreview(point);
     };
     const onPointerUp = (event: PointerEvent) => {
-      if (event.button !== 0) return;
+      if (event.button !== 0 || onMark(event)) return;
       if (drawing) {
         const point = groundAt(event.clientX, event.clientY);
         if (start && point) {
@@ -634,6 +672,7 @@ export default function Viewport({ project, step, layers, view3d, selection, too
             <meshStandardMaterial color={previewColor} transparent opacity={0.35} roughness={0.8} depthWrite={false} />
           </mesh>
           <LabelProjector labels={labels} elements={labelEls} />
+          <MarkProjector marks={clashMarks.map(clash => ({ key: clashKey(clash), at: clash.at }))} elements={clashEls} />
           <NorthProjector northDeg={project.northDeg ?? 0} glyph={northRef} />
         </Canvas>
         <div className="viewport-labels" aria-hidden="true">
@@ -652,6 +691,26 @@ export default function Viewport({ project, step, layers, view3d, selection, too
             </div>
           ))}
         </div>
+        {clashMarks.length > 0 && (
+          <div className="viewport-labels">
+            {clashMarks.map(clash => (
+              <div
+                key={clashKey(clash)}
+                ref={el => {
+                  if (el) clashEls.current.set(clashKey(clash), el);
+                  else clashEls.current.delete(clashKey(clash));
+                }}
+                className="viewport-clash"
+                role="button"
+                aria-label="Clash: show the duct"
+                title="Clash: see Check"
+                onClick={() => onSelect({ kind: 'duct', id: clash.runId })}
+              >
+                !
+              </div>
+            ))}
+          </div>
+        )}
         <div className="viewport-north" role="img" aria-label="North">
           <NorthGlyph degrees={0} groupRef={northRef} />
         </div>

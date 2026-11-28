@@ -23,6 +23,7 @@ import { METERS_PER_FOOT, formatArea, formatFlow, formatLength, formatNumber, le
 import { doorArc, doorHinge, doorSwingSide, doorwayKey, openingEnds } from '@/domain/doorSwing';
 import { clampSharedEdge, moveRoomEdge, slideOpeningsTogether } from '@/domain/spanFit';
 import { fade, ink, PLAN_COLOR, wash } from '@/domain/theme';
+import type { DuctClash } from '@/domain/clashes';
 import { INTERFACE_COLOR, MARK_COLOR, WALL_FACE_IDS, edgePortions, facePortions, findInterface, interfaceConstructionColor, interfaceTargets, northDegrees, roomFill, snapDrawnRect, snapPointToWalls, snapSpaceDelta, snapWallEdge, touchingRooms, wallColor, type WallPortion } from '@/domain/walls';
 
 const SNAP_M = 0.05;
@@ -518,6 +519,7 @@ export function PlanView({
   onMoveEquipment,
   onRotateEquipment,
   onNorthChange,
+  clashes = [],
   onPlaceLoad,
   onMoveLoad,
   onRotateLoad,
@@ -565,6 +567,8 @@ export function PlanView({
   onPlacePackage: (point: { xM: number; yM: number }, packageId: string) => void;
   onPaintWall: (selection: Selection, wallTypeId: string) => void;
   step: BuildStep;
+  /** Duct clashes, marked in the Systems and Check phases. */
+  clashes?: readonly DuctClash[];
   layers: PlanLayers;
   /** Positions locked: clicks select, nothing moves by dragging, and space dimensions stay hidden. */
   locked?: boolean;
@@ -1815,6 +1819,21 @@ export function PlanView({
             <DuctDraft points={ductChain ?? []} aim={ductAim} units={project.units} fontM={font} view={view} sizeLabel={ductSizeLabel(tool, project.units)} widthM={showDuctSize ? tool.widthM : 0} color={ink(SERVICE_COLOR[tool.service] ?? DIM)} />
           )}
           {spot && (tool.kind === 'door' || tool.kind === 'window') && <OpeningGhost spot={spot} kind={tool.kind} />}
+          {layers.ducts && (step === 'systems' || step === 'check') && clashes.map(clash => (
+            <g
+              key={`clash:${clash.runId}:${clash.otherId}`}
+              className="plan-clash"
+              onPointerDown={event => {
+                event.stopPropagation();
+                onSelect({ kind: 'duct', id: clash.runId });
+              }}
+            >
+              <title>Clash: see Check</title>
+              <circle cx={clash.at[0]} cy={clash.at[1]} r={font * 1.6} fill={PLAN_COLOR.clashFill} stroke={PLAN_COLOR.clash} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+              <circle cx={clash.at[0]} cy={clash.at[1]} r={font * 0.8} fill={PLAN_COLOR.clash} />
+              <text x={clash.at[0]} y={clash.at[1] + font * 0.36} fontSize={font * 1.05} fontWeight={700} textAnchor="middle" fill={PLAN_COLOR.halo}>!</text>
+            </g>
+          ))}
           {highlightedRoom && ((highlightedRoom.outline?.length ?? 0) >= 3 ? (
             <polygon
               points={highlightedRoom.outline!.map(point => `${point.x},${point.y}`).join(' ')}
